@@ -1,0 +1,242 @@
+{
+	"$schema": "../schemas/tmlanguage.json",
+	"name": "EPICS Sequencer",
+	"scopeName": "source.epics.seq",
+	"patterns": [
+		{
+			"include": "#embedded_c_block"
+		},
+		{
+			"include": "#embedded_c_line"
+		},
+		{
+			"include": "#program_declaration"
+		},
+		{
+			"include": "#state_set_declaration"
+		},
+		{
+			"include": "#state_declaration"
+		},
+		{
+			"include": "#transition_target"
+		},
+		{
+			"include": "#option_statement"
+		},
+		{
+			"include": "#seq_keywords"
+		},
+		{
+			"include": "#type_keywords"
+		},
+		{
+			"include": "#builtin_functions"
+		},
+		{
+			"include": "#builtin_constants"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "source.c"
+		}
+	],
+	"repository": {
+		"embedded_c_block": {
+			"name": "meta.embedded.block.c.seq",
+			"begin": "%\\{",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.section.embedded.begin.seq"
+				}
+			},
+			"end": "\\}%",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.embedded.end.seq"
+				}
+			},
+			"contentName": "source.c",
+			"patterns": [
+				{
+					"include": "source.c"
+				}
+			]
+		},
+		"embedded_c_line": {
+			"name": "meta.embedded.line.c.seq",
+			"begin": "^(\\s*)(%%)",
+			"beginCaptures": {
+				"2": {
+					"name": "punctuation.section.embedded.begin.seq"
+				}
+			},
+			"end": "$",
+			"contentName": "source.c",
+			"patterns": [
+				{
+					"include": "source.c"
+				}
+			]
+		},
+		"program_declaration": {
+			"patterns": [
+				{
+					"match": "\\b(program)\\b(\\s+)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.sequencer.epics"
+						},
+						"3": {
+							"name": "entity.name.type.program.seq"
+						}
+					}
+				}
+			]
+		},
+		"state_set_declaration": {
+			"patterns": [
+				{
+					"match": "\\b(ss)\\b(\\s+)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.sequencer.epics"
+						},
+						"3": {
+							"name": "entity.name.type.stateset.seq"
+						}
+					}
+				}
+			]
+		},
+		"state_declaration": {
+			"patterns": [
+				{
+					"match": "\\b(state)\\b(\\s+)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.sequencer.epics"
+						},
+						"3": {
+							"name": "entity.name.type.state.seq"
+						}
+					}
+				}
+			]
+		},
+		"transition_target": {
+			"patterns": [
+				{
+					"match": "\\}(\\s*)(state)\\b(\\s+)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"2": {
+							"name": "keyword.control.sequencer.epics"
+						},
+						"4": {
+							"name": "entity.name.label.state.seq"
+						}
+					}
+				}
+			]
+		},
+		"option_statement": {
+			"patterns": [
+				{
+					"match": "\\b(option)\\b(\\s+)([+-][A-Za-z](?:\\s*[+-][A-Za-z])*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.sequencer.epics"
+						},
+						"3": {
+							"name": "constant.language.option.seq"
+						}
+					}
+				}
+			]
+		},
+		"seq_keywords": {
+			"patterns": [
+				{
+					"name": "keyword.control.sequencer.epics",
+					"match": "\\b(assign|entry|exit|monitor|option|program|ss|state|syncQ|syncq|sync|to|when)\\b"
+				}
+			]
+		},
+		"type_keywords": {
+			"patterns": [
+				{
+					"name": "storage.type.seq",
+					"match": "\\b(char|const|double|enum|evflag|float|foreign|int|int8_t|int16_t|int32_t|long|short|sizeof|string|struct|typename|uint8_t|uint16_t|uint32_t|union|unsigned|void)\\b"
+				}
+			]
+		},
+		"builtin_functions": {
+			"patterns": [
+				{
+					"name": "support.function.builtin.seq",
+					"match": "\\b(delay|efClear|efSet|efTest|efTestAndClear|macValueGet|optGet|pvAssign|pvAssignCount|pvAssignSubst|pvAssigned|pvChannelCount|pvConnectCount|pvConnected|pvArrayConnected|pvCount|pvFlush|pvFlushQ|pvFreeQ|pvGet|pvGetCancel|pvArrayGetCancel|pvGetComplete|pvArrayGetComplete|pvGetQ|pvIndex|pvMessage|pvMonitor|pvArrayMonitor|pvName|pvPut|pvPutCancel|pvArrayPutCancel|pvPutComplete|pvArrayPutComplete|pvSeverity|pvStatus|pvStopMonitor|pvArrayStopMonitor|pvSync|pvArraySync|pvTimeStamp)\\b(?=\\s*\\()"
+				}
+			]
+		},
+		"builtin_constants": {
+			"patterns": [
+				{
+					"name": "support.constant.builtin.seq",
+					"match": "\\b(ASYNC|DEFAULT|DEFAULT_TIMEOUT|FALSE|NOEVFLAG|NULL|SYNC|TRUE|pvStatOK|pvStatERROR|pvStatDISCONN|pvStatREAD|pvStatWRITE|pvStatHIHI|pvStatHIGH|pvStatLOLO|pvStatLOW|pvStatSTATE|pvStatCOS|pvStatCOMM|pvStatTIMEOUT|pvStatHW_LIMIT|pvStatCALC|pvStatSCAN|pvStatLINK|pvStatSOFT|pvStatBAD_SUB|pvStatUDF|pvStatDISABLE|pvStatSIMM|pvStatREAD_ACCESS|pvStatWRITE_ACCESS|pvSevrOK|pvSevrERROR|pvSevrNONE|pvSevrMINOR|pvSevrMAJOR|pvSevrINVALID|seqg_var|seqg_env)\\b"
+				}
+			]
+		},
+		"strings": {
+			"patterns": [
+				{
+					"name": "string.quoted.double.seq",
+					"begin": "\"",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.definition.string.begin.seq"
+						}
+					},
+					"end": "\"",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.definition.string.end.seq"
+						}
+					},
+					"patterns": [
+						{
+							"name": "constant.character.escape.c",
+							"match": "\\\\(?:[abfnrtv?\"'\\\\]|x[0-9A-Fa-f]+|[0-7]+)"
+						},
+						{
+							"name": "variable.parameter.program.seq",
+							"match": "\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+						}
+					]
+				},
+				{
+					"name": "string.quoted.single.c",
+					"begin": "'",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.definition.string.begin.c"
+						}
+					},
+					"end": "'",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.definition.string.end.c"
+						}
+					},
+					"patterns": [
+						{
+							"name": "constant.character.escape.c",
+							"match": "\\\\(?:[abfnrtv?\"'\\\\]|x[0-9A-Fa-f]+|[0-7]+)"
+						}
+					]
+				}
+			]
+		}
+	}
+}

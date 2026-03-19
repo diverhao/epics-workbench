@@ -1,0 +1,300 @@
+{
+  "$schema": "../schemas/tmlanguage.json",
+  "name": "EPICS startup",
+  "scopeName": "source.epics.startup",
+  "patterns": [
+    {
+      "include": "#shebang"
+    },
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#include_directives"
+    },
+    {
+      "include": "#assignment_lines"
+    },
+    {
+      "include": "#builtin_commands"
+    },
+    {
+      "include": "#register_commands"
+    },
+    {
+      "include": "#generic_commands"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#macros"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "shebang": {
+      "name": "comment.line.number-sign.epics",
+      "match": "^#!.*$"
+    },
+    "comments": {
+      "name": "comment.line.number-sign.epics",
+      "match": "#.*$"
+    },
+    "include_directives": {
+      "patterns": [
+        {
+          "name": "meta.include.epics",
+          "begin": "^(\\s*)(<)\\s*",
+          "beginCaptures": {
+            "2": {
+              "name": "keyword.control.import.epics"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "entity.name.filename.epics",
+              "match": "[^\\s#]+"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#macros"
+            }
+          ]
+        }
+      ]
+    },
+    "assignment_lines": {
+      "patterns": [
+        {
+          "name": "meta.assignment.epics",
+          "begin": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*)(\\s*)(=)",
+          "beginCaptures": {
+            "2": {
+              "name": "variable.other.epics"
+            },
+            "4": {
+              "name": "keyword.operator.assignment.epics"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#arguments"
+            }
+          ]
+        }
+      ]
+    },
+    "builtin_commands": {
+      "patterns": [
+        {
+          "name": "meta.command.epics",
+          "begin": "^(\\s*)(dbLoadDatabase|dbLoadRecords|dbLoadTemplate|epicsEnvSet|iocInit|cd|var|require|seq|exec|help|dbl|dbpf|dbpr|dbgf|dbtr|dbnr|errlogInit)\\b",
+          "beginCaptures": {
+            "2": {
+              "name": "support.function.builtin.epics"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#arguments"
+            }
+          ]
+        }
+      ]
+    },
+    "register_commands": {
+      "patterns": [
+        {
+          "name": "meta.command.epics",
+          "begin": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*_registerRecordDeviceDriver)\\b",
+          "beginCaptures": {
+            "2": {
+              "name": "support.function.epics"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#arguments"
+            }
+          ]
+        }
+      ]
+    },
+    "generic_commands": {
+      "patterns": [
+        {
+          "name": "meta.command.epics",
+          "begin": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "beginCaptures": {
+            "2": {
+              "name": "entity.name.function.epics"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#arguments"
+            }
+          ]
+        }
+      ]
+    },
+    "arguments": {
+      "patterns": [
+        {
+          "name": "punctuation.definition.parameters.begin.epics",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.definition.parameters.end.epics",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.separator.comma.epics",
+          "match": ","
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#macros"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#paths"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#comments"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.epics",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.epics"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.epics"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.epics",
+          "match": "\\\\."
+        },
+        {
+          "include": "#macros"
+        }
+      ]
+    },
+    "macros": {
+      "patterns": [
+        {
+          "name": "variable.parameter.epics",
+          "begin": "\\$\\(",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.variable.begin.epics"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.variable.end.epics"
+            }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.epics",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            },
+            {
+              "name": "keyword.operator.assignment.epics",
+              "match": "="
+            }
+          ]
+        },
+        {
+          "name": "variable.parameter.epics",
+          "begin": "\\$\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.variable.begin.epics"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.variable.end.epics"
+            }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.epics",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            },
+            {
+              "name": "keyword.operator.assignment.epics",
+              "match": "="
+            }
+          ]
+        },
+        {
+          "name": "variable.parameter.epics",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.epics",
+          "match": "(?<![\\w.])[+-]?(?:0x[0-9A-Fa-f]+|\\d+(?:\\.\\d+)?)(?![\\w.])"
+        }
+      ]
+    },
+    "paths": {
+      "patterns": [
+        {
+          "name": "entity.name.filename.epics",
+          "match": "\\b(?:envPaths|cdCommands|dllPath\\.bat)\\b"
+        },
+        {
+          "name": "entity.name.filename.epics",
+          "match": "(?<![\\w$])(?:\\.{1,2}/|/)?[A-Za-z0-9_.$(){}:+-]+(?:/[A-Za-z0-9_.$(){}:+-]+)*(?:\\.[A-Za-z0-9_+-]+)(?![\\w-])"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "variable.language.epics",
+          "match": "\\bpdbbase\\b"
+        },
+        {
+          "name": "constant.language.epics",
+          "match": "\\b(?:TRUE|FALSE|YES|NO|true|false|yes|no)\\b"
+        }
+      ]
+    }
+  }
+}

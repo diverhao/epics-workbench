@@ -1,0 +1,789 @@
+{
+	"$schema": "../schemas/tmlanguage.json",
+	"name": "EPICS database definition",
+	"scopeName": "source.epics.dbd",
+	"patterns": [
+		{
+			"include": "#declaration_blocks"
+		},
+		{
+			"include": "#simple_declarations"
+		},
+		{
+			"include": "#property_calls"
+		},
+		{
+			"include": "#c_fragments"
+		},
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#numbers"
+		},
+		{
+			"include": "#constants"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#macros"
+		},
+		{
+			"include": "#comments"
+		}
+	],
+	"repository": {
+		"declaration_blocks": {
+			"patterns": [
+				{
+					"include": "#menu_declarations"
+				},
+				{
+					"include": "#recordtype_declarations"
+				},
+				{
+					"include": "#field_declarations"
+				},
+				{
+					"include": "#breaktable_declarations"
+				}
+			]
+		},
+		"menu_declarations": {
+			"patterns": [
+				{
+					"name": "meta.menu.epics",
+					"begin": "^\\s*(menu)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))(\\s*)(\\{)",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.menu.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						},
+						"6": {
+							"name": "punctuation.section.block.begin.epics"
+						}
+					},
+					"end": "(\\})",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.block.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#choice_declarations"
+						},
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#macros"
+						},
+						{
+							"include": "#numbers"
+						},
+						{
+							"include": "#constants"
+						}
+					]
+				}
+			]
+		},
+		"choice_declarations": {
+			"patterns": [
+				{
+					"name": "meta.choice.epics",
+					"begin": "^\\s*(choice)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "constant.other.choice.epics"
+						},
+						"4": {
+							"name": "punctuation.separator.comma.epics"
+						}
+					},
+					"end": "(\\))",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#macros"
+						},
+						{
+							"include": "#numbers"
+						},
+						{
+							"include": "#constants"
+						}
+					]
+				}
+			]
+		},
+		"recordtype_declarations": {
+			"patterns": [
+				{
+					"name": "meta.recordtype.epics",
+					"begin": "^\\s*(recordtype)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))(\\s*)(\\{)",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.record.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						},
+						"6": {
+							"name": "punctuation.section.block.begin.epics"
+						}
+					},
+					"end": "(\\})",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.block.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#field_declarations"
+						},
+						{
+							"include": "#include_statements"
+						},
+						{
+							"include": "#c_fragments"
+						},
+						{
+							"include": "#property_calls"
+						},
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#macros"
+						},
+						{
+							"include": "#numbers"
+						},
+						{
+							"include": "#constants"
+						}
+					]
+				}
+			]
+		},
+		"field_declarations": {
+			"patterns": [
+				{
+					"name": "meta.field.epics",
+					"begin": "^\\s*(field)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*(DBF_[A-Za-z0-9_]+)\\s*(\\))(\\s*)(\\{)",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.field.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.field.epics"
+						},
+						"4": {
+							"name": "punctuation.separator.comma.epics"
+						},
+						"5": {
+							"name": "constant.language.dbf.epics"
+						},
+						"6": {
+							"name": "punctuation.section.group.end.epics"
+						},
+						"8": {
+							"name": "punctuation.section.block.begin.epics"
+						}
+					},
+					"end": "(\\})",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.block.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#property_calls"
+						},
+						{
+							"include": "#c_fragments"
+						},
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#macros"
+						},
+						{
+							"include": "#numbers"
+						},
+						{
+							"include": "#constants"
+						}
+					]
+				}
+			]
+		},
+		"breaktable_declarations": {
+			"patterns": [
+				{
+					"name": "meta.breaktable.epics",
+					"begin": "^\\s*(breaktable)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))(\\s*)(\\{)",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.breaktable.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						},
+						"6": {
+							"name": "punctuation.section.block.begin.epics"
+						}
+					},
+					"end": "(\\})",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.block.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#numbers"
+						},
+						{
+							"include": "#comments"
+						}
+					]
+				}
+			]
+		},
+		"simple_declarations": {
+			"patterns": [
+				{
+					"include": "#include_statements"
+				},
+				{
+					"include": "#path_statements"
+				},
+				{
+					"include": "#device_declarations"
+				},
+				{
+					"include": "#link_declarations"
+				},
+				{
+					"include": "#driver_declarations"
+				},
+				{
+					"include": "#registrar_declarations"
+				},
+				{
+					"include": "#function_declarations"
+				},
+				{
+					"include": "#variable_declarations"
+				}
+			]
+		},
+		"include_statements": {
+			"patterns": [
+				{
+					"match": "^\\s*(include)\\s+(\"(?:[^\"\\\\]|\\\\.)*\")",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "string.quoted.double.epics"
+						}
+					}
+				}
+			]
+		},
+		"path_statements": {
+			"patterns": [
+				{
+					"name": "meta.path.epics",
+					"begin": "^\\s*(addpath|path)\\s*(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						}
+					},
+					"end": "(\\))",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#macros"
+						},
+						{
+							"name": "punctuation.separator.comma.epics",
+							"match": ","
+						}
+					]
+				}
+			]
+		},
+		"device_declarations": {
+			"patterns": [
+				{
+					"match": "^\\s*(device)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*(\"(?:[^\"\\\\]|\\\\.)*\")\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.record.epics"
+						},
+						"4": {
+							"name": "punctuation.separator.comma.epics"
+						},
+						"5": {
+							"name": "constant.language.link.epics"
+						},
+						"6": {
+							"name": "punctuation.separator.comma.epics"
+						},
+						"7": {
+							"name": "entity.name.type.device.epics"
+						},
+						"8": {
+							"name": "punctuation.separator.comma.epics"
+						},
+						"9": {
+							"name": "string.quoted.double.epics"
+						},
+						"10": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				}
+			]
+		},
+		"link_declarations": {
+			"patterns": [
+				{
+					"match": "^\\s*(link)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.link.epics"
+						},
+						"4": {
+							"name": "punctuation.separator.comma.epics"
+						},
+						"5": {
+							"name": "entity.name.type.interface.epics"
+						},
+						"6": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				}
+			]
+		},
+		"driver_declarations": {
+			"patterns": [
+				{
+					"match": "^\\s*(driver)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.driver.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				}
+			]
+		},
+		"registrar_declarations": {
+			"patterns": [
+				{
+					"match": "^\\s*(registrar)\\s*(\\()\\s*((?:\"(?:[^\"\\\\]|\\\\.)*\")|(?:[A-Za-z_][A-Za-z0-9_]*))\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.function.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				}
+			]
+		},
+		"function_declarations": {
+			"patterns": [
+				{
+					"match": "^\\s*(function)\\s*(\\()\\s*((?:\"(?:[^\"\\\\]|\\\\.)*\")|(?:[A-Za-z_][A-Za-z0-9_]*))\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.function.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				}
+			]
+		},
+		"variable_declarations": {
+			"patterns": [
+				{
+					"match": "^\\s*(variable)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "variable.other.epics"
+						},
+						"4": {
+							"name": "punctuation.separator.comma.epics"
+						},
+						"5": {
+							"name": "storage.type.epics"
+						},
+						"6": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				}
+			]
+		},
+		"property_calls": {
+			"patterns": [
+				{
+					"match": "^\\s*(menu)\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.field.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						},
+						"3": {
+							"name": "entity.name.type.menu.epics"
+						},
+						"4": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					}
+				},
+				{
+					"name": "meta.property.epics",
+					"begin": "^\\s*(prompt|promptgroup|extra|initial)\\s*(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.field.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						}
+					},
+					"end": "(\\))",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#macros"
+						}
+					]
+				},
+				{
+					"name": "meta.property.epics",
+					"begin": "^\\s*(interest|size)\\s*(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.field.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						}
+					},
+					"end": "(\\))",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#numbers"
+						}
+					]
+				},
+				{
+					"name": "meta.property.epics",
+					"begin": "^\\s*(asl|base|pp|prop|special)\\s*(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.field.epics"
+						},
+						"2": {
+							"name": "punctuation.section.group.begin.epics"
+						}
+					},
+					"end": "(\\))",
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.section.group.end.epics"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#constants"
+						},
+						{
+							"include": "#numbers"
+						}
+					]
+				}
+			]
+		},
+		"c_fragments": {
+			"patterns": [
+				{
+					"name": "meta.embedded.line.c.epics",
+					"begin": "^(\\s*%)",
+					"beginCaptures": {
+						"1": {
+							"name": "punctuation.definition.embedded.begin.epics"
+						}
+					},
+					"end": "$",
+					"contentName": "source.c",
+					"patterns": [
+						{
+							"include": "source.c"
+						}
+					]
+				}
+			]
+		},
+		"keywords": {
+			"patterns": [
+				{
+					"name": "keyword.control.epics",
+					"match": "\\b(path|addpath|include|menu|choice|recordtype|field|device|driver|registrar|function|variable|breaktable|record|grecord|info|alias|link)\\b"
+				},
+				{
+					"name": "keyword.control.field.epics",
+					"match": "\\b(asl|initial|promptgroup|prompt|special|pp|interest|base|size|extra|menu|prop)\\b"
+				},
+				{
+					"name": "punctuation.section.block.begin.epics",
+					"match": "\\{"
+				},
+				{
+					"name": "punctuation.section.block.end.epics",
+					"match": "\\}"
+				},
+				{
+					"name": "punctuation.separator.comma.epics",
+					"match": ","
+				}
+			]
+		},
+		"numbers": {
+			"patterns": [
+				{
+					"name": "constant.numeric.epics",
+					"match": "\\b[+-]?(?:0x[0-9A-Fa-f]+|(?:\\d+\\.\\d*|\\d*\\.\\d+|\\d+)(?:[eE][+-]?\\d+)?)\\b"
+				}
+			]
+		},
+		"constants": {
+			"patterns": [
+				{
+					"name": "constant.language.dbf.epics",
+					"match": "\\bDBF_[A-Za-z0-9_]+\\b"
+				},
+				{
+					"name": "constant.language.link.epics",
+					"match": "\\b(?:CONSTANT|INST_IO|PV_LINK|DB_LINK|CA_LINK|JSON_LINK|VME_IO|CAMAC_IO|RF_IO|AB_IO|GPIB_IO|BITBUS_IO|BBGPIB_IO|BBGPIB|VXI_IO)\\b"
+				},
+				{
+					"name": "constant.language.boolean.epics",
+					"match": "\\b(?:YES|NO|TRUE|FALSE)\\b"
+				},
+				{
+					"name": "constant.language.asl.epics",
+					"match": "\\bASL[01]\\b"
+				},
+				{
+					"name": "constant.language.base.epics",
+					"match": "\\b(?:DECIMAL|HEX)\\b"
+				},
+				{
+					"name": "constant.language.special.epics",
+					"match": "\\bSPC_[A-Z0-9_]+\\b"
+				}
+			]
+		},
+		"strings": {
+			"name": "string.quoted.double.epics",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"include": "#macros"
+				},
+				{
+					"include": "#escaped_char"
+				}
+			]
+		},
+		"escaped_char": {
+			"name": "constant.character.escape.epics",
+			"match": "\\\\."
+		},
+		"macros": {
+			"patterns": [
+				{
+					"name": "variable.parameter.epics",
+					"begin": "\\$\\{",
+					"end": "\\}",
+					"patterns": [
+						{
+							"include": "#macro_name"
+						},
+						{
+							"include": "#macro_default"
+						}
+					]
+				},
+				{
+					"name": "variable.parameter.epics",
+					"begin": "\\$\\(",
+					"end": "\\)",
+					"patterns": [
+						{
+							"include": "#macro_name"
+						},
+						{
+							"include": "#macro_default"
+						}
+					]
+				}
+			]
+		},
+		"macro_name": {
+			"patterns": [
+				{
+					"name": "variable.parameter.epics",
+					"match": "[A-Za-z_][A-Za-z0-9_]*"
+				}
+			]
+		},
+		"macro_default": {
+			"patterns": [
+				{
+					"name": "keyword.operator.assignment.epics",
+					"match": "="
+				}
+			]
+		},
+		"comments": {
+			"name": "comment.line.number-sign.epics",
+			"begin": "#",
+			"end": "$",
+			"patterns": [
+				{
+					"include": "#escaped_char"
+				}
+			]
+		}
+	}
+}

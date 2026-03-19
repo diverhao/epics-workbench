@@ -1,0 +1,201 @@
+{
+  "$schema": "../schemas/tmlanguage.json",
+  "name": "EPICS substitutions",
+  "scopeName": "source.epics.sub",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#file-header"
+    },
+    {
+      "include": "#pattern-header"
+    },
+    {
+      "include": "#assignment-row"
+    },
+    {
+      "include": "#value-row"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.number-sign.epics.sub",
+      "begin": "#",
+      "end": "$"
+    },
+    "strings": {
+      "name": "string.quoted.double.epics.sub",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.epics.sub",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "file-header": {
+      "patterns": [
+        {
+          "name": "meta.file.header.epics.sub",
+          "begin": "\\b(file)\\b\\s+",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.file.epics.sub"
+            }
+          },
+          "end": "(?=\\s*\\{)",
+          "patterns": [
+            {
+              "include": "#strings"
+            },
+            {
+              "name": "entity.name.filename.epics.sub",
+              "match": "[^\\s{]+"
+            }
+          ]
+        }
+      ]
+    },
+    "pattern-header": {
+      "name": "meta.pattern.header.epics.sub",
+      "begin": "\\b(pattern)\\b\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.pattern.epics.sub"
+        },
+        "2": {
+          "name": "punctuation.section.braces.begin.epics.sub"
+        }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.section.braces.end.epics.sub"
+        }
+      },
+      "patterns": [
+        {
+          "name": "variable.parameter.epics.sub",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "punctuation.separator.comma.epics.sub",
+          "match": ","
+        },
+        {
+          "include": "#comments"
+        }
+      ]
+    },
+    "assignment-row": {
+      "name": "meta.substitution.assignment-row.epics.sub",
+      "begin": "^(\\s*)(\\{)(?=[^#\\n]*=)",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.section.braces.begin.epics.sub"
+        }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.section.braces.end.epics.sub"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "name": "variable.parameter.epics.sub",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*=)"
+        },
+        {
+          "name": "keyword.operator.assignment.epics.sub",
+          "match": "="
+        },
+        {
+          "name": "punctuation.separator.comma.epics.sub",
+          "match": ","
+        },
+        {
+          "name": "constant.other.substitution-value.epics.sub",
+          "match": "[^\\s,{}#\"]+"
+        }
+      ]
+    },
+    "value-row": {
+      "name": "meta.substitution.value-row.epics.sub",
+      "begin": "^(\\s*)(\\{)",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.section.braces.begin.epics.sub"
+        }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.section.braces.end.epics.sub"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "name": "punctuation.separator.comma.epics.sub",
+          "match": ","
+        },
+        {
+          "name": "constant.other.substitution-value.epics.sub",
+          "match": "[^\\s,{}#\"]+"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.epics.sub",
+          "match": "\\b(?:file|global|pattern)\\b"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.braces.begin.epics.sub",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.braces.end.epics.sub",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.separator.comma.epics.sub",
+          "match": ","
+        },
+        {
+          "name": "keyword.operator.assignment.epics.sub",
+          "match": "="
+        }
+      ]
+    }
+  }
+}

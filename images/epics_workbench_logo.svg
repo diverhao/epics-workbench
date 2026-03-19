@@ -1,0 +1,91 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="800"
+  height="800"
+  viewBox="0 0 800 800"
+  role="img"
+  aria-labelledby="title desc"
+>
+  <title id="title">EPICS Workbench logo</title>
+  <desc id="desc">EPICS wordmark above a literal workshop bench built from the EPICS platform shape.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FBF7F1" />
+      <stop offset="100%" stop-color="#EBDCC9" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#16283C" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="18" y="18" width="764" height="764" rx="152" fill="url(#bg)" />
+  <rect x="36" y="36" width="728" height="728" rx="136" fill="none" stroke="#DCCAB3" stroke-width="8" />
+
+  <g filter="url(#shadow)">
+    <text
+      x="400"
+      y="255"
+      text-anchor="middle"
+      fill="#1F3D5C"
+      font-family="Arial Black, DejaVu Sans, sans-serif"
+      font-size="178"
+      font-weight="900"
+      letter-spacing="2"
+    >EPICS</text>
+  </g>
+
+  <ellipse cx="400" cy="685" rx="258" ry="24" fill="#B89D7E" opacity="0.25" />
+
+  <g filter="url(#shadow)">
+    <rect x="122" y="305" width="556" height="28" rx="10" fill="#D89A48" />
+    <rect x="122" y="332" width="556" height="13" rx="6.5" fill="#BE7E31" />
+
+    <path
+      d="M122 345
+         H222
+         V420
+         H253
+         V345
+         H378
+         V420
+         H440
+         V378
+         H498
+         V420
+         H568
+         V345
+         H678
+         V472
+         H122
+         Z"
+      fill="#1F3D5C"
+    />
+
+    <rect x="176" y="472" width="54" height="186" rx="10" fill="#17314B" />
+    <rect x="570" y="472" width="54" height="186" rx="10" fill="#17314B" />
+    <rect x="176" y="612" width="448" height="30" rx="12" fill="#17314B" />
+
+    <rect x="357" y="508" width="86" height="18" rx="9" fill="#D89A48" opacity="0.92" />
+    <circle cx="382" cy="517" r="4.5" fill="#F7E7D0" />
+    <circle cx="418" cy="517" r="4.5" fill="#F7E7D0" />
+  </g>
+
+  <g transform="translate(548 248)">
+    <rect x="0" y="44" width="28" height="70" rx="8" fill="#E07C3B" />
+    <rect x="20" y="56" width="66" height="26" rx="10" fill="#E07C3B" />
+    <rect x="58" y="34" width="15" height="70" rx="7" fill="#AF5726" />
+    <rect x="70" y="66" width="54" height="8" rx="4" fill="#AF5726" />
+    <circle cx="94" cy="70" r="11" fill="#AF5726" />
+    <rect x="10" y="94" width="44" height="11" rx="5.5" fill="#AF5726" />
+  </g>
+
+  <g opacity="0.18" fill="#D8C5AE">
+    <circle cx="650" cy="142" r="6" />
+    <circle cx="685" cy="142" r="6" />
+    <circle cx="720" cy="142" r="6" />
+    <circle cx="650" cy="177" r="6" />
+    <circle cx="685" cy="177" r="6" />
+    <circle cx="720" cy="177" r="6" />
+  </g>
+</svg>

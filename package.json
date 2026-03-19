@@ -1,0 +1,199 @@
+{
+    "version": "0.0.1",
+    "repository": {
+        "url": "",
+        "type": "git"
+    },
+    "publisher": "",
+    "name": "epics-workbench",
+    "main": "./extension.js",
+    "icon": "images/epics_workbench_logo.png",
+    "engines": {
+        "vscode": "^1.100.0"
+    },
+    "displayName": "EPICS Workbench",
+    "description": "EPICS syntax highlighting, autocompletion, formatting, file/record navigation, and runtime montioring tools.",
+    "contributes": {
+        "menus": {
+            "editor/context": [
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@20",
+                    "command": "vscode-epics.collapseAllRecords"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@21",
+                    "command": "vscode-epics.expandAllRecords"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@22",
+                    "command": "vscode-epics.generateDatabaseToc"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "when": "editorLangId == database",
+                    "command": "vscode-epics.collapseAllRecords"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "command": "vscode-epics.expandAllRecords"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "command": "vscode-epics.generateDatabaseToc"
+                }
+            ]
+        },
+        "languages": [
+            {
+                "id": "database",
+                "extensions": [
+                    ".db",
+                    ".vdb",
+                    ".template"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "EPICS database",
+                    "DB",
+                    "VDB"
+                ]
+            },
+            {
+                "id": "substitutions",
+                "extensions": [
+                    ".substitutions",
+                    ".sub",
+                    ".subs"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "substitutions"
+                ]
+            },
+            {
+                "id": "startup",
+                "extensions": [
+                    ".cmd",
+                    ".iocsh"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "startup",
+                    "st.cmd"
+                ]
+            },
+            {
+                "id": "proto",
+                "extensions": [
+                    ".proto"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "StreamDevice prototypes"
+                ]
+            },
+            {
+                "id": "sequencer",
+                "extensions": [
+                    ".st"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "Sequencer"
+                ]
+            },
+            {
+                "id": "database definition",
+                "extensions": [
+                    ".dbd"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "Database definition"
+                ]
+            }
+        ],
+        "grammars": [
+            {
+                "scopeName": "source.epics.db",
+                "path": "./syntaxes/db.tmLanguage.json",
+                "language": "database"
+            },
+            {
+                "scopeName": "source.epics.sub",
+                "path": "./syntaxes/substitutions.tmLanguage.json",
+                "language": "substitutions"
+            },
+            {
+                "scopeName": "source.epics.startup",
+                "path": "./syntaxes/st.cmd.tmLanguage.json",
+                "language": "startup"
+            },
+            {
+                "scopeName": "source.epics.proto",
+                "path": "./syntaxes/proto.tmLanguage.json",
+                "language": "proto"
+            },
+            {
+                "scopeName": "source.epics.seq",
+                "path": "./syntaxes/seq.tmLanguage.json",
+                "language": "sequencer"
+            },
+            {
+                "scopeName": "source.epics.dbd",
+                "path": "./syntaxes/dbd.tmLanguage.json",
+                "language": "database definition"
+            }
+        ],
+        "configurationDefaults": {
+            "[startup]": {
+                "editor.wordBasedSuggestions": "off"
+            },
+            "[database]": {
+                "editor.wordBasedSuggestions": "off",
+                "editor.semanticHighlighting.enabled": true
+            },
+            "[database definition]": {
+                "editor.wordBasedSuggestions": "off"
+            }
+        },
+        "commands": [
+            {
+                "title": "Collapse All Records",
+                "command": "vscode-epics.collapseAllRecords",
+                "category": "EPICS"
+            },
+            {
+                "title": "Expand All Records",
+                "command": "vscode-epics.expandAllRecords",
+                "category": "EPICS"
+            },
+            {
+                "title": "Update Record Table of Contents",
+                "command": "vscode-epics.generateDatabaseToc",
+                "category": "EPICS"
+            }
+        ]
+    },
+    "categories": [
+        "Programming Languages",
+        "Snippets"
+    ],
+    "activationEvents": [
+        "onLanguage:database",
+        "onLanguage:startup",
+        "onLanguage:substitutions",
+        "onLanguage:sequencer",
+        "onLanguage:database definition",
+        "onLanguage:makefile"
+    ],
+    "__metadata": {
+        "publisherId": "",
+        "publisherDisplayName": "",
+        "id": ""
+    }
+}

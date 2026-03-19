@@ -1,0 +1,5847 @@
+{
+  "aSub": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "BRSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "EFLG": [
+      "NEVER",
+      "ON CHANGE",
+      "ALWAYS"
+    ],
+    "FTA": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTB": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTC": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTD": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTE": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTF": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTG": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTH": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTI": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTJ": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTK": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTL": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTM": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTN": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTO": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTP": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTQ": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTR": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTS": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTT": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTU": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVA": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVB": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVC": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVD": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVE": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVF": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVG": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVH": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVI": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVJ": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVK": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVL": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVM": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVN": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVO": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVP": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVQ": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVR": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVS": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVT": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "FTVU": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "LFLG": [
+      "IGNORE",
+      "READ"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "aai": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "Always",
+      "On Change"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FTVL": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "MPST": [
+      "Always",
+      "On Change"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "aao": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "Always",
+      "On Change"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FTVL": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "MPST": [
+      "Always",
+      "On Change"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "ai": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LINR": [
+      "NO CONVERSION",
+      "SLOPE",
+      "LINEAR",
+      "typeKdegF",
+      "typeKdegC",
+      "typeJdegF",
+      "typeJdegC",
+      "typeEdegF(ixe only)",
+      "typeEdegC(ixe only)",
+      "typeTdegF",
+      "typeTdegC",
+      "typeRdegF",
+      "typeRdegC",
+      "typeSdegF",
+      "typeSdegC"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "ao": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "LINR": [
+      "NO CONVERSION",
+      "SLOPE",
+      "LINEAR",
+      "typeKdegF",
+      "typeKdegC",
+      "typeJdegF",
+      "typeJdegC",
+      "typeEdegF(ixe only)",
+      "typeEdegC(ixe only)",
+      "typeTdegF",
+      "typeTdegC",
+      "typeRdegF",
+      "typeRdegC",
+      "typeSdegF",
+      "typeSdegC"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OIF": [
+      "Full",
+      "Incremental"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "bi": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "COSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ZSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "bo": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "COSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "OSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ZSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "calc": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "calcout": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DOPT": [
+      "Use CALC",
+      "Use OCAL"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "INAV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INBV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INCV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INDV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INEV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INFV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INGV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INHV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INIV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INJV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INKV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INLV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INMV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INNV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INOV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INPV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INQV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INRV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INSV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INTV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "INUV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OOPT": [
+      "Every Time",
+      "On Change",
+      "When Zero",
+      "When Non-zero",
+      "Transition To Zero",
+      "Transition To Non-zero"
+    ],
+    "OUTV": [
+      "Ext PV NC",
+      "Ext PV OK",
+      "Local PV",
+      "Constant"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "compress": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "ALG": [
+      "N to 1 Low Value",
+      "N to 1 High Value",
+      "N to 1 Average",
+      "Average",
+      "Circular Buffer",
+      "N to 1 Median"
+    ],
+    "BALG": [
+      "FIFO Buffer",
+      "LIFO Buffer"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PBUF": [
+      "NO",
+      "YES"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "dfanout": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SELM": [
+      "All",
+      "Specified",
+      "Mask"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "event": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "fanout": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SELM": [
+      "All",
+      "Specified",
+      "Mask"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "histogram": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "CMD": [
+      "Read",
+      "Clear",
+      "Start",
+      "Stop"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "int64in": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "int64out": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "longin": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "longout": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "OOCH": [
+      "NO",
+      "YES"
+    ],
+    "OOPT": [
+      "Every Time",
+      "On Change",
+      "When Zero",
+      "When Non-zero",
+      "Transition To Zero",
+      "Transition To Non-zero"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "lsi": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "On Change",
+      "Always"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "MPST": [
+      "On Change",
+      "Always"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "lso": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "On Change",
+      "Always"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "MPST": [
+      "On Change",
+      "Always"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "mbbiDirect": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "mbbi": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "COSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "EISV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ELSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FFSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FRSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FTSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FVSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NISV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "ONSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "SVSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SXSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TESV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "THSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TTSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TVSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TWSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "UNSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ZRSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "mbboDirect": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "mbbo": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "COSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "EISV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ELSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FFSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FRSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FTSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FVSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "NISV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "ONSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "SVSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SXSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TESV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "THSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TTSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TVSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "TWSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "UNSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ZRSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "permissive": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "printf": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "sel": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SELM": [
+      "Specified",
+      "High Signal",
+      "Low Signal",
+      "Median Signal"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "seq": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SELM": [
+      "All",
+      "Specified",
+      "Mask"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "state": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "stringin": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "On Change",
+      "Always"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "MPST": [
+      "On Change",
+      "Always"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "stringout": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "On Change",
+      "Always"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "IVOA": [
+      "Continue normally",
+      "Don't drive outputs",
+      "Set output to IVOV"
+    ],
+    "MPST": [
+      "On Change",
+      "Always"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "OMSL": [
+      "supervisory",
+      "closed_loop"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "subArray": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FTVL": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "sub": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "BRSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HHSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "HSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LLSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "LSV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  },
+  "waveform": {
+    "ACKS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "ACKT": [
+      "NO",
+      "YES"
+    ],
+    "APST": [
+      "Always",
+      "On Change"
+    ],
+    "DISS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "FTVL": [
+      "STRING",
+      "CHAR",
+      "UCHAR",
+      "SHORT",
+      "USHORT",
+      "LONG",
+      "ULONG",
+      "INT64",
+      "UINT64",
+      "FLOAT",
+      "DOUBLE",
+      "ENUM"
+    ],
+    "MPST": [
+      "Always",
+      "On Change"
+    ],
+    "NSEV": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "NSTA": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "OLDSIMM": [
+      "NO",
+      "YES",
+      "RAW"
+    ],
+    "PINI": [
+      "NO",
+      "YES",
+      "RUN",
+      "RUNNING",
+      "PAUSE",
+      "PAUSED"
+    ],
+    "PRIO": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "SCAN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "SEVR": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SIMM": [
+      "NO",
+      "YES"
+    ],
+    "SIMS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ],
+    "SSCN": [
+      "Passive",
+      "Event",
+      "I/O Intr",
+      "10 second",
+      "5 second",
+      "2 second",
+      "1 second",
+      ".5 second",
+      ".2 second",
+      ".1 second"
+    ],
+    "STAT": [
+      "NO_ALARM",
+      "READ",
+      "WRITE",
+      "HIHI",
+      "HIGH",
+      "LOLO",
+      "LOW",
+      "STATE",
+      "COS",
+      "COMM",
+      "TIMEOUT",
+      "HWLIMIT",
+      "CALC",
+      "SCAN",
+      "LINK",
+      "SOFT",
+      "BAD_SUB",
+      "UDF",
+      "DISABLE",
+      "SIMM",
+      "READ_ACCESS",
+      "WRITE_ACCESS"
+    ],
+    "UDFS": [
+      "NO_ALARM",
+      "MINOR",
+      "MAJOR",
+      "INVALID"
+    ]
+  }
+}
