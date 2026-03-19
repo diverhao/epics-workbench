@@ -6,7 +6,7 @@
     },
     "publisher": "",
     "name": "epics-workbench",
-    "main": "./extension.js",
+    "main": "./src/extension.js",
     "icon": "images/epics_workbench_logo.png",
     "engines": {
         "vscode": "^1.100.0"
@@ -14,6 +14,14 @@
     "displayName": "EPICS Workbench",
     "description": "EPICS syntax highlighting, autocompletion, formatting, file/record navigation, and runtime montioring tools.",
     "contributes": {
+        "views": {
+            "explorer": [
+                {
+                    "id": "epicsRuntimeMonitors",
+                    "name": "EPICS Runtime"
+                }
+            ]
+        },
         "menus": {
             "editor/context": [
                 {
@@ -44,6 +52,35 @@
                 {
                     "when": "editorLangId == database",
                     "command": "vscode-epics.generateDatabaseToc"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "when": "view == epicsRuntimeMonitors && viewItem == epicsRuntimeMonitor",
+                    "command": "vscode-epics.removeRuntimeMonitor",
+                    "group": "inline"
+                }
+            ],
+            "view/title": [
+                {
+                    "when": "view == epicsRuntimeMonitors",
+                    "command": "vscode-epics.addRuntimeMonitor",
+                    "group": "navigation"
+                },
+                {
+                    "when": "view == epicsRuntimeMonitors",
+                    "command": "vscode-epics.restartRuntimeContext",
+                    "group": "navigation"
+                },
+                {
+                    "when": "view == epicsRuntimeMonitors",
+                    "command": "vscode-epics.stopRuntimeContext",
+                    "group": "navigation"
+                },
+                {
+                    "when": "view == epicsRuntimeMonitors",
+                    "command": "vscode-epics.clearRuntimeMonitors",
+                    "group": "navigation"
                 }
             ]
         },
@@ -161,6 +198,51 @@
                 "editor.wordBasedSuggestions": "off"
             }
         },
+        "configuration": {
+            "title": "EPICS Workbench",
+            "properties": {
+                "epicsWorkbench.runtime.defaultProtocol": {
+                    "type": "string",
+                    "enum": [
+                        "ca",
+                        "pva"
+                    ],
+                    "default": "ca",
+                    "description": "Default protocol to prefer when creating runtime monitors."
+                },
+                "epicsWorkbench.runtime.channelCreationTimeoutSeconds": {
+                    "type": "number",
+                    "default": 3,
+                    "minimum": 0,
+                    "description": "Timeout in seconds for creating a runtime monitoring channel. Set to 0 to disable the timeout."
+                },
+                "epicsWorkbench.runtime.monitorSubscribeTimeoutSeconds": {
+                    "type": "number",
+                    "default": 3,
+                    "minimum": 0,
+                    "description": "Timeout in seconds for the initial runtime monitor subscription. Set to 0 to disable the timeout."
+                },
+                "epicsWorkbench.runtime.logLevel": {
+                    "type": "string",
+                    "enum": [
+                        "DEBUG",
+                        "INFO",
+                        "WARN",
+                        "ERROR"
+                    ],
+                    "default": "ERROR",
+                    "description": "epics-tca log level used by the runtime monitoring context."
+                },
+                "epicsWorkbench.runtime.environment": {
+                    "type": "object",
+                    "default": {},
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "description": "Environment variable overrides passed to the epics-tca runtime context, for example EPICS_CA_ADDR_LIST or EPICS_PVA_ADDR_LIST."
+                }
+            }
+        },
         "commands": [
             {
                 "title": "Collapse All Records",
@@ -176,6 +258,31 @@
                 "title": "Update Record Table of Contents",
                 "command": "vscode-epics.generateDatabaseToc",
                 "category": "EPICS"
+            },
+            {
+                "title": "Add Runtime Monitor",
+                "command": "vscode-epics.addRuntimeMonitor",
+                "category": "EPICS"
+            },
+            {
+                "title": "Remove Runtime Monitor",
+                "command": "vscode-epics.removeRuntimeMonitor",
+                "category": "EPICS"
+            },
+            {
+                "title": "Clear Runtime Monitors",
+                "command": "vscode-epics.clearRuntimeMonitors",
+                "category": "EPICS"
+            },
+            {
+                "title": "Restart Runtime Context",
+                "command": "vscode-epics.restartRuntimeContext",
+                "category": "EPICS"
+            },
+            {
+                "title": "Stop Runtime Context",
+                "command": "vscode-epics.stopRuntimeContext",
+                "category": "EPICS"
             }
         ]
     },
@@ -189,8 +296,17 @@
         "onLanguage:substitutions",
         "onLanguage:sequencer",
         "onLanguage:database definition",
-        "onLanguage:makefile"
+        "onLanguage:makefile",
+        "onView:epicsRuntimeMonitors",
+        "onCommand:vscode-epics.addRuntimeMonitor",
+        "onCommand:vscode-epics.removeRuntimeMonitor",
+        "onCommand:vscode-epics.clearRuntimeMonitors",
+        "onCommand:vscode-epics.restartRuntimeContext",
+        "onCommand:vscode-epics.stopRuntimeContext"
     ],
+    "dependencies": {
+        "epics-tca": "^1.1.31"
+    },
     "__metadata": {
         "publisherId": "",
         "publisherDisplayName": "",
