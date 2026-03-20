@@ -87,6 +87,11 @@
                 },
                 {
                     "when": "view == epicsRuntimeMonitors",
+                    "command": "vscode-epics.openProjectRuntimeConfiguration",
+                    "group": "navigation"
+                },
+                {
+                    "when": "view == epicsRuntimeMonitors",
                     "command": "vscode-epics.restartRuntimeContext",
                     "group": "navigation"
                 },
@@ -340,6 +345,16 @@
                 "title": "Stop Runtime For Active File",
                 "command": "vscode-epics.stopActiveFileRuntimeContext",
                 "category": "EPICS"
+            },
+            {
+                "title": "Put Runtime Value",
+                "command": "vscode-epics.putRuntimeValue",
+                "category": "EPICS"
+            },
+            {
+                "title": "Open Project Runtime Configuration",
+                "command": "vscode-epics.openProjectRuntimeConfiguration",
+                "category": "EPICS"
             }
         ]
     },
@@ -364,7 +379,9 @@
         "onCommand:vscode-epics.restartRuntimeContext",
         "onCommand:vscode-epics.stopRuntimeContext",
         "onCommand:vscode-epics.startActiveFileRuntimeContext",
-        "onCommand:vscode-epics.stopActiveFileRuntimeContext"
+        "onCommand:vscode-epics.stopActiveFileRuntimeContext",
+        "onCommand:vscode-epics.putRuntimeValue",
+        "onCommand:vscode-epics.openProjectRuntimeConfiguration"
     ],
     "dependencies": {
         "epics-tca": "^1.1.32"

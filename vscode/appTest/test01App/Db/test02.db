@@ -1,0 +1,27 @@
+
+record(ao, "rec003") {
+    field(DESC, "description")
+    field(PREC, "3")
+    field(EGU,  "Volts")
+    field(DRVL, "-10")
+    field(DRVH, "+10")
+    field(VAL,  "0.000")
+}
+
+
+
+
+
+
+
+
+
+
+record(ao, "rec002") {
+    field(DESC, "description")
+    field(PREC, "3")
+    field(EGU,  "Volts")
+    field(DRVL, "-10")
+    field(DRVH, "+10")
+    field(VAL,  "0.000")
+}

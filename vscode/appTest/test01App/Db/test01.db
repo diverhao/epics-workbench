@@ -1,0 +1,56 @@
+# EPICS TOC BEGIN
+# Macros:
+#  - ABC
+#  - IOCNAME
+# Table of Contents INP DESC
+# | Record                | Type | INP  | DESC        |
+# | --------------------- | ---- | ---- | ----------- |
+# | $(IOCNAME)$(ABC)abcd1 | ai   | abcd | description |
+# | abcd2                 | ao   | NA   | ""          |
+# | abcd5                 | aSub | NA   | ""          |
+# | abcd3                 | ao   | NA   | ""          |
+# | abcd4                 | bo   | NA   | ""          |
+# EPICS TOC END
+
+record(ai, "$(IOCNAME)$(ABC)abcd1") {
+    field(DESC, "description")
+    field(DTYP, "Soft Channel")
+    field(SCAN, "Passive")
+    field(INP, "abcd")
+    field(AOFF, "0")
+}
+
+record(ao, "abcd2") {
+    field("VAL", "33.7")
+}
+
+record(aSub, "abcd5") {
+    field(DESC, "")
+    field(SNAM, "")
+    field(EFLG, "ON CHANGE")
+    field(INPA, "")
+    field(FTA, "DOUBLE")
+    field(NOA, "1")
+    field(OUTA, "")
+    field(FTVA, "DOUBLE")
+    field(NOVA, "1")
+}
+
+record(ao, "abcd3") {
+    #    field(INP, "abcd1")
+    field(VAL, "123")
+    field(OUT, "rec003")
+}
+
+
+record(bo, "abcd4") {
+    field(DESC, "")
+    field(DTYP, "stream")
+    field(OUT, "@checksums.proto")
+    field(VAL, "0")
+    field(ZNAM, "")
+    field(ZSV, "MAJOR")
+    field(ONAM, "")
+    field(OSV, "NO_ALARM")
+    field(HIGH, "0")
+}

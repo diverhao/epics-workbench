@@ -1,0 +1,509 @@
+# EPICS TOC BEGIN
+# Macros:
+#  - BUS
+#  - S
+# Table of Contents DTYP INP OUT
+# | Record                    | Value              | Type      | DTYP   | INP                                       | OUT                                       |
+# | ------------------------- | ------------------ | --------- | ------ | ----------------------------------------- | ----------------------------------------- |
+# | $(S):SET_CURR_SWEEP_LLIM4 |                    | ao        | ""     | NA                                        | ""                                        |
+# | $(S):UPDATE               |                    | seq       | ""     | NA                                        | NA                                        |
+# | $(S):UPDATE_1             |                    | seq       | ""     | NA                                        | NA                                        |
+# | $(S):UPDATE_2             |                    | seq       | ""     | NA                                        | NA                                        |
+# | $(S):SET_REPORT_ERR       |                    | bo        | stream | NA                                        | @4g.proto set-error-mode $(BUS)           |
+# | $(S):REPORT_ERR           |                    | bi        | stream | @4g.proto get-error-mode $(BUS)           | NA                                        |
+# | $(S):SET_REMOTE           |                    | bo        | stream | NA                                        | @4g.proto set-remote $(BUS)               |
+# | $(S):SET_MAG_NAME         |                    | stringout | stream | NA                                        | @4g.proto set-mag-name $(BUS)             |
+# | $(S):MAG_NAME             |                    | stringin  | stream | @4g.proto get-mag-name $(BUS)             | NA                                        |
+# | $(S):RESET_QUENCH_COND    |                    | ao        | stream | NA                                        | @4g.proto reset-quench-cond $(BUS)        |
+# | $(S):CLEAR_ESR            |                    | ao        | stream | NA                                        | @4g.proto clear-status $(BUS)             |
+# | $(S):ESR                  |                    | longin    | stream | @4g.proto get-esr $(BUS)                  | NA                                        |
+# | $(S):ID                   |                    | stringin  | stream | @4g.proto get-id $(BUS)                   | NA                                        |
+# | $(S):STATUS_BYTE          |                    | longin    | stream | @4g.proto get-status-byte $(BUS)          | NA                                        |
+# | $(S):SET_CURR_SWEEP_LLIM  |                    | ao        | stream | NA                                        | @4g.proto set-curr-sweep-low-limit $(BUS) |
+# | CURR_SWEEP_LLIM           |                    | ai        | stream | @4g.proto get-curr-sweep-low-limit $(BUS) | NA                                        |
+# | $(S):SET_CURR_SWEEP_ULIM  |                    | ao        | stream | NA                                        | @4g.proto set-curr-sweep-up-limit $(BUS)  |
+# | $(S):CURR_SWEEP_ULIM      |                    | ai        | stream | @4g.proto get-curr-sweep-up-limit $(BUS)  | NA                                        |
+# | $(S):SET_SWEEP_RANGE_0    |                    | ao        | stream | NA                                        | @4g.proto set-sweep-range(0) $(BUS)       |
+# | $(S):SET_SWEEP_RANGE_1    |                    | ao        | stream | NA                                        | @4g.proto set-sweep-range(1) $(BUS)       |
+# | $(S):SET_SWEEP_RANGE_2    |                    | ao        | stream | NA                                        | @4g.proto set-sweep-range(2) $(BUS)       |
+# | $(S):SET_SWEEP_RANGE_3    |                    | ao        | stream | NA                                        | @4g.proto set-sweep-range(3) $(BUS)       |
+# | $(S):SET_SWEEP_RANGE_4    |                    | ao        | stream | NA                                        | @4g.proto set-sweep-range(4) $(BUS)       |
+# | $(S):SWEEP_RANGE_0        |                    | ai        | stream | @4g.proto get-sweep-range(0) $(BUS)       | NA                                        |
+# | $(S):SWEEP_RANGE_1        |                    | ai        | stream | @4g.proto get-sweep-range(1) $(BUS)       | NA                                        |
+# | $(S):SWEEP_RANGE_2        |                    | ai        | stream | @4g.proto get-sweep-range(2) $(BUS)       | NA                                        |
+# | $(S):SWEEP_RANGE_3        |                    | ai        | stream | @4g.proto get-sweep-range(3) $(BUS)       | NA                                        |
+# | $(S):SWEEP_RANGE_4        |                    | ai        | stream | @4g.proto get-sweep-range(4) $(BUS)       | NA                                        |
+# | $(S):SET_SWEEP_RATE_0     |                    | ao        | stream | NA                                        | @4g.proto set-sweep-rate(0) $(BUS)        |
+# | $(S):SET_SWEEP_RATE_1     |                    | ao        | stream | NA                                        | @4g.proto set-sweep-rate(1) $(BUS)        |
+# | $(S):SET_SWEEP_RATE_2     |                    | ao        | stream | NA                                        | @4g.proto set-sweep-rate(2) $(BUS)        |
+# | $(S):SET_SWEEP_RATE_3     |                    | ao        | stream | NA                                        | @4g.proto set-sweep-rate(3) $(BUS)        |
+# | $(S):SET_SWEEP_RATE_4     |                    | ao        | stream | NA                                        | @4g.proto set-sweep-rate(4) $(BUS)        |
+# | $(S):SWEEP_RATE_0         |                    | ai        | stream | @4g.proto get-sweep-rate(0) $(BUS)        | NA                                        |
+# | $(S):SWEEP_RATE_1         |                    | ai        | stream | @4g.proto get-sweep-rate(1) $(BUS)        | NA                                        |
+# | $(S):SWEEP_RATE_2         |                    | ai        | stream | @4g.proto get-sweep-rate(2) $(BUS)        | NA                                        |
+# | $(S):SWEEP_RATE_3         |                    | ai        | stream | @4g.proto get-sweep-rate(3) $(BUS)        | NA                                        |
+# | $(S):SWEEP_RATE_4         |                    | ai        | stream | @4g.proto get-sweep-rate(4) $(BUS)        | NA                                        |
+# | $(S):SWEEP                |                    | mbbo      | stream | NA                                        | @4g.proto sweep $(BUS)                    |
+# | $(S):SWEEP_FAST           |                    | mbbo      | stream | NA                                        | @4g.proto sweep-fast $(BUS)               |
+# | $(S):SWEEP_STATUS         |                    | mbbi      | stream | @4g.proto sweep-status $(BUS)             | NA                                        |
+# | $(S):SELECT_UNITS         |                    | bo        | stream | NA                                        | @4g.proto set-units $(BUS)                |
+# | $(S):UNITS                |                    | bi        | stream | @4g.proto get-units $(BUS)                | NA                                        |
+# | $(S):SET_MAG_CURR         |                    | ao        | stream | NA                                        | @4g.proto set-mag-curr $(BUS)             |
+# | $(S):MAG_CURR             |                    | ai        | stream | @4g.proto get-mag-curr $(BUS)             | NA                                        |
+# | $(S):SET_PS_VOLT_LIMIT    |                    | ao        | stream | NA                                        | @4g.proto set-ps-volt-limit $(BUS)        |
+# | $(S):PS_VOLT_LIMIT        |                    | ai        | stream | @4g.proto get-ps-volt-limit $(BUS)        | NA                                        |
+# | $(S):MAG_VOLT             |                    | ai        | stream | @4g.proto get-mag-volt $(BUS)             | NA                                        |
+# | $(S):PS_VOLT              |                    | ai        | stream | @4g.proto get-output-volt $(BUS)          | NA                                        |
+# EPICS TOC END
+
+record(ao, "$(S):SET_CURR_SWEEP_LLIM4") {
+    field(DESC, "")
+    field(PREC, "0")
+    field(EGU, "")
+    field(DRVL, "0")
+    field(DRVH, "0")
+    field(VAL, "0")
+}
+
+record(seq, "$(S):UPDATE") {
+    field(DOL0, "1")
+    field(DLY0, "0.2")
+    field(DOL1, "1")
+    field(DLY1, "0.2")
+    field(DOL2, "1")
+    field(DLY2, "0.2")
+    field(DOL3, "1")
+    field(DLY3, "0.2")
+    field(DOL4, "1")
+    field(DLY4, "0.2")
+    field(DOL5, "1")
+    field(DLY5, "0.2")
+    field(DOL6, "1")
+    field(DLY6, "0.2")
+    field(DOL7, "1")
+    field(DLY7, "0.2")
+    field(DOL8, "1")
+    field(DLY8, "0.2")
+    field(DOL9, "1")
+    field(DLY9, "0.2")
+    field(DOLA, "1")
+    field(DLYA, "0.2")
+    field(DOLB, "1")
+    field(DLYB, "0.2")
+    field(DOLC, "1")
+    field(DLYC, "0.2")
+    field(DOLD, "1")
+    field(DLYD, "0.2")
+    field(DOLE, "1")
+    field(DLYE, "0.2")
+    field(DOLF, "1")
+    field(DLYF, "0.2")
+    field(LNK0, "$(S):REPORT_ERR.PROC")
+    field(LNK1, "$(S):MAG_NAME.PROC")
+    field(LNK2, "$(S):ESR.PROC")
+    field(LNK3, "$(S):ID.PROC")
+    field(LNK4, "$(S):STATUS_BYTE.PROC")
+    field(LNK5, "CURR_SWEEP_LLIM")
+    field(LNK6, "$(S):CURR_SWEEP_ULIM.PROC")
+    field(LNK7, "$(S):SWEEP_RANGE_0.PROC")
+    field(LNK8, "$(S):SWEEP_RANGE_1.PROC")
+    field(LNK9, "$(S):SWEEP_RANGE_2.PROC")
+    field(LNKA, "$(S):SWEEP_RANGE_3.PROC")
+    field(LNKB, "$(S):SWEEP_RANGE_4.PROC")
+    field(LNKC, "$(S):SWEEP_RATE_0.PROC")
+    field(LNKD, "$(S):SWEEP_RATE_1.PROC")
+    field(LNKE, "$(S):SWEEP_RATE_2.PROC")
+    field(LNKF, "$(S):UPDATE_1.PROC")
+    field(SCAN, "10 second")
+}
+
+
+record(seq, "$(S):UPDATE_1") {
+    field(DOL0, "1")
+    field(DLY0, "0.2")
+    field(DOL1, "1")
+    field(DLY1, "0.2")
+    field(DOL2, "1")
+    field(DLY2, "0.2")
+    field(DOL3, "1")
+    field(DLY3, "0.2")
+    field(DOL4, "1")
+    field(DLY4, "0.2")
+    field(LNK0, "$(S):SWEEP_RATE_3.PROC")
+    field(LNK1, "$(S):SWEEP_RATE_4.PROC")
+    field(LNK2, "$(S):SWEEP_STATUS.PROC")
+    field(LNK3, "$(S):UNITS.PROC")
+    field(LNK4, "$(S):PS_VOLT_LIMIT.PROC")
+}
+
+record(seq, "$(S):UPDATE_2") {
+    field(DOL0, "1")
+    field(DLY0, "0.2")
+    field(DOL1, "1")
+    field(DLY1, "0.2")
+    field(DOL2, "1")
+    field(DLY2, "3.3")
+    field(LNK0, "$(S):SWEEP_RANGE_0")
+    field(LNK1, "abcd2")
+    field(LNK2, "$(S):PS_VOLT.PROC")
+    field(SCAN, "1 second")
+}
+
+
+
+record(bo, "$(S):SET_REPORT_ERR") {
+    field(DESC, "Set error response mode")
+    field(DTYP, "stream")
+    field(ONAM, "REPORT")
+    field(ZNAM, "NOT REPORT")
+    field(OUT, "@4g.proto set-error-mode $(BUS)")
+}
+
+record(bi, "$(S):REPORT_ERR") {
+    field(DESC, "Set error response mode")
+    field(DTYP, "stream")
+    field(ONAM, "REPORT")
+    field(ZNAM, "NOT REPORT")
+    field(INP, "@4g.proto get-error-mode $(BUS)")
+}
+
+record(bo, "$(S):SET_REMOTE") {
+    field(DESC, "set to REMOTE or LOCAL")
+    field(DTYP, "stream")
+    field(ONAM, "LOCAL")
+    field(ZNAM, "REMOTE")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-remote $(BUS)")
+}
+
+record(stringout, "$(S):SET_MAG_NAME") {
+    field(DESC, "Sets the name of the coil")
+    field(DTYP, "stream")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-mag-name $(BUS)")
+}
+
+record(stringin, "$(S):MAG_NAME") {
+    field(DESC, "Query the name of the selected coil")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-mag-name $(BUS)")
+}
+
+record(ao, "$(S):RESET_QUENCH_COND") {
+    field(DESC, "Reset quench cond, returns to STANDBY")
+    field(DTYP, "stream")
+    field(OMSL, "closed_loop")
+    field(OUT, "@4g.proto reset-quench-cond $(BUS)")
+}
+
+
+record(ao, "$(S):CLEAR_ESR") {
+    field(DESC, "Clear ESR")
+    field(OMSL, "supervisory")
+    field(DTYP, "stream")
+    field(OUT, "@4g.proto clear-status $(BUS)")
+}
+
+record(longin, "$(S):ESR") {
+    field(DESC, "Standard Event Status Register Query")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-esr $(BUS)")
+}
+
+record(stringin, "$(S):ID") {
+    field(DESC, "Identification Query")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-id $(BUS)")
+}
+
+record(longin, "$(S):STATUS_BYTE") {
+    field(DESC, "Read Status Byte Query")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-status-byte $(BUS)")
+}
+
+# ------------------ sweep ---------------------------
+
+record(ao, "$(S):SET_CURR_SWEEP_LLIM") {
+    field(DESC, "Set low current sweep limit")
+    field(DTYP, "stream")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-curr-sweep-low-limit $(BUS)")
+}
+
+record(ai, "CURR_SWEEP_LLIM") {
+    field(DESC, "Query current sweep limit")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-curr-sweep-low-limit $(BUS)")
+}
+
+record(ao, "$(S):SET_CURR_SWEEP_ULIM") {
+    field(DESC, "Set upper current sweep limit")
+    field(DTYP, "stream")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-curr-sweep-up-limit $(BUS)")
+}
+
+record(ai, "$(S):CURR_SWEEP_ULIM") {
+    field(DESC, "Query current sweep limit")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-curr-sweep-up-limit $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RANGE_0") {
+    field(DESC, "Set limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-range(0) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RANGE_1") {
+    field(DESC, "Set limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-range(1) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RANGE_2") {
+    field(DESC, "Set limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-range(2) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RANGE_3") {
+    field(DESC, "Set limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-range(3) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RANGE_4") {
+    field(DESC, "Set limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-range(4) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RANGE_0") {
+    field(DESC, "Get limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(INP, "@4g.proto get-sweep-range(0) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RANGE_1") {
+    field(DESC, "Get limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(INP, "@4g.proto get-sweep-range(1) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RANGE_2") {
+    field(DESC, "Get limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(INP, "@4g.proto get-sweep-range(2) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RANGE_3") {
+    field(DESC, "Get limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(INP, "@4g.proto get-sweep-range(3) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RANGE_4") {
+    field(DESC, "Get limit for sweep range boundary")
+    field(DTYP, "stream")
+    field(EGU, "A")
+    field(INP, "@4g.proto get-sweep-range(4) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RATE_0") {
+    field(DESC, "Set rate for selected sweep range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-rate(0) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RATE_1") {
+    field(DESC, "Set rate for selected sweep range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-rate(1) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RATE_2") {
+    field(DESC, "Set rate for selected sweep range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-rate(2) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RATE_3") {
+    field(DESC, "Set rate for selected sweep range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-rate(3) $(BUS)")
+}
+
+record(ao, "$(S):SET_SWEEP_RATE_4") {
+    field(DESC, "Set rate for selected sweep range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-sweep-rate(4) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RATE_0") {
+    field(DESC, "Query sweep rate for range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(INP, "@4g.proto get-sweep-rate(0) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RATE_1") {
+    field(DESC, "Query sweep rate for range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(INP, "@4g.proto get-sweep-rate(1) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RATE_2") {
+    field(DESC, "Query sweep rate for range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(INP, "@4g.proto get-sweep-rate(2) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RATE_3") {
+    field(DESC, "Query sweep rate for range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(INP, "@4g.proto get-sweep-rate(3) $(BUS)")
+}
+
+record(ai, "$(S):SWEEP_RATE_4") {
+    field(DESC, "Query sweep rate for range")
+    field(DTYP, "stream")
+    field(EGU, "A/s")
+    field(INP, "@4g.proto get-sweep-rate(4) $(BUS)")
+}
+
+record(mbbo, "$(S):SWEEP") {
+    field(DESC, "Start output current sweep")
+    field(DTYP, "stream")
+    field(OMSL, "supervisory")
+    field(ZRST, "ZERO")
+    field(ONST, "PAUSE")
+    field(TWST, "UP")
+    field(THST, "DOWN")
+    field(OUT, "@4g.proto sweep $(BUS)")
+}
+
+record(mbbo, "$(S):SWEEP_FAST") {
+    field(DESC, "Start output current sweep fast")
+    field(DTYP, "stream")
+    field(OMSL, "supervisory")
+    field(ZRST, "ZERO")
+    field(ONST, "PAUSE")
+    field(TWST, "UP")
+    field(THST, "DOWN")
+    field(OUT, "@4g.proto sweep-fast $(BUS)")
+}
+
+record(mbbi, "$(S):SWEEP_STATUS") {
+    field(DESC, "Query sweep mode")
+    field(DTYP, "stream")
+    field(ZRST, "zeroing")
+    field(ONST, "sweep paused")
+    field(TWST, "sweep up")
+    field(THST, "sweep down")
+    field(INP, "@4g.proto sweep-status $(BUS)")
+}
+
+# -------------------- units --------------------
+
+record(bo, "$(S):SELECT_UNITS") {
+    field(DESC, "Select units")
+    field(DTYP, "stream")
+    field(ONAM, "G")
+    field(ZNAM, "A")
+    field(OUT, "@4g.proto set-units $(BUS)")
+}
+
+record(bi, "$(S):UNITS") {
+    field(DESC, "Query select units")
+    field(DTYP, "stream")
+    field(ONAM, "G")
+    field(ZNAM, "A")
+    field(INP, "@4g.proto get-units $(BUS)")
+}
+
+# ---------------- current ----------------------
+
+# todo: how to ramp to it
+record(ao, "$(S):SET_MAG_CURR") {
+    field(DESC, "Sets the magnet current")
+    field(DTYP, "stream")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-mag-curr $(BUS)")
+}
+
+record(ai, "$(S):MAG_CURR") {
+    field(DESC, "Gets the magnet current")
+    field(DTYP, "stream")
+    field(INP, "@4g.proto get-mag-curr $(BUS)")
+}
+
+# MPEX gyrotron does not have persistent switch heater, so MAG_CURR always equals to PS_CURR
+# record(ai, "$(S):PS_CURR") {
+#     field(DESC, "Query power supply output current")
+#     field(DTYP, "stream")
+#     field(INP, "@4g.proto get-output-curr $(BUS)")
+# }
+
+# ---------------- voltage ----------------------
+
+record(ao, "$(S):SET_PS_VOLT_LIMIT") {
+    field(DESC, "Set voltage limit of the power supply")
+    field(DTYP, "stream")
+    field(DRVH, "10")
+    field(DRVL, "0")
+    field(OMSL, "supervisory")
+    field(OUT, "@4g.proto set-ps-volt-limit $(BUS)")
+}
+
+record(ai, "$(S):PS_VOLT_LIMIT") {
+    field(DESC, "Query voltage limit of the power supply")
+    field(DTYP, "stream")
+    field(HOPR, "10")
+    field(LOPR, "0")
+    field(INP, "@4g.proto get-ps-volt-limit $(BUS)")
+}
+
+record(ai, "$(S):MAG_VOLT") {
+    field(DESC, "Query magnet voltage")
+    field(DTYP, "stream")
+    field(HOPR, "10")
+    field(LOPR, "-10")
+    field(INP, "@4g.proto get-mag-volt $(BUS)")
+}
+
+record(ai, "$(S):PS_VOLT") {
+    field(DESC, "Query power supply output voltage")
+    field(DTYP, "stream")
+    field(HOPR, "12.8")
+    field(LOPR, "-12.8")
+    field(INP, "@4g.proto get-output-volt $(BUS)")
+}

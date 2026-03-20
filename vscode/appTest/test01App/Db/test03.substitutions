@@ -1,0 +1,11 @@
+
+file test01.db {
+    { IOCNAME=CCL_PS:IOC1, ABC=aaa }
+    { IOCNAME=CCL_PS:IOC1, ABC=bbb }
+}
+
+file test01.db {
+    pattern { IOCNAME,     ABC }
+            { "",          "" }
+            { CCL_PS:IOC1, bbb }
+}

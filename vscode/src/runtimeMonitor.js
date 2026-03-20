@@ -1,3 +1,4 @@
+const fs = require("fs");
 const path = require("path");
 const vscode = require("vscode");
 const { formatMonitorText } = require("./formatters");
@@ -10,6 +11,9 @@ const RESTART_RUNTIME_CONTEXT_COMMAND = "vscode-epics.restartRuntimeContext";
 const STOP_RUNTIME_CONTEXT_COMMAND = "vscode-epics.stopRuntimeContext";
 const START_ACTIVE_FILE_RUNTIME_COMMAND = "vscode-epics.startActiveFileRuntimeContext";
 const STOP_ACTIVE_FILE_RUNTIME_COMMAND = "vscode-epics.stopActiveFileRuntimeContext";
+const PUT_RUNTIME_VALUE_COMMAND = "vscode-epics.putRuntimeValue";
+const OPEN_PROJECT_RUNTIME_CONFIGURATION_COMMAND =
+  "vscode-epics.openProjectRuntimeConfiguration";
 const DEFAULT_PROTOCOL = "ca";
 const DEFAULT_CHANNEL_CREATION_TIMEOUT_SECONDS = 0;
 const DEFAULT_MONITOR_SUBSCRIBE_TIMEOUT_SECONDS = 0;
@@ -17,6 +21,13 @@ const DEFAULT_LOG_LEVEL = "ERROR";
 const DATABASE_RUNTIME_EXTENSIONS = new Set([".db", ".vdb", ".template"]);
 const LINE_RUNTIME_EXTENSIONS = new Set([".monitor", ".txt"]);
 const STATUS_BAR_PRIORITY = 110;
+const MOUSE_DOUBLE_CLICK_INTERVAL_MS = 400;
+const PROJECT_RUNTIME_CONFIG_FILE_NAME = ".epics-workbench-config.json";
+const PROJECT_RUNTIME_CONFIGURATION_VIEW_TYPE =
+  "epicsWorkbench.projectRuntimeConfiguration";
+const PROJECT_RUNTIME_CONFIGURATION_PROTOCOL_VALUES = ["ca", "pva"];
+const PROJECT_RUNTIME_CONFIGURATION_AUTO_ADDR_LIST_VALUES = ["Yes", "No"];
+const PVA_HAS_DATA_WITHOUT_VALUE_TEXT = "Has data, but no value";
 const RUNTIME_VALUE_DISPLAY_MAX_LENGTH = 120;
 const RUNTIME_HOVER_VALUE_MAX_LENGTH = 240;
 const DATABASE_TOC_VALUE_DISPLAY_MAX_LENGTH = 18;
@@ -107,6 +118,18 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
     ),
   );
   extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      PUT_RUNTIME_VALUE_COMMAND,
+      async (target) => controller.putRuntimeValue(target),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_PROJECT_RUNTIME_CONFIGURATION_COMMAND,
+      async () => controller.openProjectRuntimeConfiguration(),
+    ),
+  );
+  extensionContext.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       controller.handleActiveEditorChange(editor);
       controller.refreshMonitorHoverDecorationsForEditor(editor);
@@ -116,6 +139,11 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   extensionContext.subscriptions.push(
     vscode.window.onDidChangeVisibleTextEditors(() => {
       controller.refreshVisibleMonitorHoverDecorations();
+    }),
+  );
+  extensionContext.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      void controller.handleTextEditorSelectionChanged(event);
     }),
   );
   extensionContext.subscriptions.push(
@@ -177,6 +205,10 @@ class EpicsRuntimeMonitorController {
     this.hoverDecorationType = undefined;
     this.databaseTocValueDecorationType = undefined;
     this.hoverRefreshTimer = undefined;
+    this.runtimeWorkspaceFolder = undefined;
+    this.runtimeConfigurationPanel = undefined;
+    this.activePutRequestKeys = new Set();
+    this.lastMousePutRequest = undefined;
     this.extractDatabaseTocEntries =
       typeof databaseHelpers.extractDatabaseTocEntries === "function"
         ? databaseHelpers.extractDatabaseTocEntries
@@ -210,6 +242,8 @@ class EpicsRuntimeMonitorController {
   dispose() {
     this.stopContextInternal();
     this.disposeHoverRefreshTimer();
+    this.runtimeConfigurationPanel?.dispose();
+    this.runtimeConfigurationPanel = undefined;
     this.statusBarItem?.dispose();
     this._onDidChangeTreeData.dispose();
   }
@@ -253,14 +287,15 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    const documentLabel = getRuntimeDocumentLabel(document);
     const isRunning = this.isDocumentMonitoringRunning(document);
     this.statusBarItem.text = isRunning ? "$(primitive-square) EPICS" : "$(play) EPICS";
     this.statusBarItem.command = isRunning
       ? STOP_ACTIVE_FILE_RUNTIME_COMMAND
       : START_ACTIVE_FILE_RUNTIME_COMMAND;
     this.statusBarItem.tooltip = isRunning
-      ? `Stop EPICS runtime monitoring for ${path.basename(document.uri.fsPath)}`
-      : `Start EPICS runtime monitoring for ${path.basename(document.uri.fsPath)}`;
+      ? `Stop EPICS runtime monitoring for ${documentLabel}`
+      : `Start EPICS runtime monitoring for ${documentLabel}`;
     this.statusBarItem.show();
   }
 
@@ -600,6 +635,7 @@ class EpicsRuntimeMonitorController {
       const startPosition = document.positionAt(tocEntry.valueStart);
       decorationOptions.push({
         range: new vscode.Range(startPosition, startPosition),
+        hoverMessage: this.createMonitorHoverMarkdown(entry),
         renderOptions: {
           after: {
             contentText,
@@ -663,6 +699,7 @@ class EpicsRuntimeMonitorController {
 
   createMonitorHoverMarkdown(entry) {
     const markdown = new vscode.MarkdownString();
+    markdown.isTrusted = true;
     markdown.appendMarkdown(`**${escapeMarkdownText(entry.pvName)}**`);
     markdown.appendMarkdown(
       `\n\nProtocol: \`${entry.protocol.toUpperCase()}\``,
@@ -685,8 +722,51 @@ class EpicsRuntimeMonitorController {
         `\n\nError: ${escapeMarkdownText(entry.lastError)}`,
       );
     }
+    if (this.canPutRuntimeValue(entry)) {
+      markdown.appendMarkdown(
+        `\n\n[Put Value](${buildPutRuntimeValueCommandUri(entry)})`,
+      );
+    }
 
     return markdown;
+  }
+
+  async handleTextEditorSelectionChanged(event) {
+    if (
+      !event?.textEditor ||
+      event.kind !== vscode.TextEditorSelectionChangeKind.Mouse ||
+      !Array.isArray(event.selections) ||
+      event.selections.length !== 1
+    ) {
+      return;
+    }
+
+    const document = event.textEditor.document;
+    const position = event.selections[0].active;
+    const targetEntry = this.findRuntimeEntryAtDocumentPosition(
+      document,
+      position,
+      true,
+    );
+    if (!targetEntry) {
+      return;
+    }
+
+    const requestKey = `${targetEntry.key}:${position.line}`;
+    const now = Date.now();
+    const isDoubleClick =
+      this.lastMousePutRequest?.key === requestKey &&
+      now - this.lastMousePutRequest.time <= MOUSE_DOUBLE_CLICK_INTERVAL_MS;
+    this.lastMousePutRequest = {
+      key: requestKey,
+      time: now,
+    };
+    if (!isDoubleClick) {
+      return;
+    }
+    this.lastMousePutRequest = undefined;
+
+    await this.putRuntimeValue(targetEntry);
   }
 
   async handleDocumentClosed(document) {
@@ -877,14 +957,21 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    const workspaceFolder =
+      this.getWorkspaceFolderForDocument(document) || this.getDefaultWorkspaceFolder();
+    if (workspaceFolder) {
+      this.runtimeWorkspaceFolder = workspaceFolder;
+    }
+
     const analysis = analyzeRuntimeDocument(
       document,
       this.getDefaultProtocol(),
       this.getDatabaseRuntimeHelpers(),
     );
+    const sourceLabel = getRuntimeDocumentLabel(document);
     if (analysis.diagnostics?.length) {
       vscode.window.showErrorMessage(
-        `Cannot start EPICS runtime for ${path.basename(document.uri.fsPath)} until the .monitor file errors are fixed.`,
+        `Cannot start EPICS runtime for ${sourceLabel} until the .monitor file errors are fixed.`,
       );
       return;
     }
@@ -892,13 +979,12 @@ class EpicsRuntimeMonitorController {
     const definitions = analysis.definitions;
     if (!definitions.length) {
       vscode.window.showWarningMessage(
-        `No EPICS monitor targets were found in ${path.basename(document.uri.fsPath)}.`,
+        `No EPICS monitor targets were found in ${sourceLabel}.`,
       );
       return;
     }
 
     const sourceUri = document.uri.toString();
-    const sourceLabel = path.basename(document.uri.fsPath);
     await this.removeEntriesBySourceUri(sourceUri);
 
     await vscode.window.withProgress(
@@ -947,6 +1033,151 @@ class EpicsRuntimeMonitorController {
     this.handleActiveEditorChange(vscode.window.activeTextEditor);
   }
 
+  async openProjectRuntimeConfiguration() {
+    const workspaceFolder = await this.resolveInteractiveWorkspaceFolder();
+    if (!workspaceFolder) {
+      vscode.window.showWarningMessage(
+        "Open a folder or workspace to configure EPICS runtime environment for this project.",
+      );
+      return;
+    }
+
+    this.runtimeWorkspaceFolder = workspaceFolder;
+    const configPath = getProjectRuntimeConfigPath(workspaceFolder);
+    const loadedConfig = loadProjectRuntimeConfiguration(configPath);
+    if (loadedConfig.error) {
+      vscode.window.showWarningMessage(
+        `Failed to read ${PROJECT_RUNTIME_CONFIG_FILE_NAME}: ${loadedConfig.error}`,
+      );
+    }
+
+    this.runtimeConfigurationPanel?.dispose();
+    const panel = vscode.window.createWebviewPanel(
+      PROJECT_RUNTIME_CONFIGURATION_VIEW_TYPE,
+      `EPICS Runtime Config: ${workspaceFolder.name}`,
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      },
+    );
+    this.runtimeConfigurationPanel = panel;
+    let currentConfig = loadedConfig.config;
+    panel.webview.html = buildProjectRuntimeConfigurationWebviewHtml(
+      panel.webview,
+      workspaceFolder,
+      configPath,
+      loadedConfig.config,
+    );
+    panel.onDidDispose(() => {
+      if (this.runtimeConfigurationPanel === panel) {
+        this.runtimeConfigurationPanel = undefined;
+      }
+    });
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (message?.type !== "saveProjectRuntimeConfiguration") {
+        return;
+      }
+
+      const normalizedConfig = normalizeProjectRuntimeConfiguration(message.config);
+      const protocolChanged = normalizedConfig.protocol !== currentConfig.protocol;
+      try {
+        await fs.promises.writeFile(
+          configPath,
+          serializeProjectRuntimeConfiguration(normalizedConfig),
+          "utf8",
+        );
+      } catch (error) {
+        const failureMessage = getErrorMessage(error);
+        await panel.webview.postMessage({
+          type: "saveProjectRuntimeConfigurationResult",
+          success: false,
+          message: failureMessage,
+        });
+        vscode.window.showErrorMessage(
+          `Failed to save ${PROJECT_RUNTIME_CONFIG_FILE_NAME}: ${failureMessage}`,
+        );
+        return;
+      }
+
+      await panel.webview.postMessage({
+        type: "saveProjectRuntimeConfigurationResult",
+        success: true,
+        message: `Saved to ${configPath}`,
+      });
+      currentConfig = normalizedConfig;
+      const runtimeIsActive =
+        this.contextStatus !== "stopped" || Boolean(this.contextInitializationPromise);
+      if (runtimeIsActive) {
+        const restartMessage = protocolChanged
+          ? `Saved ${PROJECT_RUNTIME_CONFIG_FILE_NAME}. Restart EPICS runtime context to apply environment changes. Protocol changes are used the next time file runtime monitoring starts.`
+          : `Saved ${PROJECT_RUNTIME_CONFIG_FILE_NAME}. Restart EPICS runtime context to apply the new environment values?`;
+        const restartChoice = await vscode.window.showInformationMessage(
+          restartMessage,
+          "Restart",
+        );
+        if (restartChoice === "Restart") {
+          await this.restartContext();
+        }
+      }
+    });
+  }
+
+  async putRuntimeValue(target) {
+    const entry = this.resolveRuntimePutEntry(target);
+    if (!entry) {
+      return;
+    }
+
+    const putSupport = this.getRuntimePutSupport(entry);
+    if (!putSupport.canPut) {
+      vscode.window.showWarningMessage(putSupport.reason);
+      return;
+    }
+
+    if (this.activePutRequestKeys.has(entry.key)) {
+      return;
+    }
+
+    this.activePutRequestKeys.add(entry.key);
+    const input = await showRuntimePutInput(entry, putSupport);
+    if (input === undefined) {
+      this.activePutRequestKeys.delete(entry.key);
+      return;
+    }
+
+    const parsed = parseRuntimePutInput(input, putSupport);
+    if (parsed.error) {
+      this.activePutRequestKeys.delete(entry.key);
+      vscode.window.showErrorMessage(parsed.error);
+      return;
+    }
+
+    entry.lastError = undefined;
+    this.refresh(entry);
+    try {
+      const runtimeLibrary = this.requireRuntimeLibrary();
+      const result = entry.protocol === "pva"
+        ? await entry.channel.putPva(putSupport.putPvRequest || "value", [parsed.value])
+        : await entry.channel.put(parsed.value, undefined, true);
+      if (!isSuccessfulRuntimePutResult(result, runtimeLibrary, entry.protocol)) {
+        throw new Error(
+          getRuntimePutFailureMessage(result, runtimeLibrary, entry.protocol),
+        );
+      }
+    } catch (error) {
+      const message = getErrorMessage(error);
+      entry.lastError = message;
+      this.refresh(entry);
+      vscode.window.showErrorMessage(`Failed to put ${entry.pvName}: ${message}`);
+      return;
+    } finally {
+      this.activePutRequestKeys.delete(entry.key);
+    }
+
+    this.refresh(entry);
+  }
+
   queueMonitorEntry(definition, options = {}) {
     const key = createMonitorKey(definition);
     const existingEntry = this.monitorEntries.find((entry) => entry.key === key);
@@ -982,6 +1213,8 @@ class EpicsRuntimeMonitorController {
       serverAddress: undefined,
       connectionAttemptId: 0,
       recoveryInProgress: false,
+      caEnumChoices: undefined,
+      pvaEnumChoices: undefined,
     };
     this.monitorEntries.push(entry);
     this.refresh();
@@ -1096,6 +1329,18 @@ class EpicsRuntimeMonitorController {
       );
     }
 
+    const caMonitorOptions = getCaEnumMonitorOptions(channel);
+    if (caMonitorOptions) {
+      return channel.createMonitor(
+        this.getMonitorSubscribeTimeoutSeconds(),
+        (activeMonitor) => {
+          this.handleMonitorUpdate(entry, activeMonitor);
+        },
+        caMonitorOptions.dbrType,
+        caMonitorOptions.valueCount,
+      );
+    }
+
     return channel.createMonitor(
       this.getMonitorSubscribeTimeoutSeconds(),
       (activeMonitor) => {
@@ -1176,11 +1421,17 @@ class EpicsRuntimeMonitorController {
   updateEntryValue(entry, monitor) {
     entry.lastUpdated = new Date();
     if (entry.protocol === "pva") {
-      entry.valueText = formatRuntimeValue(monitor.getPvaData());
+      updatePvaEnumChoicesCache(entry, monitor.getPvaData());
+      entry.valueText = formatRuntimeValue(
+        getPvaRuntimeDisplayValue(monitor.getPvaData(), entry.pvaEnumChoices),
+      );
       return;
     }
 
-    entry.valueText = formatRuntimeValue(monitor.getChannel().getDbrData()?.value);
+    updateCaEnumChoicesCache(entry, monitor.getChannel().getDbrData?.());
+    entry.valueText = formatRuntimeValue(
+      getCaRuntimeDisplayValue(entry, monitor.getChannel().getDbrData?.()),
+    );
   }
 
   isCurrentConnectionAttempt(entry, attemptId) {
@@ -1331,10 +1582,9 @@ class EpicsRuntimeMonitorController {
   }
 
   getContextTooltip() {
-    const configuration = vscode.workspace.getConfiguration("epicsWorkbench.runtime");
     const lines = [
       `Status: ${this.contextStatus}`,
-      `Default protocol: ${configuration.get("defaultProtocol", DEFAULT_PROTOCOL)}`,
+      `Default protocol: ${this.getDefaultProtocol()}`,
       `Channel timeout: ${String(this.getChannelCreationTimeoutSeconds() ?? "none")}s`,
       `Monitor timeout: ${String(this.getMonitorSubscribeTimeoutSeconds() ?? "none")}s`,
     ];
@@ -1457,6 +1707,16 @@ class EpicsRuntimeMonitorController {
   }
 
   getDefaultProtocol() {
+    const runtimeWorkspaceFolder = this.getRuntimeWorkspaceFolder();
+    if (runtimeWorkspaceFolder) {
+      const loadedProjectConfig = loadProjectRuntimeConfiguration(
+        getProjectRuntimeConfigPath(runtimeWorkspaceFolder),
+      );
+      if (loadedProjectConfig.exists) {
+        return normalizeRuntimeProtocol(loadedProjectConfig.config.protocol);
+      }
+    }
+
     return normalizeRuntimeProtocol(
       vscode.workspace
         .getConfiguration("epicsWorkbench.runtime")
@@ -1481,22 +1741,88 @@ class EpicsRuntimeMonitorController {
       .get("logLevel", DEFAULT_LOG_LEVEL);
   }
 
+  getWorkspaceFolderForDocument(document) {
+    if (!document?.uri) {
+      return undefined;
+    }
+
+    return vscode.workspace.getWorkspaceFolder(document.uri);
+  }
+
+  getDefaultWorkspaceFolder() {
+    const [workspaceFolder] = vscode.workspace.workspaceFolders || [];
+    return workspaceFolder;
+  }
+
+  getRuntimeWorkspaceFolder() {
+    if (this.runtimeWorkspaceFolder) {
+      return this.runtimeWorkspaceFolder;
+    }
+
+    const activeDocument = vscode.window.activeTextEditor?.document;
+    return (
+      this.getWorkspaceFolderForDocument(activeDocument) ||
+      this.getDefaultWorkspaceFolder()
+    );
+  }
+
+  async resolveInteractiveWorkspaceFolder() {
+    const activeDocument = vscode.window.activeTextEditor?.document;
+    const activeWorkspaceFolder = this.getWorkspaceFolderForDocument(activeDocument);
+    if (activeWorkspaceFolder) {
+      return activeWorkspaceFolder;
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders || [];
+    if (workspaceFolders.length === 1) {
+      return workspaceFolders[0];
+    }
+    if (workspaceFolders.length === 0) {
+      return undefined;
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      workspaceFolders.map((candidate) => ({
+        label: candidate.name,
+        description: candidate.uri.fsPath,
+        workspaceFolder: candidate,
+      })),
+      {
+        placeHolder: "Select the workspace folder to store EPICS runtime configuration",
+      },
+    );
+    return selected?.workspaceFolder;
+  }
+
   getRuntimeEnvironment() {
     const raw = vscode.workspace
       .getConfiguration("epicsWorkbench.runtime")
       .get("environment", {});
     const environment = {};
 
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return environment;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const [key, value] of Object.entries(raw)) {
+        if (!key) {
+          continue;
+        }
+
+        environment[key] = String(value);
+      }
     }
 
-    for (const [key, value] of Object.entries(raw)) {
-      if (!key) {
-        continue;
+    const runtimeWorkspaceFolder = this.getRuntimeWorkspaceFolder();
+    if (runtimeWorkspaceFolder) {
+      const loadedProjectConfig = loadProjectRuntimeConfiguration(
+        getProjectRuntimeConfigPath(runtimeWorkspaceFolder),
+      );
+      if (loadedProjectConfig.exists) {
+        Object.assign(
+          environment,
+          createRuntimeEnvironmentFromProjectConfiguration(
+            loadedProjectConfig.config,
+          ),
+        );
       }
-
-      environment[key] = String(value);
     }
 
     return environment;
@@ -1506,6 +1832,241 @@ class EpicsRuntimeMonitorController {
     return {
       extractDatabaseTocMacroAssignments: this.extractDatabaseTocMacroAssignments,
       extractRecordDeclarations: this.extractRecordDeclarations,
+    };
+  }
+
+  resolveRuntimePutEntry(target) {
+    if (target?.type === "monitor" && this.monitorEntries.includes(target)) {
+      return target;
+    }
+
+    if (target?.key) {
+      return this.monitorEntries.find((entry) => entry.key === target.key);
+    }
+
+    const editor = vscode.window.activeTextEditor;
+    const selection = editor?.selection;
+    if (!editor || !selection?.isEmpty) {
+      return undefined;
+    }
+
+    return this.findRuntimeEntryAtDocumentPosition(
+      editor.document,
+      selection.active,
+      false,
+    );
+  }
+
+  findRuntimeEntryAtDocumentPosition(
+    document,
+    position,
+    requireValueSurfaceHit,
+  ) {
+    if (!document?.uri || !position) {
+      return undefined;
+    }
+
+    if (isStrictMonitorDocument(document)) {
+      const analysis = analyzeStrictMonitorDocument(
+        document,
+        this.getDefaultProtocol(),
+      );
+      const reference = analysis.lineReferences[position.line];
+      if (!reference) {
+        return undefined;
+      }
+
+      const isWithinRecordName =
+        position.character >= reference.startCharacter &&
+        position.character <= reference.endCharacter;
+      const isWithinInlineValue = position.character >= reference.endCharacter;
+      if (
+        (requireValueSurfaceHit && !isWithinInlineValue) ||
+        (!requireValueSurfaceHit && !isWithinRecordName && !isWithinInlineValue)
+      ) {
+        return undefined;
+      }
+
+      return this.findDocumentMonitorEntry(document.uri.toString(), reference);
+    }
+
+    if (!isDatabaseRuntimeDocument(document)) {
+      return undefined;
+    }
+
+    const tocEntries = this.extractDatabaseTocEntries?.(document.getText()) || [];
+    if (tocEntries.length === 0) {
+      return undefined;
+    }
+
+    const offset = document.offsetAt(position);
+    const macroDefinitions = createDatabaseMonitorMacroDefinitions(
+      this.extractDatabaseTocMacroAssignments?.(document.getText()) || new Map(),
+    );
+    const macroExpansionCache = new Map();
+    for (const tocEntry of tocEntries) {
+      const isWithinValueCell = isWithinDatabaseTocValueHitArea(tocEntry, offset);
+      const isWithinRow =
+        typeof tocEntry.linkStart === "number" &&
+        typeof tocEntry.linkEnd === "number" &&
+        offset >= tocEntry.linkStart &&
+        offset <= tocEntry.linkEnd;
+      if (
+        (requireValueSurfaceHit && !isWithinValueCell) ||
+        (!requireValueSurfaceHit && !isWithinValueCell && !isWithinRow)
+      ) {
+        continue;
+      }
+
+      const entry = this.findDatabaseTocMonitorEntry(
+        document.uri.toString(),
+        tocEntry,
+        macroDefinitions,
+        macroExpansionCache,
+      );
+      if (entry) {
+        return entry;
+      }
+    }
+
+    return undefined;
+  }
+
+  canPutRuntimeValue(entry) {
+    return this.getRuntimePutSupport(entry).canPut;
+  }
+
+  getRuntimePutSupport(entry) {
+    if (!entry?.channel) {
+      return {
+        canPut: false,
+        reason: "This EPICS channel is not connected.",
+      };
+    }
+
+    if (entry.status !== "subscribed") {
+      return {
+        canPut: false,
+        reason: `${entry.pvName} is not currently subscribed.`,
+      };
+    }
+
+    if (entry.protocol === "pva") {
+      const pvaData = entry.monitor?.getPvaData?.();
+      const currentValue = resolvePvaRuntimeValue(pvaData, entry.pvaEnumChoices);
+      if (currentValue === undefined) {
+        return {
+          canPut: false,
+          reason: hasPvaRuntimeDataWithoutValue(pvaData)
+            ? `${entry.pvName} has data, but no value field.`
+            : `No runtime value is available for ${entry.pvName}.`,
+        };
+      }
+
+      if (Array.isArray(currentValue)) {
+        return {
+          canPut: false,
+          reason: "Array values cannot be changed from inline runtime value editing.",
+        };
+      }
+
+      if (isPvaEnumLikeValue(currentValue)) {
+        return {
+          canPut: true,
+          valueKind: "pva-enum",
+          typeLabel: "PVA enum",
+          initialValue: String(getPvaEnumIndex(currentValue)),
+          enumChoices: getPvaEnumChoices(currentValue),
+          putPvRequest: "value.index",
+        };
+      }
+
+      if (typeof currentValue === "string") {
+        return {
+          canPut: true,
+          valueKind: "string",
+          typeLabel: "PVA string",
+          initialValue: currentValue,
+          putPvRequest: "value",
+        };
+      }
+
+      if (typeof currentValue === "number" && Number.isFinite(currentValue)) {
+        return {
+          canPut: true,
+          valueKind: "number",
+          typeLabel: "PVA number",
+          initialValue: String(currentValue),
+          putPvRequest: "value",
+        };
+      }
+
+      return {
+        canPut: false,
+        reason: `${entry.pvName} uses an unsupported PVA value type for inline put.`,
+      };
+    }
+
+    const runtimeLibrary = this.requireRuntimeLibrary();
+    const accessRight = entry.channel.getAccessRight?.();
+    if (
+      accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.NOT_AVAILABLE ||
+      accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.NO_ACCESS ||
+      accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.READ_ONLY
+    ) {
+      return {
+        canPut: false,
+        reason: `${entry.pvName} is not writable.`,
+      };
+    }
+
+    const valueCount = Number(entry.channel.getValueCount?.() || 0);
+    if (valueCount > 1) {
+      return {
+        canPut: false,
+        reason: "Array values cannot be changed from inline runtime value editing.",
+      };
+    }
+
+    const currentValue = getMonitorHoverValue(entry);
+    if (currentValue === undefined) {
+      return {
+        canPut: false,
+        reason: `No runtime value is available for ${entry.pvName}.`,
+      };
+    }
+
+    if (Array.isArray(currentValue)) {
+      return {
+        canPut: false,
+        reason: "Array values cannot be changed from inline runtime value editing.",
+      };
+    }
+
+    if (isPvaEnumLikeValue(currentValue)) {
+      return {
+        canPut: true,
+        valueKind: "ca-enum",
+        typeLabel: "CA enum",
+        initialValue: String(getPvaEnumIndex(currentValue)),
+        enumChoices: getPvaEnumChoices(currentValue),
+      };
+    }
+
+    const dbrType = Number(entry.channel.getDbrType?.());
+    const dbrTypeKind = getRuntimePutValueKind(dbrType, runtimeLibrary);
+    if (!dbrTypeKind) {
+      return {
+        canPut: false,
+        reason: `${entry.pvName} uses an unsupported DBR type for inline put.`,
+      };
+    }
+
+    return {
+      canPut: true,
+      valueKind: dbrTypeKind,
+      typeLabel: String(entry.channel.getDbrTypeStr?.() || "value"),
+      initialValue: currentValue === undefined ? "" : String(currentValue),
     };
   }
 }
@@ -1529,6 +2090,28 @@ function createMonitorKey({ pvName, protocol, pvRequest, sourceUri }) {
   return `${sourceUri || "manual"}:${protocol}:${pvName}:${pvRequest || ""}`;
 }
 
+function buildPutRuntimeValueCommandUri(entry) {
+  const commandArguments = encodeURIComponent(
+    JSON.stringify([
+      {
+        key: entry.key,
+      },
+    ]),
+  );
+  return `command:${PUT_RUNTIME_VALUE_COMMAND}?${commandArguments}`;
+}
+
+function isWithinDatabaseTocValueHitArea(tocEntry, offset) {
+  if (
+    typeof tocEntry?.valueStart !== "number" ||
+    typeof tocEntry?.hoverStart !== "number"
+  ) {
+    return false;
+  }
+
+  return offset >= tocEntry.valueStart && offset < tocEntry.hoverStart;
+}
+
 function getSuggestedPvName() {
   const editor = vscode.window.activeTextEditor;
   const selection = editor?.selection;
@@ -1544,15 +2127,10 @@ function formatRuntimeValue(value) {
     return "";
   }
 
-  if (typeof value === "string") {
-    return truncateText(value, RUNTIME_VALUE_DISPLAY_MAX_LENGTH);
-  }
-
-  try {
-    return truncateText(JSON.stringify(value), RUNTIME_VALUE_DISPLAY_MAX_LENGTH);
-  } catch (error) {
-    return truncateText(String(value), RUNTIME_VALUE_DISPLAY_MAX_LENGTH);
-  }
+  return truncateText(
+    formatRuntimeDisplayValue(value),
+    RUNTIME_VALUE_DISPLAY_MAX_LENGTH,
+  );
 }
 
 function getMonitorHoverValue(entry) {
@@ -1562,10 +2140,16 @@ function getMonitorHoverValue(entry) {
 
   try {
     if (entry.protocol === "pva") {
-      return entry.monitor?.getPvaData();
+      return getPvaRuntimeDisplayValue(
+        entry.monitor?.getPvaData(),
+        entry.pvaEnumChoices,
+      );
     }
 
-    return entry.monitor?.getChannel().getDbrData()?.value;
+    return getCaRuntimeDisplayValue(
+      entry,
+      entry.monitor?.getChannel().getDbrData?.(),
+    );
   } catch (error) {
     return entry.valueText || undefined;
   }
@@ -1644,17 +2228,85 @@ function formatDatabaseTocRuntimeValue(value) {
     return '""';
   }
 
-  if (typeof value === "string") {
-    return truncateText(value, DATABASE_TOC_VALUE_DISPLAY_MAX_LENGTH);
+  return truncateText(
+    formatRuntimeDisplayValue(value),
+    DATABASE_TOC_VALUE_DISPLAY_MAX_LENGTH,
+  );
+}
+
+function getCaEnumMonitorOptions(channel) {
+  if (!isCaEnumChannel(channel)) {
+    return undefined;
   }
 
-  try {
-    return truncateText(
-      JSON.stringify(value),
-      DATABASE_TOC_VALUE_DISPLAY_MAX_LENGTH,
-    );
-  } catch (error) {
-    return truncateText(String(value), DATABASE_TOC_VALUE_DISPLAY_MAX_LENGTH);
+  const dbrType = Number(channel?.getDbrType_GR?.());
+  const valueCount = Number(channel?.getValueCount?.() || 0);
+  if (!Number.isFinite(dbrType) || dbrType < 0) {
+    return undefined;
+  }
+
+  return {
+    dbrType,
+    valueCount: valueCount > 0 ? valueCount : 1,
+  };
+}
+
+function isCaEnumChannel(channel) {
+  return String(channel?.getDbrTypeStr?.() || "") === "DBR_ENUM";
+}
+
+function getCaRuntimeDisplayValue(entry, dbrData) {
+  return resolveCaRuntimeValue(entry, dbrData);
+}
+
+function resolveCaRuntimeValue(entry, dbrData) {
+  const value = dbrData?.value;
+  if (!isCaEnumChannel(entry?.channel)) {
+    return value;
+  }
+
+  if (Array.isArray(value) || typeof value !== "number" || !Number.isFinite(value)) {
+    return value;
+  }
+
+  const choices = extractCaEnumChoices(dbrData, entry?.caEnumChoices);
+  if (choices.length === 0) {
+    return value;
+  }
+
+  return {
+    index: value,
+    choices,
+  };
+}
+
+function extractCaEnumChoices(dbrData, fallbackChoices) {
+  const rawChoices = Array.isArray(dbrData?.strings)
+    ? dbrData.strings.map((choice) => String(choice ?? ""))
+    : undefined;
+  const rawCount = Number(dbrData?.number_of_string_used);
+  const validCount = Number.isFinite(rawCount)
+    ? Math.max(0, Math.min(rawChoices?.length || 0, rawCount))
+    : 0;
+  if (rawChoices && validCount > 0) {
+    return rawChoices.slice(0, validCount);
+  }
+
+  if (Array.isArray(fallbackChoices)) {
+    return fallbackChoices.map((choice) => String(choice ?? ""));
+  }
+
+  return [];
+}
+
+function updateCaEnumChoicesCache(entry, dbrData) {
+  if (!entry) {
+    return;
+  }
+
+  const choices = extractCaEnumChoices(dbrData);
+  if (choices.length > 0) {
+    entry.caEnumChoices = choices;
   }
 }
 
@@ -1723,39 +2375,426 @@ function getMonitorIconName(status) {
 }
 
 function isRuntimeDocument(document) {
-  if (!document?.uri || document.uri.scheme !== "file") {
+  if (!document?.uri) {
+    return false;
+  }
+
+  if (isDatabaseRuntimeDocument(document) || isStrictMonitorDocument(document)) {
+    return true;
+  }
+
+  if (document.uri.scheme !== "file") {
     return false;
   }
 
   const extension = path.extname(document.uri.fsPath).toLowerCase();
   return (
-    isDatabaseRuntimeDocument(document) ||
-    document.languageId === "monitor" ||
     document.languageId === "plaintext" ||
     LINE_RUNTIME_EXTENSIONS.has(extension)
   );
 }
 
 function isStrictMonitorDocument(document) {
-  if (!document?.uri || document.uri.scheme !== "file") {
+  if (!document?.uri) {
     return false;
   }
 
+  if (document.languageId === "monitor") {
+    return true;
+  }
+
   return (
-    document.languageId === "monitor" ||
+    document.uri.scheme === "file" &&
     path.extname(document.uri.fsPath).toLowerCase() === ".monitor"
   );
 }
 
 function isDatabaseRuntimeDocument(document) {
-  if (!document?.uri || document.uri.scheme !== "file") {
+  if (!document?.uri) {
     return false;
   }
 
+  if (document.languageId === "database") {
+    return true;
+  }
+
   return (
-    document.languageId === "database" ||
+    document.uri.scheme === "file" &&
     DATABASE_RUNTIME_EXTENSIONS.has(path.extname(document.uri.fsPath).toLowerCase())
   );
+}
+
+function getRuntimeDocumentLabel(document) {
+  if (!document) {
+    return "Untitled";
+  }
+
+  const rawPath = document.fileName || document.uri?.fsPath || document.uri?.path || "";
+  const baseName = path.basename(rawPath);
+  if (baseName) {
+    return baseName;
+  }
+
+  if (document.isUntitled) {
+    return "Untitled";
+  }
+
+  return document.uri?.toString() || "Untitled";
+}
+
+function getProjectRuntimeConfigPath(workspaceFolder) {
+  return path.join(workspaceFolder.uri.fsPath, PROJECT_RUNTIME_CONFIG_FILE_NAME);
+}
+
+function getDefaultProjectRuntimeConfiguration() {
+  return {
+    protocol: DEFAULT_PROTOCOL,
+    EPICS_CA_ADDR_LIST: [],
+    EPICS_CA_AUTO_ADDR_LIST: "Yes",
+  };
+}
+
+function normalizeProjectRuntimeConfiguration(rawConfig) {
+  const defaults = getDefaultProjectRuntimeConfiguration();
+  const normalized = {
+    protocol: defaults.protocol,
+    EPICS_CA_ADDR_LIST: [],
+    EPICS_CA_AUTO_ADDR_LIST: defaults.EPICS_CA_AUTO_ADDR_LIST,
+  };
+  const rawProtocol = rawConfig?.protocol ?? rawConfig?.defaultProtocol;
+  normalized.protocol = PROJECT_RUNTIME_CONFIGURATION_PROTOCOL_VALUES.includes(
+    normalizeRuntimeProtocol(rawProtocol),
+  )
+    ? normalizeRuntimeProtocol(rawProtocol)
+    : defaults.protocol;
+  const rawAddressList = rawConfig?.EPICS_CA_ADDR_LIST;
+  const addressValues = Array.isArray(rawAddressList)
+    ? rawAddressList
+    : typeof rawAddressList === "string"
+      ? rawAddressList.split(/\r?\n|,/)
+      : [];
+  normalized.EPICS_CA_ADDR_LIST = addressValues
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+
+  const rawAutoAddrList = String(rawConfig?.EPICS_CA_AUTO_ADDR_LIST || "").trim();
+  normalized.EPICS_CA_AUTO_ADDR_LIST =
+    PROJECT_RUNTIME_CONFIGURATION_AUTO_ADDR_LIST_VALUES.includes(rawAutoAddrList)
+      ? rawAutoAddrList
+      : defaults.EPICS_CA_AUTO_ADDR_LIST;
+
+  return normalized;
+}
+
+function loadProjectRuntimeConfiguration(configPath) {
+  const defaultConfig = getDefaultProjectRuntimeConfiguration();
+  if (!configPath || !fs.existsSync(configPath)) {
+    return {
+      exists: false,
+      config: defaultConfig,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    return {
+      exists: true,
+      config: normalizeProjectRuntimeConfiguration(parsed),
+    };
+  } catch (error) {
+    return {
+      exists: false,
+      config: defaultConfig,
+      error: getErrorMessage(error),
+    };
+  }
+}
+
+function createRuntimeEnvironmentFromProjectConfiguration(config) {
+  const normalized = normalizeProjectRuntimeConfiguration(config);
+  return {
+    EPICS_CA_ADDR_LIST: normalized.EPICS_CA_ADDR_LIST.join(" "),
+    EPICS_CA_AUTO_ADDR_LIST: normalized.EPICS_CA_AUTO_ADDR_LIST,
+  };
+}
+
+function serializeProjectRuntimeConfiguration(config) {
+  return `${JSON.stringify(normalizeProjectRuntimeConfiguration(config), null, 2)}\n`;
+}
+
+function buildProjectRuntimeConfigurationWebviewHtml(
+  webview,
+  workspaceFolder,
+  configPath,
+  initialConfig,
+) {
+  const nonce = createNonce();
+  const initialState = JSON.stringify(
+    normalizeProjectRuntimeConfiguration(initialConfig),
+  ).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS Runtime Config</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+
+      body {
+        font-family: var(--vscode-font-family);
+        color: var(--vscode-foreground);
+        background: var(--vscode-editor-background);
+        margin: 0;
+        padding: 24px;
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        font-size: 1.4rem;
+        margin: 0 0 8px;
+      }
+
+      p,
+      label,
+      button,
+      input,
+      select,
+      code {
+        font-size: 0.95rem;
+      }
+
+      .meta {
+        color: var(--vscode-descriptionForeground);
+        margin-bottom: 24px;
+      }
+
+      .section {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 10px;
+        padding: 18px;
+        margin-bottom: 18px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-panel-border));
+      }
+
+      .section h2 {
+        margin: 0 0 10px;
+        font-size: 1.05rem;
+      }
+
+      .section p {
+        margin: 0 0 14px;
+        color: var(--vscode-descriptionForeground);
+      }
+
+      .address-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .address-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+      }
+
+      input,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--vscode-input-border);
+        color: var(--vscode-input-foreground);
+        background: var(--vscode-input-background);
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 16px;
+      }
+
+      button {
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 6px;
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+
+      button.primary {
+        color: var(--vscode-button-foreground);
+        background: var(--vscode-button-background);
+      }
+
+      button.secondary {
+        color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+        background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+      }
+
+      .status {
+        min-height: 1.4em;
+        color: var(--vscode-descriptionForeground);
+      }
+
+      .status.success {
+        color: var(--vscode-testing-iconPassed);
+      }
+
+      .status.error {
+        color: var(--vscode-errorForeground);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>EPICS Runtime Configuration</h1>
+      <div class="meta">
+        <div>Workspace: <code>${escapeHtml(workspaceFolder.name)}</code></div>
+        <div>Config file: <code>${escapeHtml(configPath)}</code></div>
+      </div>
+
+      <section class="section">
+        <h2>Protocol</h2>
+        <p>Select the default EPICS protocol for runtime monitoring in this project.</p>
+        <label for="protocol">Value</label>
+        <select id="protocol">
+          <option value="ca">Channel Access</option>
+          <option value="pva">PV Access</option>
+        </select>
+      </section>
+
+      <section class="section">
+        <h2>EPICS_CA_ADDR_LIST</h2>
+        <p>Array of Channel Access search addresses. It is saved as a JSON array and passed to epics-tca as a space-separated environment variable.</p>
+        <div id="address-list" class="address-list"></div>
+        <div class="actions">
+          <button id="add-address" type="button" class="secondary">Add Address</button>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>EPICS_CA_AUTO_ADDR_LIST</h2>
+        <p>Whether EPICS Channel Access should automatically add local broadcast addresses.</p>
+        <label for="auto-addr-list">Value</label>
+        <select id="auto-addr-list">
+          <option value="Yes">Yes</option>
+          <option value="No">No</option>
+        </select>
+      </section>
+
+      <div class="actions">
+        <button id="save-config" type="button" class="primary">Save Project Config</button>
+        <div id="status" class="status"></div>
+      </div>
+    </main>
+
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const initialConfig = ${initialState};
+      const protocolElement = document.getElementById("protocol");
+      const addressListElement = document.getElementById("address-list");
+      const autoAddrListElement = document.getElementById("auto-addr-list");
+      const statusElement = document.getElementById("status");
+
+      function createAddressRow(value) {
+        const rowElement = document.createElement("div");
+        rowElement.className = "address-row";
+
+        const inputElement = document.createElement("input");
+        inputElement.type = "text";
+        inputElement.className = "address-input";
+        inputElement.placeholder = "192.168.1.10";
+        inputElement.value = value || "";
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "secondary";
+        removeButton.textContent = "Remove";
+        removeButton.addEventListener("click", () => {
+          rowElement.remove();
+          ensureAtLeastOneAddressRow();
+        });
+
+        rowElement.appendChild(inputElement);
+        rowElement.appendChild(removeButton);
+        addressListElement.appendChild(rowElement);
+      }
+
+      function ensureAtLeastOneAddressRow() {
+        if (addressListElement.children.length === 0) {
+          createAddressRow("");
+        }
+      }
+
+      function getAddressValues() {
+        return Array.from(document.querySelectorAll(".address-input"))
+          .map((inputElement) => inputElement.value.trim())
+          .filter(Boolean);
+      }
+
+      function setStatus(message, kind) {
+        statusElement.textContent = message || "";
+        statusElement.className = kind ? "status " + kind : "status";
+      }
+
+      document.getElementById("add-address").addEventListener("click", () => {
+        createAddressRow("");
+      });
+      document.getElementById("save-config").addEventListener("click", () => {
+        setStatus("Saving...", "");
+        vscode.postMessage({
+          type: "saveProjectRuntimeConfiguration",
+          config: {
+            protocol: protocolElement.value === "pva" ? "pva" : "ca",
+            EPICS_CA_ADDR_LIST: getAddressValues(),
+            EPICS_CA_AUTO_ADDR_LIST: autoAddrListElement.value === "No" ? "No" : "Yes",
+          },
+        });
+      });
+
+      window.addEventListener("message", (event) => {
+        const message = event.data;
+        if (message?.type !== "saveProjectRuntimeConfigurationResult") {
+          return;
+        }
+
+        setStatus(message.message, message.success ? "success" : "error");
+      });
+
+      for (const addressValue of initialConfig.EPICS_CA_ADDR_LIST || []) {
+        createAddressRow(addressValue);
+      }
+      ensureAtLeastOneAddressRow();
+      protocolElement.value = initialConfig.protocol === "pva" ? "pva" : "ca";
+      autoAddrListElement.value =
+        initialConfig.EPICS_CA_AUTO_ADDR_LIST === "No" ? "No" : "Yes";
+    </script>
+  </body>
+</html>`;
+}
+
+function createNonce() {
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;");
 }
 
 function analyzeRuntimeDocument(document, defaultProtocol, databaseHelpers = {}) {
@@ -1771,6 +2810,7 @@ function analyzeRuntimeDocument(document, defaultProtocol, databaseHelpers = {})
     return {
       definitions: extractDatabaseMonitorDefinitions(
         document.getText(),
+        defaultProtocol,
         databaseHelpers,
       ),
       diagnostics: [],
@@ -1793,7 +2833,7 @@ function analyzeStrictMonitorDocument(document, defaultProtocol) {
   return analyzeStrictMonitorText(document?.getText(), defaultProtocol);
 }
 
-function extractDatabaseMonitorDefinitions(text, databaseHelpers = {}) {
+function extractDatabaseMonitorDefinitions(text, defaultProtocol, databaseHelpers = {}) {
   const declarations =
     typeof databaseHelpers.extractRecordDeclarations === "function"
       ? databaseHelpers.extractRecordDeclarations(text)
@@ -1806,6 +2846,7 @@ function extractDatabaseMonitorDefinitions(text, databaseHelpers = {}) {
   const definitions = [];
   const seen = new Set();
   const macroExpansionCache = new Map();
+  const protocol = normalizeRuntimeProtocol(defaultProtocol);
 
   for (const declaration of declarations) {
     const pvName = normalizeDatabaseMonitorPvName(
@@ -1824,7 +2865,7 @@ function extractDatabaseMonitorDefinitions(text, databaseHelpers = {}) {
     seen.add(pvName);
     definitions.push({
       pvName,
-      protocol: "ca",
+      protocol,
       pvRequest: "",
       tocRecordName: declaration.name,
       recordType: declaration.recordType,
@@ -2272,7 +3313,351 @@ function createMonitorDiagnostic(diagnostic) {
 }
 
 function formatRuntimeHoverValue(value, maxLength = RUNTIME_HOVER_VALUE_MAX_LENGTH) {
-  return truncateText(String(value ?? ""), maxLength);
+  return truncateText(formatRuntimeDisplayValue(value), maxLength);
+}
+
+function extractPvaRuntimeValue(pvaData) {
+  if (pvaData === undefined || pvaData === null) {
+    return undefined;
+  }
+
+  if (typeof pvaData !== "object" || Array.isArray(pvaData)) {
+    return pvaData;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(pvaData, "value")) {
+    return pvaData.value;
+  }
+
+  return undefined;
+}
+
+function hasPvaRuntimeDataWithoutValue(pvaData) {
+  return (
+    Boolean(pvaData) &&
+    typeof pvaData === "object" &&
+    !Array.isArray(pvaData) &&
+    !Object.prototype.hasOwnProperty.call(pvaData, "value") &&
+    Object.keys(pvaData).length > 0
+  );
+}
+
+function getPvaRuntimeDisplayValue(pvaData, cachedEnumChoices) {
+  const value = resolvePvaRuntimeValue(pvaData, cachedEnumChoices);
+  if (value !== undefined) {
+    return value;
+  }
+
+  return hasPvaRuntimeDataWithoutValue(pvaData)
+    ? PVA_HAS_DATA_WITHOUT_VALUE_TEXT
+    : undefined;
+}
+
+function resolvePvaRuntimeValue(pvaData, cachedEnumChoices) {
+  const value = extractPvaRuntimeValue(pvaData);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isPvaEnumIndexValue(value)) {
+    return value;
+  }
+
+  return {
+    index: getPvaEnumIndex(value),
+    choices: getPvaEnumChoices(value, cachedEnumChoices),
+  };
+}
+
+function isPvaEnumIndexValue(value) {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Number.isInteger(Number(value.index))
+  );
+}
+
+function isPvaEnumLikeValue(value) {
+  return isPvaEnumIndexValue(value) && Array.isArray(value.choices);
+}
+
+function getPvaEnumIndex(value) {
+  return Number(value?.index);
+}
+
+function getPvaEnumChoices(value, fallbackChoices) {
+  if (Array.isArray(value?.choices)) {
+    return value.choices.map((choice) => String(choice ?? ""));
+  }
+
+  if (Array.isArray(fallbackChoices)) {
+    return fallbackChoices.map((choice) => String(choice ?? ""));
+  }
+
+  return [];
+}
+
+function formatPvaEnumLikeValue(value) {
+  const index = getPvaEnumIndex(value);
+  const choices = getPvaEnumChoices(value);
+  const choiceLabel = choices[index];
+  if (choiceLabel === undefined) {
+    return `[${index}] Illegal_Value`;
+  }
+
+  if (choiceLabel === "") {
+    return `[${index}] ""`;
+  }
+
+  return `[${index}] ${choiceLabel}`;
+}
+
+function updatePvaEnumChoicesCache(entry, pvaData) {
+  if (!entry) {
+    return;
+  }
+
+  const value = extractPvaRuntimeValue(pvaData);
+  if (isPvaEnumIndexValue(value) && Array.isArray(value?.choices)) {
+    entry.pvaEnumChoices = getPvaEnumChoices(value);
+  }
+}
+
+function formatRuntimeDisplayValue(value) {
+  if (value === undefined) {
+    return "";
+  }
+
+  if (isPvaEnumLikeValue(value)) {
+    return formatPvaEnumLikeValue(value);
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    return String(value);
+  }
+}
+
+function getRuntimePutValueKind(dbrType, runtimeLibrary) {
+  if (dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_STRING) {
+    return "string";
+  }
+
+  if (
+    dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_INT ||
+    dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_FLOAT ||
+    dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_ENUM ||
+    dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_CHAR ||
+    dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_LONG ||
+    dbrType === runtimeLibrary.Channel_DBR_TYPES.DBR_DOUBLE
+  ) {
+    return "number";
+  }
+
+  return undefined;
+}
+
+function validateRuntimePutInput(value, putSupport) {
+  return parseRuntimePutInput(value, putSupport).error;
+}
+
+function parseRuntimePutInput(value, putSupport) {
+  const valueKind = putSupport?.valueKind || putSupport;
+  if (valueKind === "string") {
+    return {
+      value: String(value ?? ""),
+    };
+  }
+
+  if (valueKind === "pva-enum" || valueKind === "ca-enum") {
+    return parsePvaEnumRuntimePutInput(value, putSupport?.enumChoices || []);
+  }
+
+  const trimmedValue = String(value ?? "").trim();
+  if (!trimmedValue) {
+    return {
+      error: "A numeric value is required.",
+    };
+  }
+
+  const parsedNumber = Number(trimmedValue);
+  if (!Number.isFinite(parsedNumber)) {
+    return {
+      error: `Invalid numeric value: ${value}`,
+    };
+  }
+
+  return {
+    value: parsedNumber,
+  };
+}
+
+function parsePvaEnumRuntimePutInput(value, enumChoices) {
+  const trimmedValue = String(value ?? "").trim();
+  if (!trimmedValue) {
+    return {
+      error: "An enum index or choice name is required.",
+    };
+  }
+
+  const parsedNumber = Number(trimmedValue);
+  if (Number.isFinite(parsedNumber)) {
+    if (!Number.isInteger(parsedNumber)) {
+      return {
+        error: "Enter a whole-number enum index.",
+      };
+    }
+
+    return {
+      value: parsedNumber,
+    };
+  }
+
+  const normalizedChoice = stripOptionalWrappingQuotes(trimmedValue);
+  const choiceIndex = enumChoices.findIndex(
+    (choice) => choice === normalizedChoice,
+  );
+  if (choiceIndex >= 0) {
+    return {
+      value: choiceIndex,
+    };
+  }
+
+  return {
+    error: enumChoices.length
+      ? `Enter a valid enum index or one of: ${enumChoices.join(", ")}.`
+      : "Enter a valid enum index.",
+  };
+}
+
+async function showRuntimePutInput(entry, putSupport) {
+  if (putSupport?.valueKind === "pva-enum" || putSupport?.valueKind === "ca-enum") {
+    return showRuntimeEnumPutInput(entry, putSupport);
+  }
+
+  return vscode.window.showInputBox({
+    prompt: `Put ${entry.pvName} (${putSupport.typeLabel})`,
+    value: putSupport.initialValue,
+    ignoreFocusOut: false,
+    validateInput: (rawValue) =>
+      validateRuntimePutInput(rawValue, putSupport),
+  });
+}
+
+function showRuntimeEnumPutInput(entry, putSupport) {
+  return new Promise((resolve) => {
+    const quickPick = vscode.window.createQuickPick();
+    let settled = false;
+    const enumChoices = Array.isArray(putSupport?.enumChoices)
+      ? putSupport.enumChoices
+      : [];
+    const currentIndex = Number(putSupport?.initialValue);
+
+    quickPick.title = `Put ${entry.pvName} (${putSupport.typeLabel})`;
+    quickPick.placeholder =
+      "Select a choice or type an index / choice name and press Enter";
+    quickPick.ignoreFocusOut = false;
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    const items = enumChoices.map((choice, index) => {
+      const choiceLabel = choice === "" ? '""' : choice;
+      return {
+        label: `[${index}] ${choiceLabel}`,
+        description: index === currentIndex ? "Current" : undefined,
+        detail: `Put index ${index}`,
+        inputValue: String(index),
+      };
+    });
+    quickPick.items = items;
+    const currentItem = items.find((item) => item.inputValue === putSupport?.initialValue);
+    if (currentItem) {
+      quickPick.activeItems = [currentItem];
+    }
+
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      quickPick.dispose();
+      resolve(value);
+    };
+
+    quickPick.onDidAccept(() => {
+      const [selectedItem] = quickPick.selectedItems || [];
+      if (selectedItem?.inputValue !== undefined) {
+        finish(selectedItem.inputValue);
+        return;
+      }
+
+      const rawValue = String(quickPick.value || "").trim();
+      finish(rawValue || undefined);
+    });
+    quickPick.onDidHide(() => {
+      finish(undefined);
+    });
+    quickPick.show();
+  });
+}
+
+function stripOptionalWrappingQuotes(value) {
+  const text = String(value ?? "");
+  if (
+    text.length >= 2 &&
+    ((text.startsWith('"') && text.endsWith('"')) ||
+      (text.startsWith("'") && text.endsWith("'")))
+  ) {
+    return text.slice(1, -1);
+  }
+
+  return text;
+}
+
+function isSuccessfulRuntimePutResult(result, runtimeLibrary, protocol = "ca") {
+  if (protocol === "pva") {
+    return (
+      Boolean(result) &&
+      (result.type === runtimeLibrary.PVA_STATUS_TYPE.OK ||
+        result.type === runtimeLibrary.PVA_STATUS_TYPE.OKOK)
+    );
+  }
+
+  return result === runtimeLibrary.ECA_VALUES.ECA_NORMAL;
+}
+
+function getRuntimePutFailureMessage(result, runtimeLibrary, protocol = "ca") {
+  if (result === undefined) {
+    return "The put operation did not complete.";
+  }
+
+  if (protocol === "pva") {
+    const statusType = runtimeLibrary.PVA_STATUS_TYPE?.[result?.type];
+    if (result?.message && statusType) {
+      return `${statusType}: ${result.message}`;
+    }
+    if (result?.message) {
+      return result.message;
+    }
+    if (statusType) {
+      return statusType;
+    }
+
+    return "EPICS PVA put failed.";
+  }
+
+  const ecaName = runtimeLibrary.ECA_VALUES?.[result];
+  if (ecaName) {
+    return `${ecaName} (${result})`;
+  }
+
+  return `EPICS CA put failed with status ${result}.`;
 }
 
 function escapeInlineCode(value) {
