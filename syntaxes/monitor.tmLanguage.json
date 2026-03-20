@@ -1,0 +1,80 @@
+{
+  "$schema": "../schemas/tmlanguage.json",
+  "name": "EPICS monitor",
+  "scopeName": "source.epics.monitor",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#macro-definitions"
+    },
+    {
+      "include": "#record-lines"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.epics.monitor",
+          "begin": "^\\s*#",
+          "end": "$"
+        }
+      ]
+    },
+    "macro-definitions": {
+      "patterns": [
+        {
+          "name": "meta.definition.macro.epics.monitor",
+          "begin": "^\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*)(=)(\\s*)",
+          "beginCaptures": {
+            "1": {
+              "name": "variable.other.assignment.epics.monitor"
+            },
+            "3": {
+              "name": "keyword.operator.assignment.epics.monitor"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#macro-expressions"
+            },
+            {
+              "name": "string.unquoted.macro-value.epics.monitor",
+              "match": "\\S+"
+            }
+          ]
+        }
+      ]
+    },
+    "record-lines": {
+      "patterns": [
+        {
+          "name": "meta.record.epics.monitor",
+          "begin": "^\\s*(?!#)(?![A-Za-z_][A-Za-z0-9_]*\\s*=)(\\S+)",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.name.record.epics.monitor"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#macro-expressions"
+            }
+          ]
+        }
+      ]
+    },
+    "macro-expressions": {
+      "patterns": [
+        {
+          "name": "variable.other.macro.epics.monitor",
+          "match": "\\$\\((?:[^)=\\s]+)(?:=[^)]*)?\\)|\\$\\{[^}\\s]+\\}"
+        }
+      ]
+    }
+  }
+}

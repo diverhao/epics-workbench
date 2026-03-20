@@ -1,5 +1,7 @@
 const DATABASE_TOC_BEGIN_MARKER = "# EPICS TOC BEGIN";
 const DATABASE_TOC_END_MARKER = "# EPICS TOC END";
+const DATABASE_TOC_VALUE_COLUMN_INDEX = 1;
+const DATABASE_TOC_VALUE_COLUMN_WIDTH = 18;
 
 function createDatabaseTocTools({
   openRecordLocationCommand,
@@ -28,18 +30,22 @@ function createDatabaseTocTools({
   function buildDatabaseTocBlock(text, eol) {
     const extraFieldNames = getDatabaseTocExtraFieldNames(text);
     const macroNames = getDatabaseTocMacroNames(text);
+    const macroAssignments = extractDatabaseTocMacroAssignments(text);
     const headerSuffix =
       extraFieldNames.length > 0 ? ` ${extraFieldNames.join(" ")}` : "";
     const lines = [DATABASE_TOC_BEGIN_MARKER];
     if (macroNames.length > 0) {
       lines.push("# Macros:");
       for (const macroName of macroNames) {
-        lines.push(`#  - ${macroName}`);
+        const assignment = macroAssignments.get(macroName);
+        lines.push(
+          `#  - ${macroName}${assignment?.hasAssignment ? ` = ${assignment.value}` : ""}`,
+        );
       }
     }
     lines.push(`# Table of Contents${headerSuffix}`);
     const declarations = extractRecordDeclarations(text);
-    const headerRow = ["Record", "Type", ...extraFieldNames];
+    const headerRow = ["Record", "Value", "Type", ...extraFieldNames];
     const rows = declarations.map((declaration) =>
       buildDatabaseTocRowValues(text, declaration, extraFieldNames),
     );
@@ -60,11 +66,51 @@ function createDatabaseTocTools({
     return extractMacroNames(maskDatabaseComments(text)).sort(compareLabels);
   }
 
+  function extractDatabaseTocMacroAssignments(text) {
+    const range = findDatabaseTocBlockRange(text);
+    if (!range) {
+      return new Map();
+    }
+
+    const assignments = new Map();
+    const tocText = text.slice(range.start, range.end);
+    let inMacroSection = false;
+
+    for (const lineText of tocText.split(/\r?\n/)) {
+      if (/^#\s*Macros:\s*$/.test(lineText)) {
+        inMacroSection = true;
+        continue;
+      }
+
+      if (!inMacroSection) {
+        continue;
+      }
+
+      if (/^#\s*Table of Contents(?:\s+.*)?\s*$/.test(lineText)) {
+        break;
+      }
+
+      const match = lineText.match(
+        /^#\s*-\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?\s*$/,
+      );
+      if (!match) {
+        continue;
+      }
+
+      assignments.set(match[1], {
+        hasAssignment: match[2] !== undefined,
+        value: match[2] || "",
+      });
+    }
+
+    return assignments;
+  }
+
   function getDatabaseTocExtraFieldNames(text) {
     const range = findDatabaseTocBlockRange(text);
     const searchableText = range ? text.slice(range.start, range.end) : text;
     const headerMatch = searchableText.match(
-      /^#\s*Table of Contents(?:\s+(.*?))?\s*$/m,
+      /^#\s*Table of Contents(?:[ \t]+(.*?))?\s*$/m,
     );
     if (!headerMatch || !headerMatch[1]) {
       return [];
@@ -79,10 +125,7 @@ function createDatabaseTocTools({
   }
 
   function buildDatabaseTocRowValues(text, declaration, extraFieldNames) {
-    const row = [declaration.name, declaration.recordType];
-    if (extraFieldNames.length === 0) {
-      return row;
-    }
+    const row = [declaration.name, undefined, declaration.recordType];
 
     const fieldDeclarations = extractFieldDeclarationsInRecord(text, declaration);
     for (const fieldName of extraFieldNames) {
@@ -113,7 +156,11 @@ function createDatabaseTocTools({
   }
 
   function formatDatabaseTocValue(value) {
-    return value === "" ? '""' : String(value || "");
+    if (value === undefined || value === null) {
+      return "";
+    }
+
+    return value === "" ? '""' : String(value);
   }
 
   function getDatabaseTocColumnWidths(rows) {
@@ -127,6 +174,7 @@ function createDatabaseTocTools({
       });
     }
 
+    widths[DATABASE_TOC_VALUE_COLUMN_INDEX] = DATABASE_TOC_VALUE_COLUMN_WIDTH;
     return widths;
   }
 
@@ -255,22 +303,25 @@ function createDatabaseTocTools({
     const cellValues = cellEntries.map((cell) => cell.value);
     if (
       cellValues.every((value) => /^:?-{3,}:?$/.test(value)) ||
-      /^record$/i.test(cellValues[0]) ||
-      /^type$/i.test(cellValues[1])
+      /^record$/i.test(cellValues[0])
     ) {
       return undefined;
     }
 
     for (const declaration of declarations) {
-      if (
-        cellValues[0] !== declaration.name ||
-        cellValues[1] !== declaration.recordType
-      ) {
+      if (cellValues[0] !== declaration.name) {
         continue;
       }
 
       const firstCell = cellEntries[0];
-      const typeCell = cellEntries[1];
+      const hasValueColumn =
+        cellEntries.length >= 3 && cellValues[2] === declaration.recordType;
+      const typeCell = hasValueColumn ? cellEntries[2] : cellEntries[1];
+      if (typeCell?.value !== declaration.recordType) {
+        continue;
+      }
+
+      const valueCell = hasValueColumn ? cellEntries[1] : undefined;
       const lastCell = cellEntries[cellEntries.length - 1];
       return {
         recordType: declaration.recordType,
@@ -281,6 +332,8 @@ function createDatabaseTocTools({
         hoverEnd: typeCell.end,
         nameStart: firstCell.start,
         nameEnd: firstCell.end,
+        valueStart: valueCell?.displayStart,
+        valueEnd: valueCell?.displayEnd,
       };
     }
 
@@ -364,16 +417,20 @@ function createDatabaseTocTools({
       const trailingWhitespaceLength = rawCell.match(/\s*$/)[0].length;
       const trimmedStart = cellStart + leadingWhitespaceLength;
       const trimmedEnd = tableOffset + index - trailingWhitespaceLength;
+      const displayStart = cellStart + Math.min(leadingWhitespaceLength, 1);
+      const displayEnd = tableOffset + index - Math.min(trailingWhitespaceLength, 1);
       const value = rawCell.trim();
       cells.push({
         value,
         start: trimmedStart,
         end: Math.max(trimmedStart, trimmedEnd),
+        displayStart,
+        displayEnd: Math.max(displayStart, displayEnd),
       });
       cellStart = tableOffset + index + 1;
     }
 
-    return cells.filter((cell) => cell.value !== "" || cells.length === 1);
+    return cells;
   }
 
   function findRecordDeclarationByTypeAndName(text, recordType, recordName) {
@@ -398,7 +455,9 @@ function createDatabaseTocTools({
   return {
     buildOpenRecordCommandUri,
     extractDatabaseTocEntries,
+    extractDatabaseTocMacroAssignments,
     findRecordDeclarationByTypeAndName,
+    removeDatabaseTocBlock,
     upsertDatabaseTocText,
   };
 }

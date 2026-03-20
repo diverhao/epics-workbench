@@ -58,6 +58,8 @@ const INSERT_DBLOAD_RECORDS_MACRO_TAIL_COMMAND = "vscode-epics.insertDbLoadRecor
 const COLLAPSE_ALL_RECORDS_COMMAND = "vscode-epics.collapseAllRecords";
 const EXPAND_ALL_RECORDS_COMMAND = "vscode-epics.expandAllRecords";
 const GENERATE_DATABASE_TOC_COMMAND = "vscode-epics.generateDatabaseToc";
+const COPY_AS_MONITOR_FILE_COMMAND = "vscode-epics.copyAsMonitorFile";
+const COPY_AS_EXPANDED_DB_COMMAND = "vscode-epics.copyAsExpandedDb";
 const UPDATE_MENU_FIELD_VALUE_COMMAND = "vscode-epics.updateMenuFieldValue";
 const STREAM_PROTOCOL_PATH_VARIABLE = "STREAM_PROTOCOL_PATH";
 const DBD_DEVICE_LINK_TYPES = ["INST_IO"];
@@ -205,7 +207,9 @@ let recordTemplateStaticData = {
 const {
   buildOpenRecordCommandUri,
   extractDatabaseTocEntries,
+  extractDatabaseTocMacroAssignments,
   findRecordDeclarationByTypeAndName,
+  removeDatabaseTocBlock,
   upsertDatabaseTocText,
 } = createDatabaseTocTools({
   openRecordLocationCommand: OPEN_RECORD_LOCATION_COMMAND,
@@ -220,7 +224,11 @@ const {
 });
 
 function activate(context) {
-  registerRuntimeMonitor(context);
+  registerRuntimeMonitor(context, {
+    extractDatabaseTocEntries,
+    extractDatabaseTocMacroAssignments,
+    extractRecordDeclarations,
+  });
   const staticData = loadStaticData(context.extensionPath);
   recordTemplateFields = new Map(staticData.recordTemplateFields || []);
   recordTemplateStaticData = {
@@ -514,6 +522,16 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand(GENERATE_DATABASE_TOC_COMMAND, async () => {
       await generateDatabaseTocInActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COPY_AS_MONITOR_FILE_COMMAND, async () => {
+      await copyDatabaseAsMonitorFileInActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COPY_AS_EXPANDED_DB_COMMAND, async () => {
+      await copySubstitutionsAsExpandedDatabaseInActiveEditor(workspaceIndex);
     }),
   );
   context.subscriptions.push(
@@ -6351,6 +6369,209 @@ async function generateDatabaseTocInActiveEditor() {
   await editor.edit((editBuilder) => {
     editBuilder.replace(fullRange, nextText);
   });
+}
+
+async function copyDatabaseAsMonitorFileInActiveEditor() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isDatabaseDocument(editor.document)) {
+    return;
+  }
+
+  const text = editor.document.getText();
+  const recordNames = extractUniqueRecordNames(text);
+  if (recordNames.length === 0) {
+    vscode.window.showWarningMessage(
+      "No EPICS record names were found in the active database file.",
+    );
+    return;
+  }
+
+  const macroNames = extractRecordNameMacroNames(recordNames);
+  const monitorText = buildMonitorFileText(
+    recordNames,
+    macroNames,
+    getDocumentEol(editor.document),
+  );
+  await vscode.env.clipboard.writeText(monitorText);
+
+  const recordLabel = `${recordNames.length} record${recordNames.length === 1 ? "" : "s"}`;
+  const macroLabel = `${macroNames.length} macro${macroNames.length === 1 ? "" : "s"}`;
+  vscode.window.showInformationMessage(
+    `Copied ${recordLabel} and ${macroLabel} as a .monitor file.`,
+  );
+}
+
+function buildMonitorFileText(recordNames, macroNames, eol = "\n") {
+  const lines = [
+    "# this is a monitor file for EPICS Workbench in VSCode",
+    "# Fill in the macro values below, then open this file and click the EPICS play button in the status bar.",
+    "# Each non-comment line after the macro block monitors one EPICS record or PV.",
+    "",
+  ];
+
+  if (macroNames.length > 0) {
+    for (const macroName of macroNames) {
+      lines.push(`${macroName} = `);
+    }
+    lines.push("");
+  }
+
+  lines.push(...recordNames);
+  return lines.join(eol);
+}
+
+function extractUniqueRecordNames(text) {
+  const names = [];
+  const seen = new Set();
+
+  for (const declaration of extractRecordDeclarations(text)) {
+    if (!declaration.name || seen.has(declaration.name)) {
+      continue;
+    }
+
+    seen.add(declaration.name);
+    names.push(declaration.name);
+  }
+
+  return names;
+}
+
+function extractRecordNameMacroNames(recordNames) {
+  return extractMacroNames(recordNames.join("\n")).sort(compareLabels);
+}
+
+async function copySubstitutionsAsExpandedDatabaseInActiveEditor(workspaceIndex) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isSubstitutionsDocument(editor.document)) {
+    return;
+  }
+
+  const document = editor.document;
+  const snapshot = await workspaceIndex.getSnapshot();
+  const diagnostics = createSubstitutionDiagnostics(document, snapshot);
+  if (diagnostics.length > 0) {
+    vscode.window.showErrorMessage(
+      "Cannot copy as expanded db until the substitutions file errors are fixed.",
+    );
+    return;
+  }
+
+  const expansion = buildExpandedDatabaseFromSubstitutions(snapshot, document);
+  if (expansion.errors.length > 0) {
+    vscode.window.showErrorMessage(
+      `Cannot copy as expanded db: ${expansion.errors[0]}`,
+    );
+    return;
+  }
+
+  if (!expansion.text) {
+    vscode.window.showWarningMessage(
+      "No substitutions file loads were found in the active substitutions file.",
+    );
+    return;
+  }
+
+  await vscode.env.clipboard.writeText(expansion.text);
+  const loadLabel = `${expansion.sectionCount} expansion${expansion.sectionCount === 1 ? "" : "s"}`;
+  vscode.window.showInformationMessage(`Copied ${loadLabel} as expanded db text.`);
+}
+
+function buildExpandedDatabaseFromSubstitutions(snapshot, document) {
+  const eol = getDocumentEol(document);
+  const sections = [];
+  const errors = [];
+  let globalMacros = new Map();
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
+  const releaseVariables = project ? project.releaseVariables : new Map();
+
+  for (const block of extractSubstitutionBlocksWithRanges(document.getText())) {
+    if (block.kind === "global") {
+      globalMacros = mergeMacroMaps(globalMacros, extractNamedAssignments(block.body));
+      continue;
+    }
+
+    if (block.kind !== "file" || !block.templatePath) {
+      continue;
+    }
+
+    const templateAbsolutePath = resolveSubstitutionTemplateAbsolutePathForDocument(
+      snapshot,
+      document,
+      block.templatePath,
+    );
+    if (!templateAbsolutePath) {
+      errors.push(`Cannot resolve substitutions file "${block.templatePath}".`);
+      continue;
+    }
+
+    const templateText = readTextFile(templateAbsolutePath);
+    if (templateText === undefined) {
+      errors.push(`Cannot read substitutions file "${block.templatePath}".`);
+      continue;
+    }
+    const templateTextWithoutToc = removeDatabaseTocBlock(templateText);
+
+    const parsedRows = parseSubstitutionFileBlockRows(block.body);
+    const rows = parsedRows.length > 0
+      ? parsedRows.map((rowMacros) => mergeMacroMaps(globalMacros, rowMacros))
+      : [new Map(globalMacros)];
+
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const rowMacros = rows[rowIndex];
+      const expandedText = normalizeTextEol(
+        expandEpicsValue(
+          templateTextWithoutToc,
+          [rowMacros, releaseVariables, process.env],
+        ),
+        eol,
+      ).trimEnd();
+      if (!expandedText) {
+        continue;
+      }
+
+      sections.push(
+        buildExpandedSubstitutionSection(
+          block.templatePath,
+          rowMacros,
+          expandedText,
+          eol,
+        ),
+      );
+    }
+  }
+
+  return {
+    text: sections.join(`${eol}${eol}`),
+    sectionCount: sections.length,
+    errors,
+  };
+}
+
+function buildExpandedSubstitutionSection(templatePath, rowMacros, expandedText, eol) {
+  const lines = [formatExpandedSubstitutionHeaderLine(templatePath)];
+  lines.push(...formatExpandedSubstitutionMacroLines(rowMacros));
+  lines.push("");
+  lines.push(expandedText);
+  return lines.join(eol);
+}
+
+function formatExpandedSubstitutionHeaderLine(templatePath) {
+  const fileName = path.basename(String(templatePath || "").trim()) || "template";
+  return `# ------------------- ${fileName} -------------------`;
+}
+
+function formatExpandedSubstitutionMacroLines(macros) {
+  if (!(macros instanceof Map) || macros.size === 0) {
+    return [];
+  }
+
+  return [...macros.entries()]
+    .sort(([leftName], [rightName]) => compareLabels(leftName, rightName))
+    .map(([name, value]) => `# ${name} = ${value}`);
+}
+
+function normalizeTextEol(text, eol) {
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\n/g, eol);
 }
 
 function createDatabaseRecordDecorationTypes() {

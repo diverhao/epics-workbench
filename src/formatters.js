@@ -110,6 +110,50 @@ function formatSubstitutionText(text, options) {
   return formattedText;
 }
 
+function formatMonitorText(text) {
+  const normalizedText = String(text || "").replace(/\r\n/g, "\n");
+  const hadTrailingNewline = normalizedText.endsWith("\n");
+  const contentText = hadTrailingNewline
+    ? normalizedText.slice(0, -1)
+    : normalizedText;
+  const lines = contentText ? contentText.split("\n") : [];
+  const formattedLines = [];
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      formattedLines.push("");
+      continue;
+    }
+
+    if (trimmedLine.startsWith("#")) {
+      const commentText = trimmedLine.slice(1).trimStart();
+      formattedLines.push(commentText ? `# ${commentText}` : "#");
+      continue;
+    }
+
+    const macroMatch = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\S+)\s*$/);
+    if (macroMatch) {
+      formattedLines.push(`${macroMatch[1]} = ${macroMatch[2]}`);
+      continue;
+    }
+
+    if (!/\s/.test(trimmedLine) && !trimmedLine.includes("=")) {
+      formattedLines.push(trimmedLine);
+      continue;
+    }
+
+    formattedLines.push(trimmedLine);
+  }
+
+  let formattedText = formattedLines.join("\n");
+  if (hadTrailingNewline) {
+    formattedText += "\n";
+  }
+
+  return formattedText;
+}
+
 function formatAlignedSubstitutionPatternBlock(
   lines,
   startIndex,
@@ -570,6 +614,7 @@ function escapeDoubleQuotedString(value) {
 
 module.exports = {
   formatDatabaseText,
+  formatMonitorText,
   formatSubstitutionText,
   splitSubstitutionCommaSeparatedItems,
 };

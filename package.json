@@ -38,6 +38,16 @@
                     "when": "editorLangId == database",
                     "group": "navigation@22",
                     "command": "vscode-epics.generateDatabaseToc"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@23",
+                    "command": "vscode-epics.copyAsMonitorFile"
+                },
+                {
+                    "when": "editorLangId == substitutions",
+                    "group": "navigation@24",
+                    "command": "vscode-epics.copyAsExpandedDb"
                 }
             ],
             "commandPalette": [
@@ -52,6 +62,14 @@
                 {
                     "when": "editorLangId == database",
                     "command": "vscode-epics.generateDatabaseToc"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "command": "vscode-epics.copyAsMonitorFile"
+                },
+                {
+                    "when": "editorLangId == substitutions",
+                    "command": "vscode-epics.copyAsExpandedDb"
                 }
             ],
             "view/item/context": [
@@ -152,6 +170,17 @@
                 "aliases": [
                     "Database definition"
                 ]
+            },
+            {
+                "id": "monitor",
+                "extensions": [
+                    ".monitor"
+                ],
+                "configuration": "./monitor-language-config.json",
+                "aliases": [
+                    "EPICS monitor",
+                    "monitor"
+                ]
             }
         ],
         "grammars": [
@@ -184,6 +213,11 @@
                 "scopeName": "source.epics.dbd",
                 "path": "./syntaxes/dbd.tmLanguage.json",
                 "language": "database definition"
+            },
+            {
+                "scopeName": "source.epics.monitor",
+                "path": "./syntaxes/monitor.tmLanguage.json",
+                "language": "monitor"
             }
         ],
         "configurationDefaults": {
@@ -195,6 +229,9 @@
                 "editor.semanticHighlighting.enabled": true
             },
             "[database definition]": {
+                "editor.wordBasedSuggestions": "off"
+            },
+            "[monitor]": {
                 "editor.wordBasedSuggestions": "off"
             }
         },
@@ -212,15 +249,15 @@
                 },
                 "epicsWorkbench.runtime.channelCreationTimeoutSeconds": {
                     "type": "number",
-                    "default": 3,
+                    "default": 0,
                     "minimum": 0,
-                    "description": "Timeout in seconds for creating a runtime monitoring channel. Set to 0 to disable the timeout."
+                    "description": "Timeout in seconds for creating a runtime monitoring channel. Set to 0 to keep epics-tca searching and reconnecting until the channel is found."
                 },
                 "epicsWorkbench.runtime.monitorSubscribeTimeoutSeconds": {
                     "type": "number",
-                    "default": 3,
+                    "default": 0,
                     "minimum": 0,
-                    "description": "Timeout in seconds for the initial runtime monitor subscription. Set to 0 to disable the timeout."
+                    "description": "Timeout in seconds for the initial runtime monitor subscription. Set to 0 to keep the subscription open for epics-tca recovery and re-subscribe handling."
                 },
                 "epicsWorkbench.runtime.logLevel": {
                     "type": "string",
@@ -255,8 +292,18 @@
                 "category": "EPICS"
             },
             {
-                "title": "Update Record Table of Contents",
+                "title": "Upate Table of Contents",
                 "command": "vscode-epics.generateDatabaseToc",
+                "category": "EPICS"
+            },
+            {
+                "title": "Copy as Monitor File",
+                "command": "vscode-epics.copyAsMonitorFile",
+                "category": "EPICS"
+            },
+            {
+                "title": "Copy as expanded db",
+                "command": "vscode-epics.copyAsExpandedDb",
                 "category": "EPICS"
             },
             {
@@ -283,6 +330,16 @@
                 "title": "Stop Runtime Context",
                 "command": "vscode-epics.stopRuntimeContext",
                 "category": "EPICS"
+            },
+            {
+                "title": "Start Runtime For Active File",
+                "command": "vscode-epics.startActiveFileRuntimeContext",
+                "category": "EPICS"
+            },
+            {
+                "title": "Stop Runtime For Active File",
+                "command": "vscode-epics.stopActiveFileRuntimeContext",
+                "category": "EPICS"
             }
         ]
     },
@@ -295,17 +352,22 @@
         "onLanguage:startup",
         "onLanguage:substitutions",
         "onLanguage:sequencer",
+        "onLanguage:monitor",
         "onLanguage:database definition",
         "onLanguage:makefile",
         "onView:epicsRuntimeMonitors",
+        "onCommand:vscode-epics.copyAsMonitorFile",
+        "onCommand:vscode-epics.copyAsExpandedDb",
         "onCommand:vscode-epics.addRuntimeMonitor",
         "onCommand:vscode-epics.removeRuntimeMonitor",
         "onCommand:vscode-epics.clearRuntimeMonitors",
         "onCommand:vscode-epics.restartRuntimeContext",
-        "onCommand:vscode-epics.stopRuntimeContext"
+        "onCommand:vscode-epics.stopRuntimeContext",
+        "onCommand:vscode-epics.startActiveFileRuntimeContext",
+        "onCommand:vscode-epics.stopActiveFileRuntimeContext"
     ],
     "dependencies": {
-        "epics-tca": "^1.1.31"
+        "epics-tca": "^1.1.32"
     },
     "__metadata": {
         "publisherId": "",
