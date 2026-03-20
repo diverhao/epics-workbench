@@ -3081,6 +3081,17 @@ function getHover(snapshot, document, position) {
     }
   }
 
+  if (isMakefileDocument(document)) {
+    const makefileDatabaseHover = getMakefileDatabaseFileHover(
+      snapshot,
+      document,
+      position,
+    );
+    if (makefileDatabaseHover) {
+      return makefileDatabaseHover;
+    }
+  }
+
   if (isSequencerDocument(document)) {
     const sequencerHover = getSequencerSymbolHover(document, position);
     if (sequencerHover) {
@@ -3659,6 +3670,77 @@ function createSubstitutionTemplateHover(document, reference, absolutePath) {
   );
 }
 
+function getMakefileDatabaseFileHover(snapshot, document, position) {
+  if (!isMakefileDocument(document)) {
+    return undefined;
+  }
+
+  const reference = getMakefileReferenceAtPosition(document, position);
+  if (!reference || reference.kind !== "dbFile") {
+    return undefined;
+  }
+
+  const target = getMakefileDatabaseReferenceTarget(
+    snapshot,
+    document,
+    reference,
+  );
+  const absolutePath = target?.absolutePath;
+  if (!absolutePath) {
+    return undefined;
+  }
+
+  const text = readTextFile(absolutePath);
+  const extension = path.extname(absolutePath).toLowerCase();
+  const markdown = new vscode.MarkdownString();
+  markdown.isTrusted = true;
+
+  if (DATABASE_EXTENSIONS.has(extension)) {
+    markdown.appendMarkdown("**EPICS database/template file**");
+    if (path.posix.basename(reference.name) !== path.basename(absolutePath)) {
+      markdown.appendMarkdown(
+        `\n\nInstalled name: \`${escapeInlineCode(reference.name)}\``,
+      );
+    }
+
+    if (text === undefined) {
+      markdown.appendMarkdown(
+        `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+      );
+    } else {
+      appendDatabaseFileHoverSummary(markdown, absolutePath, text);
+    }
+  } else if (SUBSTITUTION_EXTENSIONS.has(extension)) {
+    markdown.appendMarkdown("**EPICS substitutions file**");
+    if (path.posix.basename(reference.name) !== path.basename(absolutePath)) {
+      markdown.appendMarkdown(
+        `\n\nInstalled name: \`${escapeInlineCode(reference.name)}\``,
+      );
+    }
+
+    if (text === undefined) {
+      markdown.appendMarkdown(
+        `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+      );
+    } else {
+      appendSubstitutionFileHoverSummary(markdown, absolutePath, text);
+    }
+  } else {
+    markdown.appendMarkdown("**EPICS file**");
+    markdown.appendMarkdown(
+      `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+    );
+  }
+
+  return new vscode.Hover(
+    markdown,
+    new vscode.Range(
+      document.positionAt(reference.start),
+      document.positionAt(reference.end),
+    ),
+  );
+}
+
 function appendDatabaseFileHoverSummary(markdown, absolutePath, text) {
   const macroNames = extractMacroNames(maskDatabaseComments(text)).sort(compareLabels);
   const recordDeclarations = extractRecordDeclarations(text);
@@ -3686,6 +3768,32 @@ function appendDatabaseFileHoverSummary(markdown, absolutePath, text) {
     if (recordDeclarations.length > recordPreviewNames.length) {
       markdown.appendMarkdown(
         `\n\n${recordDeclarations.length - recordPreviewNames.length} more record names omitted.`,
+      );
+    }
+  }
+}
+
+function appendSubstitutionFileHoverSummary(markdown, absolutePath, text) {
+  const blocks = extractSubstitutionBlocks(text);
+  const expansionCount = blocks.reduce(
+    (count, block) => count + parseSubstitutionFileBlockRows(block.body).length,
+    0,
+  );
+  const lines = String(text).split(/\r?\n/);
+  const previewLineLimit = 200;
+  const previewLines = lines.slice(0, previewLineLimit);
+
+  markdown.appendMarkdown(
+    `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+  );
+  markdown.appendMarkdown(`\n\nBlocks: \`${blocks.length}\``);
+  markdown.appendMarkdown(`\n\nExpansions: \`${expansionCount}\``);
+  if (previewLines.length > 0) {
+    markdown.appendMarkdown("\n\nContent preview:");
+    markdown.appendCodeblock(previewLines.join("\n"), LANGUAGE_IDS.substitutions);
+    if (lines.length > previewLines.length) {
+      markdown.appendMarkdown(
+        `\n\n${lines.length - previewLines.length} more lines omitted.`,
       );
     }
   }
@@ -4269,10 +4377,13 @@ function getSubstitutionNavigationTarget(snapshot, document, position) {
 }
 
 function getMakefileNavigationTarget(snapshot, document, position) {
-  const project = findProjectForUri(snapshot.projectModel, document.uri);
   const reference = getMakefileReferenceAtPosition(document, position);
   if (!reference) {
     return undefined;
+  }
+
+  if (reference.kind === "dbFile") {
+    return getMakefileDatabaseReferenceTarget(snapshot, document, reference);
   }
 
   const localTarget = getLocalMakefileNavigationTarget(document, reference);
@@ -4280,6 +4391,7 @@ function getMakefileNavigationTarget(snapshot, document, position) {
     return localTarget;
   }
 
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
   if (!project || !isProjectResourceMakefileReference(reference)) {
     return undefined;
   }
@@ -8680,10 +8792,83 @@ function getLocalMakefileNavigationTarget(document, reference) {
     return { absolutePath: directCandidate };
   }
 
+  if (reference.kind === "dbFile" && reference.name.toLowerCase().endsWith(".db")) {
+    const substitutionsCandidate = normalizeFsPath(
+      path.resolve(
+        makefileDirectory,
+        `${reference.name.slice(0, -".db".length)}.substitutions`,
+      ),
+    );
+    if (isExistingFile(substitutionsCandidate)) {
+      return { absolutePath: substitutionsCandidate };
+    }
+  }
+
   if (reference.kind === "sourceFile") {
     const generatedCandidate = findGeneratedSourceFile(makefileDirectory, reference.name);
     if (generatedCandidate) {
       return { absolutePath: generatedCandidate };
+    }
+  }
+
+  return undefined;
+}
+
+function getMakefileDatabaseReferenceTarget(snapshot, document, reference) {
+  if (!reference || reference.kind !== "dbFile") {
+    return undefined;
+  }
+
+  const localTarget = getLocalMakefileNavigationTarget(document, reference);
+  if (localTarget?.absolutePath) {
+    return localTarget;
+  }
+
+  if (!document?.uri || document.uri.scheme !== "file") {
+    return undefined;
+  }
+
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
+  if (project) {
+    const projectSourceCandidate = findProjectSourceCandidate(snapshot, project, {
+      command: "dbLoadRecords",
+      path: reference.name,
+    });
+    if (projectSourceCandidate?.absolutePath) {
+      return { absolutePath: projectSourceCandidate.absolutePath };
+    }
+  }
+
+  const workspaceSourceCandidate = findWorkspaceDatabaseFileCandidate(
+    snapshot,
+    reference.name,
+    document,
+  );
+  if (workspaceSourceCandidate?.absolutePath) {
+    return { absolutePath: workspaceSourceCandidate.absolutePath };
+  }
+
+  if (!project) {
+    return undefined;
+  }
+
+  for (const artifact of project.runtimeArtifacts) {
+    if (!["database", "substitutions"].includes(artifact.kind)) {
+      continue;
+    }
+
+    if (artifact.runtimeFileName !== reference.name) {
+      continue;
+    }
+
+    const sourcePath = getSourceAbsolutePathForArtifact(artifact);
+    if (sourcePath) {
+      return { absolutePath: sourcePath };
+    }
+
+    const readablePath = getReadableAbsolutePathForArtifact(artifact);
+    if (readablePath) {
+      return { absolutePath: readablePath };
     }
   }
 
@@ -8713,6 +8898,36 @@ function findGeneratedSourceFile(makefileDirectory, fileName) {
   }
 
   return undefined;
+}
+
+function findWorkspaceDatabaseFileCandidate(snapshot, fileName, document) {
+  const targetFileName = path.posix.basename(normalizePath(fileName));
+  if (!targetFileName) {
+    return undefined;
+  }
+
+  const workspaceFolder = document?.uri
+    ? vscode.workspace.getWorkspaceFolder(document.uri)
+    : undefined;
+  const workspaceRootPath =
+    workspaceFolder?.uri?.scheme === "file"
+      ? normalizeFsPath(workspaceFolder.uri.fsPath)
+      : undefined;
+  const matches = snapshot.workspaceFiles
+    .filter((entry) => {
+      if (!entry.absolutePath || !DATABASE_EXTENSIONS.has(entry.extension)) {
+        return false;
+      }
+
+      if (path.posix.basename(normalizePath(entry.absolutePath)) !== targetFileName) {
+        return false;
+      }
+
+      return !workspaceRootPath || isPathWithinRoot(entry.absolutePath, workspaceRootPath);
+    })
+    .sort((left, right) => compareLabels(left.relativePath, right.relativePath));
+
+  return matches[0];
 }
 
 function extractMakefileReferences(text) {
@@ -8921,6 +9136,17 @@ function getRuntimeArtifactKind(fileName) {
   }
 
   return undefined;
+}
+
+function getSourceAbsolutePathForArtifact(artifact) {
+  if (!artifact?.sourceRelativePath) {
+    return undefined;
+  }
+
+  const sourcePath = normalizeFsPath(
+    path.join(findRootPathForArtifact(artifact), artifact.sourceRelativePath),
+  );
+  return isExistingFile(sourcePath) ? sourcePath : undefined;
 }
 
 function createRuntimeArtifact({

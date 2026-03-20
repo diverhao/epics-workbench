@@ -1,0 +1,33 @@
+<idea-plugin>
+  <id>org.epics.workbench</id>
+  <name>EPICS Workbench</name>
+  <vendor>EPICS Workbench</vendor>
+
+  <description>
+    <![CDATA[
+      EPICS language and runtime tools for IntelliJ Platform IDEs.
+    ]]>
+  </description>
+
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow
+      id="EPICS Workbench"
+      anchor="right"
+      factoryClass="org.epics.workbench.EpicsWorkbenchToolWindowFactory"
+    />
+  </extensions>
+
+  <actions>
+    <action
+      id="org.epics.workbench.ShowStatusAction"
+      class="org.epics.workbench.ShowEpicsWorkbenchStatusAction"
+      text="Show EPICS Workbench Status"
+      description="Verify that the EPICS Workbench plugin is loaded"
+    >
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
+  </actions>
+</idea-plugin>
+
