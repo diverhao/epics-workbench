@@ -21,6 +21,13 @@ internal object EpicsDatabaseToc {
     val recordName: String,
   )
 
+  internal data class TocRuntimeEntry(
+    val recordType: String,
+    val recordName: String,
+    val valueStart: Int,
+    val valueEnd: Int,
+  )
+
   fun upsert(text: String, eol: String): String {
     val contentWithoutToc = removeBlock(text).replace(Regex("""^(?:[ \t]*\r?\n)+"""), "")
     val tocBlock = buildBlock(text, eol)
@@ -52,6 +59,33 @@ internal object EpicsDatabaseToc {
     }
 
     return null
+  }
+
+  internal fun extractRuntimeEntries(text: String): List<TocRuntimeEntry> {
+    val range = findBlockRange(text) ?: return emptyList()
+    val declarations = extractRecordDeclarations(text)
+    val tocText = text.substring(range.start, range.endExclusive)
+    val entries = mutableListOf<TocRuntimeEntry>()
+
+    for (lineMatch in LINE_REGEX.findAll(tocText)) {
+      val lineText = lineMatch.value
+      val lineOffset = range.start + lineMatch.range.first
+      val entry = parseMarkdownTocEntry(lineText, lineOffset, declarations) ?: continue
+      val valueStart = entry.valueStart ?: continue
+      val valueEnd = entry.valueEnd ?: continue
+      entries += TocRuntimeEntry(
+        recordType = entry.recordType,
+        recordName = entry.recordName,
+        valueStart = valueStart,
+        valueEnd = valueEnd,
+      )
+    }
+
+    return entries
+  }
+
+  internal fun extractRuntimeMacroAssignments(text: String): Map<String, MacroAssignment> {
+    return extractMacroAssignments(text)
   }
 
   private fun buildBlock(text: String, eol: String): String {
@@ -254,6 +288,8 @@ internal object EpicsDatabaseToc {
         recordName = declaration.name,
         typeStart = typeCell.start,
         typeEnd = typeCell.end,
+        valueStart = if (hasValueColumn) cellEntries[1].displayStart else null,
+        valueEnd = if (hasValueColumn) cellEntries[1].displayEnd else null,
       )
     }
 
@@ -277,10 +313,14 @@ internal object EpicsDatabaseToc {
       val trailingWhitespaceLength = rawCell.reversed().takeWhile { it.isWhitespace() }.length
       val trimmedStart = cellStart + leadingWhitespaceLength
       val trimmedEnd = tableOffset + index - trailingWhitespaceLength
+      val displayStart = cellStart + minOf(leadingWhitespaceLength, 1)
+      val displayEnd = tableOffset + index - minOf(trailingWhitespaceLength, 1)
       cells += CommentTableCell(
         value = rawCell.trim(),
         start = trimmedStart,
         end = maxOf(trimmedStart, trimmedEnd),
+        displayStart = displayStart,
+        displayEnd = maxOf(displayStart, displayEnd),
       )
       cellStart = tableOffset + index + 1
     }
@@ -467,7 +507,7 @@ internal object EpicsDatabaseToc {
     return text.length
   }
 
-  private data class MacroAssignment(
+  internal data class MacroAssignment(
     val hasAssignment: Boolean,
     val value: String,
   )
@@ -477,12 +517,16 @@ internal object EpicsDatabaseToc {
     val recordName: String,
     val typeStart: Int,
     val typeEnd: Int,
+    val valueStart: Int?,
+    val valueEnd: Int?,
   )
 
   private data class CommentTableCell(
     val value: String,
     val start: Int,
     val end: Int,
+    val displayStart: Int,
+    val displayEnd: Int,
   )
 
   private data class TocRange(

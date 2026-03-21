@@ -18,6 +18,7 @@ internal object EpicsTokenTypes {
   val KEYWORD = EpicsTokenType("EPICS_KEYWORD")
   val NUMBER = EpicsTokenType("EPICS_NUMBER")
   val MACRO = EpicsTokenType("EPICS_MACRO")
+  val RECORD_NAME = EpicsTokenType("EPICS_RECORD_NAME")
   val BRACE = EpicsTokenType("EPICS_BRACE")
   val PAREN = EpicsTokenType("EPICS_PAREN")
   val BRACKET = EpicsTokenType("EPICS_BRACKET")
@@ -47,6 +48,10 @@ internal object EpicsHighlightingKeys {
   val MACRO = TextAttributesKey.createTextAttributesKey(
     "EPICS_MACRO",
     DefaultLanguageHighlighterColors.PARAMETER,
+  )
+  val RECORD_NAME = TextAttributesKey.createTextAttributesKey(
+    "EPICS_RECORD_NAME",
+    DefaultLanguageHighlighterColors.INSTANCE_FIELD,
   )
   val BRACE = TextAttributesKey.createTextAttributesKey(
     "EPICS_BRACE",
@@ -81,6 +86,7 @@ internal fun epicsHighlights(tokenType: IElementType?): Array<TextAttributesKey>
   EpicsTokenTypes.KEYWORD -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.KEYWORD)
   EpicsTokenTypes.NUMBER -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.NUMBER)
   EpicsTokenTypes.MACRO -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.MACRO)
+  EpicsTokenTypes.RECORD_NAME -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.RECORD_NAME)
   EpicsTokenTypes.BRACE -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.BRACE)
   EpicsTokenTypes.PAREN -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.PAREN)
   EpicsTokenTypes.BRACKET -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.BRACKET)

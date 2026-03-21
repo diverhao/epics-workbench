@@ -11,7 +11,9 @@ import org.epics.pva.client.PVAClient
  * available to the plugin code and verifies they compile in this project.
  */
 object EpicsClientLibraries {
-  fun createCaContext(): Context = CAJContext()
+  fun createCaContext(): Context = CAJContext().apply {
+    setDoNotShareChannels(true)
+  }
 
   fun createPvaClient(): PVAClient = PVAClient()
 }

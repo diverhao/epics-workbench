@@ -70,6 +70,7 @@ internal class EpicsDatabaseValidationListener(
     return when {
       isDatabaseFile(file.name) -> EpicsDatabaseValueValidator.collectIssues(document.text)
       isStartupFile(file.name) -> EpicsStartupMacroValidator.collectIssues(project, file, document.text)
+      isMonitorFile(file.name) -> EpicsMonitorValidator.collectIssues(document.text)
       else -> emptyList()
     }
   }
@@ -125,7 +126,11 @@ internal class EpicsDatabaseValidationListener(
   }
 
   private fun isSupportedFile(fileName: String): Boolean {
-    return isDatabaseFile(fileName) || isStartupFile(fileName)
+    return isDatabaseFile(fileName) || isStartupFile(fileName) || isMonitorFile(fileName)
+  }
+
+  private fun isMonitorFile(fileName: String): Boolean {
+    return fileName.substringAfterLast('.', "").lowercase() == "monitor"
   }
 
   companion object {

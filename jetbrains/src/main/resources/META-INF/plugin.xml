@@ -73,6 +73,10 @@
       language="EPICS Startup"
       implementationClass="org.epics.workbench.highlighting.EpicsStartupSyntaxHighlighterFactory"
     />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Monitor"
+      implementationClass="org.epics.workbench.highlighting.EpicsMonitorSyntaxHighlighterFactory"
+    />
     <spellchecker.support
       language="EPICS Database"
       implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
@@ -179,6 +183,7 @@
     <gotoDeclarationHandler implementation="org.epics.workbench.navigation.EpicsGotoDeclarationHandler" />
     <postStartupActivity implementation="org.epics.workbench.inspections.EpicsDatabaseValidationActivity" />
     <postStartupActivity implementation="org.epics.workbench.documentation.EpicsHoverDocumentationActivity" />
+    <postStartupActivity implementation="org.epics.workbench.runtime.EpicsMonitorRuntimeActivity" />
     <toolWindow
       id="EPICS Workbench"
       anchor="right"

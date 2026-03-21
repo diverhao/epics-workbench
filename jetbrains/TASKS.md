@@ -347,3 +347,54 @@ When mouse hovers over the record type in db file's table of contents, show a fl
 Status: `done`
 
 Update .gitignore for JetBrains extension, excludes the unnecessary files
+
+
+### J-32 Implement syntax highlighter for `.monitor` type file
+
+Status: `done`
+
+A file with suffix `.monitor` is a file type used in this extension. Such a file may look like this:
+
+```
+# test02.monitor
+
+SYS = val
+S = OK
+
+$(SYS)1
+val4
+val5
+val7
+valabc
+val2002
+$(SYS)2003
+```
+
+A comment starts with `#`, a line that has `=` is a macro value assignment line. All other lines are either empty or channel (record) name lines. Each line can only contain only one record name. If there is more than one, mark it as an error. Implement the syntax highlighter for this type of file. the vscode version has already implemented this.
+
+
+### J-33 Semantic check for .monitor file
+
+Status: `done`
+
+All macros in the channel names in `.monitor` files must be assigned. If a macros is not assigned, show an error for all macros. A empty assignment `SYS = ` is acceptable, it means the macro should be replaced by an empty string.
+
+### J-34 runtime epics channel value in .monitor file
+
+Status: `done`
+
+Use the installed CA and PVA libs, create context, connect channel, get the basic inforamtion (e.g. choices for enum type record such as bo, mbbi), then monitor the channel. Then display the realtime channel value after the channel name in `.monitor` file. Align the values vertically. this functionality has been realized in vscode version.
+
+
+### J-35 Runtime epics channel value in db file table of contents
+
+Status: `done`
+
+Similar to the epics channel monitoring in `.monitor` file, create an overlay and show the channel's runtime value (at a rate of 1Hz) in the `Value` column. this functionality is realized in vscode version. Keep the vertical alignment of the table.
+
+
+### J-36 Put runtime record value
+
+Status: `done`
+
+When double click the runtime value, show a input box. User can type value in this box and submit it. 

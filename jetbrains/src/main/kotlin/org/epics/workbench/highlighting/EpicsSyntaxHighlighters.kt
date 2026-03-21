@@ -79,3 +79,15 @@ class EpicsStartupSyntaxHighlighterFactory : SyntaxHighlighterFactory() {
     return EpicsSimpleSyntaxHighlighter(EpicsLexingProfile(STARTUP_KEYWORDS))
   }
 }
+
+class EpicsMonitorSyntaxHighlighterFactory : SyntaxHighlighterFactory() {
+  override fun getSyntaxHighlighter(project: Project?, virtualFile: VirtualFile?): SyntaxHighlighter {
+    return object : SyntaxHighlighterBase() {
+      override fun getHighlightingLexer(): Lexer = EpicsMonitorLexer()
+
+      override fun getTokenHighlights(tokenType: IElementType): Array<com.intellij.openapi.editor.colors.TextAttributesKey> {
+        return epicsHighlights(tokenType)
+      }
+    }
+  }
+}
