@@ -1,5 +1,8 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
+val epicsJcaVersion = "2.4.7"
+val phoebusPvaVersion = "5.0.2"
+
 plugins {
   id("java")
   id("org.jetbrains.kotlin.jvm") version "1.9.25"
@@ -11,12 +14,17 @@ version = "0.1.0-SNAPSHOT"
 
 repositories {
   mavenCentral()
+  maven(url = "https://s01.oss.sonatype.org/content/repositories/releases")
   intellijPlatform {
     defaultRepositories()
   }
 }
 
 dependencies {
+  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+  implementation("org.epics:jca:$epicsJcaVersion")
+  implementation("org.phoebus:core-pva:$phoebusPvaVersion")
+
   intellijPlatform {
     create("IC", "2024.3.6")
     testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
@@ -35,6 +43,12 @@ intellijPlatform {
 }
 
 tasks {
+  processResources {
+    from("../vscode/data") {
+      into("data")
+    }
+  }
+
   withType<JavaCompile> {
     sourceCompatibility = "21"
     targetCompatibility = "21"

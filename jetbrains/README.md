@@ -5,6 +5,11 @@ This folder contains the JetBrains version of `epics-workbench`.
 Use one plugin project here for both `IntelliJ IDEA` and `PyCharm`.
 Keep the implementation on common IntelliJ Platform APIs so the same plugin ZIP can be tested in both IDEs.
 
+Planning files for development:
+
+- `ROADMAP.md`: longer-term milestones and architecture direction
+- `TASKS.md`: current backlog and active implementation queue
+
 ## Prerequisites
 
 1. Install `IntelliJ IDEA`.
@@ -99,3 +104,19 @@ Use `./gradlew runIde` for the fastest development loop.
 4. Add IOC/CA/PVA runtime panels
 5. Add inspections, formatting, and editor actions
 
+## Working With Codex
+
+The fastest collaboration loop is task-based:
+
+1. Keep feature work in `TASKS.md`
+2. Ask Codex to implement one task or one milestone
+3. Let Codex make the code changes and run Gradle checks
+4. Verify behavior in the sandbox IDE started by `./gradlew runIde`
+
+Preferred request style:
+
+- `Implement J-01`
+- `Implement the next 2 JetBrains tasks`
+- `Finish Milestone 1 in jetbrains/TASKS.md`
+
+Avoid line-by-line editing instructions unless the change is very small.

@@ -3,6 +3,17 @@
 .idea/
 .kotlin/
 .run/
+.fleet/
+.ijwb/
+.qodana/
 build/
 out/
+*.iml
+*.ipr
+*.iws
+*.log
+*.hprof
+hs_err_pid*
+replay_pid*
+.attach_pid*
 .DS_Store

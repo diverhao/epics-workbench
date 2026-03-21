@@ -12,6 +12,173 @@
   <depends>com.intellij.modules.platform</depends>
 
   <extensions defaultExtensionNs="com.intellij">
+    <fileType
+      name="EPICS Database"
+      language="EPICS Database"
+      implementationClass="org.epics.workbench.filetypes.EpicsDatabaseFileType"
+      fieldName="INSTANCE"
+      extensions="db;vdb;template"
+    />
+    <fileType
+      name="EPICS Substitutions"
+      language="EPICS Substitutions"
+      implementationClass="org.epics.workbench.filetypes.EpicsSubstitutionsFileType"
+      fieldName="INSTANCE"
+      extensions="substitutions;sub;subs"
+    />
+    <fileType
+      name="EPICS Startup"
+      language="EPICS Startup"
+      implementationClass="org.epics.workbench.filetypes.EpicsStartupFileType"
+      fieldName="INSTANCE"
+      extensions="cmd;iocsh"
+    />
+    <fileType
+      name="EPICS Database Definition"
+      language="EPICS Database Definition"
+      implementationClass="org.epics.workbench.filetypes.EpicsDatabaseDefinitionFileType"
+      fieldName="INSTANCE"
+      extensions="dbd"
+    />
+    <fileType
+      name="EPICS Protocol"
+      language="EPICS Protocol"
+      implementationClass="org.epics.workbench.filetypes.EpicsProtocolFileType"
+      fieldName="INSTANCE"
+      extensions="proto"
+    />
+    <fileType
+      name="EPICS Sequencer"
+      language="EPICS Sequencer"
+      implementationClass="org.epics.workbench.filetypes.EpicsSequencerFileType"
+      fieldName="INSTANCE"
+      extensions="st"
+    />
+    <fileType
+      name="EPICS Monitor"
+      language="EPICS Monitor"
+      implementationClass="org.epics.workbench.filetypes.EpicsMonitorFileType"
+      fieldName="INSTANCE"
+      extensions="monitor"
+    />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Database"
+      implementationClass="org.epics.workbench.highlighting.EpicsDatabaseSyntaxHighlighterFactory"
+    />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Substitutions"
+      implementationClass="org.epics.workbench.highlighting.EpicsSubstitutionsSyntaxHighlighterFactory"
+    />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Startup"
+      implementationClass="org.epics.workbench.highlighting.EpicsStartupSyntaxHighlighterFactory"
+    />
+    <spellchecker.support
+      language="EPICS Database"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Substitutions"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Startup"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Database Definition"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Protocol"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Sequencer"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Monitor"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Database"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Substitutions"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Startup"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Database Definition"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Protocol"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Sequencer"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Monitor"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.quoteHandler
+      language="EPICS Database"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Substitutions"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Startup"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Database Definition"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Protocol"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Sequencer"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Monitor"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <completion.contributor
+      language="any"
+      implementationClass="org.epics.workbench.completion.EpicsDatabaseCompletionContributor"
+    />
+    <localInspection
+      language="any"
+      shortName="EpicsDatabaseValueInspection"
+      displayName="Validate EPICS database semantics"
+      groupName="EPICS"
+      enabledByDefault="true"
+      level="ERROR"
+      implementationClass="org.epics.workbench.inspections.EpicsDatabaseValueInspection"
+    />
+    <typedHandler implementation="org.epics.workbench.editor.EpicsAutoClosingTypedHandler" />
+    <formattingService
+      implementation="org.epics.workbench.formatting.EpicsFormattingService"
+      order="first"
+    />
+    <externalFormatProcessor implementation="org.epics.workbench.formatting.EpicsExternalFormatProcessor" />
+    <gotoDeclarationHandler implementation="org.epics.workbench.navigation.EpicsGotoDeclarationHandler" />
+    <postStartupActivity implementation="org.epics.workbench.inspections.EpicsDatabaseValidationActivity" />
+    <postStartupActivity implementation="org.epics.workbench.documentation.EpicsHoverDocumentationActivity" />
     <toolWindow
       id="EPICS Workbench"
       anchor="right"
@@ -28,6 +195,14 @@
     >
       <add-to-group group-id="ToolsMenu" anchor="last" />
     </action>
+    <action
+      id="org.epics.workbench.UpdateDatabaseTocAction"
+      class="org.epics.workbench.toc.UpdateDatabaseTocAction"
+      text="Update Table of Contents"
+      description="Generate or refresh the EPICS record table of contents for this database file"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
   </actions>
 </idea-plugin>
-
