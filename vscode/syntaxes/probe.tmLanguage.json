@@ -1,0 +1,37 @@
+{
+  "$schema": "../schemas/tmlanguage.json",
+  "name": "EPICS probe",
+  "scopeName": "source.epics.probe",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#record-line"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.epics.probe",
+          "begin": "^\\s*#",
+          "end": "$"
+        }
+      ]
+    },
+    "record-line": {
+      "patterns": [
+        {
+          "name": "meta.record.epics.probe",
+          "match": "^\\s*([^#\\s].*?)\\s*$",
+          "captures": {
+            "1": {
+              "name": "entity.name.record.epics.probe"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

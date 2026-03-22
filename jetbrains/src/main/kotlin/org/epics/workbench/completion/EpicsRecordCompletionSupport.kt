@@ -22,6 +22,7 @@ internal object EpicsRecordCompletionSupport {
   private val json = Json { ignoreUnknownKeys = true }
 
   private data class StaticData(
+    val fieldOrderByRecordType: Map<String, List<String>>,
     val templateFieldsByRecordType: Map<String, List<String>>,
     val fieldTypesByRecordType: Map<String, Map<String, String>>,
     val fieldMenuChoicesByRecordType: Map<String, Map<String, List<String>>>,
@@ -60,6 +61,7 @@ internal object EpicsRecordCompletionSupport {
 
   private val staticData: StaticData by lazy(LazyThreadSafetyMode.PUBLICATION) {
     StaticData(
+      fieldOrderByRecordType = parseStringListMap("data/embedded-record-fields.json"),
       templateFieldsByRecordType = parseStringListMap("data/record-template-fields.json"),
       fieldTypesByRecordType = parseNestedStringMap("data/embedded-record-field-types.json"),
       fieldMenuChoicesByRecordType = parseNestedStringListMap("data/embedded-record-field-menus.json"),
@@ -82,17 +84,18 @@ internal object EpicsRecordCompletionSupport {
   fun getFieldNamesForRecordType(recordType: String?): List<String> {
     if (!recordType.isNullOrBlank()) {
       val labels = linkedSetOf<String>()
+      staticData.fieldOrderByRecordType[recordType]?.let(labels::addAll)
       staticData.templateFieldsByRecordType[recordType]?.let(labels::addAll)
       staticData.fieldTypesByRecordType[recordType]?.keys?.let(labels::addAll)
       if (labels.isNotEmpty()) {
-        return labels.sortedWith(String.CASE_INSENSITIVE_ORDER)
+        return labels.toList()
       }
     }
 
     val fallbackLabels = linkedSetOf<String>()
     fallbackLabels += COMMON_RECORD_FIELDS
     fallbackLabels += staticData.fieldTypesByRecordType.values.flatMap { it.keys }
-    return fallbackLabels.sortedWith(String.CASE_INSENSITIVE_ORDER)
+    return fallbackLabels.toList()
   }
 
   fun getDeclaredFieldNamesForRecordType(recordType: String): Set<String>? {

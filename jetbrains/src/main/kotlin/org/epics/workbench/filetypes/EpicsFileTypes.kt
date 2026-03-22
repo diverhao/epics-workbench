@@ -94,12 +94,24 @@ class EpicsSequencerFileType private constructor() : EpicsFileType(
 
 class EpicsMonitorFileType private constructor() : EpicsFileType(
   EpicsMonitorLanguage.INSTANCE,
-  "EPICS Monitor",
-  "EPICS monitor files",
-  "monitor",
+  "EPICS PV List",
+  "EPICS pvlist files",
+  "pvlist",
 ) {
   companion object {
     @JvmField
     val INSTANCE = EpicsMonitorFileType()
+  }
+}
+
+class EpicsProbeFileType private constructor() : EpicsFileType(
+  EpicsProbeLanguage.INSTANCE,
+  "EPICS Probe",
+  "EPICS probe files",
+  "probe",
+) {
+  companion object {
+    @JvmField
+    val INSTANCE = EpicsProbeFileType()
   }
 }

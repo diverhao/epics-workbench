@@ -1,7 +1,7 @@
 {
   "$schema": "../schemas/tmlanguage.json",
-  "name": "EPICS monitor",
-  "scopeName": "source.epics.monitor",
+  "name": "EPICS PV List",
+  "scopeName": "source.epics.pvlist",
   "patterns": [
     {
       "include": "#comments"
@@ -17,7 +17,7 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.line.number-sign.epics.monitor",
+          "name": "comment.line.number-sign.epics.pvlist",
           "begin": "^\\s*#",
           "end": "$"
         }
@@ -26,14 +26,14 @@
     "macro-definitions": {
       "patterns": [
         {
-          "name": "meta.definition.macro.epics.monitor",
+          "name": "meta.definition.macro.epics.pvlist",
           "begin": "^\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*)(=)(\\s*)",
           "beginCaptures": {
             "1": {
-              "name": "variable.other.assignment.epics.monitor"
+              "name": "variable.other.assignment.epics.pvlist"
             },
             "3": {
-              "name": "keyword.operator.assignment.epics.monitor"
+              "name": "keyword.operator.assignment.epics.pvlist"
             }
           },
           "end": "$",
@@ -42,7 +42,7 @@
               "include": "#macro-expressions"
             },
             {
-              "name": "string.unquoted.macro-value.epics.monitor",
+              "name": "string.unquoted.macro-value.epics.pvlist",
               "match": "\\S+"
             }
           ]
@@ -52,11 +52,11 @@
     "record-lines": {
       "patterns": [
         {
-          "name": "meta.record.epics.monitor",
+          "name": "meta.record.epics.pvlist",
           "begin": "^\\s*(?!#)(?![A-Za-z_][A-Za-z0-9_]*\\s*=)(\\S+)",
           "beginCaptures": {
             "1": {
-              "name": "entity.name.record.epics.monitor"
+              "name": "entity.name.record.epics.pvlist"
             }
           },
           "end": "$",
@@ -71,7 +71,7 @@
     "macro-expressions": {
       "patterns": [
         {
-          "name": "variable.other.macro.epics.monitor",
+          "name": "variable.other.macro.epics.pvlist",
           "match": "\\$\\((?:[^)=\\s]+)(?:=[^)]*)?\\)|\\$\\{[^}\\s]+\\}"
         }
       ]

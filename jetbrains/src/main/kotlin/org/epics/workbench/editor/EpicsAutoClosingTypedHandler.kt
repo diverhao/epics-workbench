@@ -150,7 +150,7 @@ class EpicsAutoClosingTypedHandler : TypedHandlerDelegate() {
       "EPICS Database Definition",
       "EPICS Protocol",
       "EPICS Sequencer",
-      "EPICS Monitor",
+      "EPICS PV List",
     )
     private val EPICS_LANGUAGE_IDS = EPICS_FILE_TYPES
     private val EPICS_EXTENSIONS = setOf(
@@ -165,7 +165,7 @@ class EpicsAutoClosingTypedHandler : TypedHandlerDelegate() {
       "dbd",
       "proto",
       "st",
-      "monitor",
+      "pvlist",
     )
   }
 }

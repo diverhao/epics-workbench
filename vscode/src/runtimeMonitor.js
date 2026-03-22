@@ -14,33 +14,45 @@ const STOP_ACTIVE_FILE_RUNTIME_COMMAND = "vscode-epics.stopActiveFileRuntimeCont
 const PUT_RUNTIME_VALUE_COMMAND = "vscode-epics.putRuntimeValue";
 const OPEN_PROJECT_RUNTIME_CONFIGURATION_COMMAND =
   "vscode-epics.openProjectRuntimeConfiguration";
+const OPEN_PROBE_WIDGET_COMMAND = "vscode-epics.openProbeWidget";
+const OPEN_PVLIST_WIDGET_COMMAND = "vscode-epics.openPvlistWidget";
+const OPEN_MONITOR_WIDGET_COMMAND = "vscode-epics.openMonitorWidget";
 const DEFAULT_PROTOCOL = "ca";
 const DEFAULT_CHANNEL_CREATION_TIMEOUT_SECONDS = 0;
 const DEFAULT_MONITOR_SUBSCRIBE_TIMEOUT_SECONDS = 0;
 const DEFAULT_LOG_LEVEL = "ERROR";
 const DATABASE_RUNTIME_EXTENSIONS = new Set([".db", ".vdb", ".template"]);
-const LINE_RUNTIME_EXTENSIONS = new Set([".monitor", ".txt"]);
+const LINE_RUNTIME_EXTENSIONS = new Set([".pvlist", ".txt"]);
+const PROBE_RUNTIME_EXTENSIONS = new Set([".probe"]);
 const STATUS_BAR_PRIORITY = 110;
 const MOUSE_DOUBLE_CLICK_INTERVAL_MS = 400;
 const PROJECT_RUNTIME_CONFIG_FILE_NAME = ".epics-workbench-config.json";
 const PROJECT_RUNTIME_CONFIGURATION_VIEW_TYPE =
   "epicsWorkbench.projectRuntimeConfiguration";
+const PROBE_CUSTOM_EDITOR_VIEW_TYPE = "epicsWorkbench.probeEditor";
+const PROBE_WIDGET_VIEW_TYPE = "epicsWorkbench.probeWidget";
+const PVLIST_WIDGET_VIEW_TYPE = "epicsWorkbench.pvlistWidget";
+const MONITOR_WIDGET_VIEW_TYPE = "epicsWorkbench.monitorWidget";
 const PROJECT_RUNTIME_CONFIGURATION_PROTOCOL_VALUES = ["ca", "pva"];
 const PROJECT_RUNTIME_CONFIGURATION_AUTO_ADDR_LIST_VALUES = ["Yes", "No"];
 const PVA_HAS_DATA_WITHOUT_VALUE_TEXT = "Has data, but no value";
 const RUNTIME_VALUE_DISPLAY_MAX_LENGTH = 120;
 const RUNTIME_HOVER_VALUE_MAX_LENGTH = 240;
 const DATABASE_TOC_VALUE_DISPLAY_MAX_LENGTH = 18;
+const PROBE_FIELD_CONNECT_BATCH_SIZE = 8;
+const PROBE_OVERLAY_MAX_LINES = 160;
+const DEFAULT_MONITOR_WIDGET_BUFFER_SIZE = 500;
+const EPICS_CA_EPOCH_OFFSET_SECONDS = 631152000;
 const CONTEXT_INITIALIZATION_CANCELLED_MESSAGE =
   "EPICS runtime context initialization was cancelled.";
-
 function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   const controller = new EpicsRuntimeMonitorController(databaseHelpers);
+  const probeCustomEditorProvider = new EpicsProbeCustomEditorProvider(controller);
   const treeView = vscode.window.createTreeView(RUNTIME_VIEW_ID, {
     treeDataProvider: controller,
     showCollapseAll: false,
   });
-  const diagnostics = vscode.languages.createDiagnosticCollection("vscode-epics-monitor");
+  const diagnostics = vscode.languages.createDiagnosticCollection("vscode-epics-pvlist");
   const statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     STATUS_BAR_PRIORITY,
@@ -55,23 +67,47 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       color: new vscode.ThemeColor("descriptionForeground"),
     },
   });
+  const probeDecorationTypes = Array.from(
+    { length: PROBE_OVERLAY_MAX_LINES },
+    () =>
+      vscode.window.createTextEditorDecorationType({
+        after: {
+          color: new vscode.ThemeColor("descriptionForeground"),
+        },
+      }),
+  );
 
   controller.attachStatusBar(statusBarItem);
   controller.attachDiagnosticsCollection(diagnostics);
   controller.attachHoverDecorationType(hoverDecorationType);
   controller.attachDatabaseTocValueDecorationType(databaseTocValueDecorationType);
+  controller.attachProbeDecorationTypes(probeDecorationTypes);
 
   extensionContext.subscriptions.push(
     controller,
+    probeCustomEditorProvider,
     treeView,
     diagnostics,
     statusBarItem,
     hoverDecorationType,
     databaseTocValueDecorationType,
+    ...probeDecorationTypes,
+  );
+  extensionContext.subscriptions.push(
+    vscode.window.registerCustomEditorProvider(
+      PROBE_CUSTOM_EDITOR_VIEW_TYPE,
+      probeCustomEditorProvider,
+      {
+        webviewOptions: {
+          retainContextWhenHidden: true,
+        },
+        supportsMultipleEditorsPerDocument: true,
+      },
+    ),
   );
   extensionContext.subscriptions.push(
     vscode.languages.registerDocumentFormattingEditProvider(
-      { language: "monitor" },
+      { language: "pvlist" },
       new EpicsMonitorFormattingProvider(),
     ),
   );
@@ -130,10 +166,29 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
     ),
   );
   extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_PROBE_WIDGET_COMMAND,
+      async (options) => controller.openProbeWidget(options),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_PVLIST_WIDGET_COMMAND,
+      async (options) => controller.openPvlistWidget(options),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_MONITOR_WIDGET_COMMAND,
+      async (options) => controller.openMonitorWidget(options),
+    ),
+  );
+  extensionContext.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       controller.handleActiveEditorChange(editor);
       controller.refreshMonitorHoverDecorationsForEditor(editor);
       controller.refreshDatabaseTocValueDecorationsForEditor(editor);
+      controller.refreshProbeDecorationsForEditor(editor);
     }),
   );
   extensionContext.subscriptions.push(
@@ -152,6 +207,8 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorDiagnosticsForDocument(event.document);
       controller.refreshMonitorHoverDecorationsForDocument(event.document);
       controller.refreshDatabaseTocValueDecorationsForDocument(event.document);
+      controller.refreshProbeDecorationsForDocument(event.document);
+      controller.refreshProbePanels();
     }),
   );
   extensionContext.subscriptions.push(
@@ -159,6 +216,8 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorDiagnosticsForDocument(document);
       controller.refreshMonitorHoverDecorationsForDocument(document);
       controller.refreshDatabaseTocValueDecorationsForDocument(document);
+      controller.refreshProbeDecorationsForDocument(document);
+      controller.refreshProbePanels();
     }),
   );
   extensionContext.subscriptions.push(
@@ -166,6 +225,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.clearMonitorDiagnosticsForDocument(document);
       controller.clearMonitorHoverDecorationsForDocument(document);
       controller.clearDatabaseTocValueDecorationsForDocument(document);
+      controller.clearProbeDecorationsForDocument(document);
       void controller.handleDocumentClosed(document);
     }),
   );
@@ -204,6 +264,7 @@ class EpicsRuntimeMonitorController {
     this.statusBarItem = undefined;
     this.hoverDecorationType = undefined;
     this.databaseTocValueDecorationType = undefined;
+    this.probeDecorationTypes = [];
     this.hoverRefreshTimer = undefined;
     this.runtimeWorkspaceFolder = undefined;
     this.runtimeConfigurationPanel = undefined;
@@ -221,6 +282,19 @@ class EpicsRuntimeMonitorController {
       typeof databaseHelpers.extractRecordDeclarations === "function"
         ? databaseHelpers.extractRecordDeclarations
         : undefined;
+    this.getFieldNamesForRecordType =
+      typeof databaseHelpers.getFieldNamesForRecordType === "function"
+        ? databaseHelpers.getFieldNamesForRecordType
+        : undefined;
+    this.getFieldTypeForRecordType =
+      typeof databaseHelpers.getFieldTypeForRecordType === "function"
+        ? databaseHelpers.getFieldTypeForRecordType
+        : undefined;
+    this.probeSessions = new Map();
+    this.probeWebviews = new Map();
+    this.probeWidgets = new Map();
+    this.pvlistWidgets = new Map();
+    this.monitorWidgets = new Map();
   }
 
   getTreeItem(element) {
@@ -233,7 +307,7 @@ class EpicsRuntimeMonitorController {
 
   getChildren(element) {
     if (!element) {
-      return [this.contextNode, ...this.monitorEntries];
+      return [this.contextNode, ...this.monitorEntries.filter((entry) => !entry.hidden)];
     }
 
     return [];
@@ -242,6 +316,25 @@ class EpicsRuntimeMonitorController {
   dispose() {
     this.stopContextInternal();
     this.disposeHoverRefreshTimer();
+    this.probeSessions.clear();
+    for (const probeWebviewState of this.probeWebviews.values()) {
+      for (const panel of probeWebviewState.panels) {
+        panel.dispose();
+      }
+    }
+    this.probeWebviews.clear();
+    for (const widgetState of this.probeWidgets.values()) {
+      widgetState.panel.dispose();
+    }
+    this.probeWidgets.clear();
+    for (const widgetState of this.pvlistWidgets.values()) {
+      widgetState.panel.dispose();
+    }
+    this.pvlistWidgets.clear();
+    for (const widgetState of this.monitorWidgets.values()) {
+      widgetState.panel.dispose();
+    }
+    this.monitorWidgets.clear();
     this.runtimeConfigurationPanel?.dispose();
     this.runtimeConfigurationPanel = undefined;
     this.statusBarItem?.dispose();
@@ -262,6 +355,834 @@ class EpicsRuntimeMonitorController {
 
   attachDatabaseTocValueDecorationType(decorationType) {
     this.databaseTocValueDecorationType = decorationType;
+  }
+
+  attachProbeDecorationTypes(decorationTypes) {
+    this.probeDecorationTypes = Array.isArray(decorationTypes)
+      ? decorationTypes
+      : [];
+  }
+
+  async resolveProbeCustomEditor(document, webviewPanel) {
+    if (!document?.uri || !webviewPanel?.webview) {
+      return;
+    }
+
+    const sourceUri = document.uri.toString();
+    let probeWebviewState = this.probeWebviews.get(sourceUri);
+    if (!probeWebviewState) {
+      probeWebviewState = {
+        document,
+        panels: new Set(),
+      };
+      this.probeWebviews.set(sourceUri, probeWebviewState);
+    } else {
+      probeWebviewState.document = document;
+    }
+    probeWebviewState.panels.add(webviewPanel);
+
+    webviewPanel.webview.options = {
+      enableScripts: true,
+    };
+    webviewPanel.webview.html = buildProbeCustomEditorHtml(
+      webviewPanel.webview,
+      this.buildProbeWebviewState(document),
+    );
+
+    webviewPanel.onDidDispose(() => {
+      const currentState = this.probeWebviews.get(sourceUri);
+      if (!currentState) {
+        return;
+      }
+      currentState.panels.delete(webviewPanel);
+      if (!currentState.panels.size) {
+        this.probeWebviews.delete(sourceUri);
+      }
+    });
+
+    webviewPanel.webview.onDidReceiveMessage(async (message) => {
+      if (!message?.type) {
+        return;
+      }
+
+      if (message.type === "startProbeRuntime") {
+        await this.startProbeDocumentRuntime(document);
+        return;
+      }
+
+      if (message.type === "stopProbeRuntime") {
+        await this.stopProbeDocumentRuntime(document);
+        return;
+      }
+
+      if (message.type === "putProbeValue" && message.key) {
+        await this.putRuntimeValue({ key: message.key });
+      }
+    });
+
+    if (
+      this.contextStatus !== "stopped" &&
+      !this.probeSessions.has(sourceUri) &&
+      analyzeProbeDocument(document).recordName
+    ) {
+      void this.startProbeDocumentRuntime(document);
+    }
+
+    void this.postProbeWebviewState(document, webviewPanel);
+  }
+
+  async openProbeWidget(options = {}) {
+    const recordName = String(options?.recordName || "").trim();
+    const widgetId = createNonce();
+    const sourceUri = `probe-widget:${widgetId}`;
+    const panel = vscode.window.createWebviewPanel(
+      PROBE_WIDGET_VIEW_TYPE,
+      recordName ? `Probe: ${recordName}` : "EPICS Probe",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      },
+    );
+
+    const widgetState = {
+      widgetId,
+      sourceUri,
+      recordName,
+      panel,
+    };
+    this.probeWidgets.set(sourceUri, widgetState);
+
+    panel.webview.html = buildProbeWidgetHtml(
+      panel.webview,
+      this.buildProbeWidgetWebviewState(widgetState),
+    );
+
+    panel.onDidDispose(() => {
+      this.probeWidgets.delete(sourceUri);
+      this.disposeProbeSession(sourceUri);
+      void this.removeEntriesBySourceUri(sourceUri);
+    });
+
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (!message?.type) {
+        return;
+      }
+
+      if (message.type === "updateProbeWidgetRecordName") {
+        await this.updateProbeWidgetRecordName(widgetState, message.recordName);
+        return;
+      }
+
+      if (message.type === "putProbeValue" && message.key) {
+        await this.putRuntimeValue({ key: message.key });
+        return;
+      }
+
+      if (message.type === "processProbeWidget") {
+        await this.processProbeWidget(widgetState);
+      }
+    });
+
+    if (recordName) {
+      await this.startProbeWidgetSession(widgetState);
+    } else {
+      await this.postProbeWidgetState(widgetState);
+    }
+  }
+
+  async updateProbeWidgetRecordName(widgetState, nextRecordName) {
+    if (!widgetState?.sourceUri || !widgetState.panel) {
+      return;
+    }
+
+    const recordName = String(nextRecordName || "").trim();
+    widgetState.recordName = recordName;
+    widgetState.panel.title = recordName ? `Probe: ${recordName}` : "EPICS Probe";
+
+    this.disposeProbeSession(widgetState.sourceUri);
+    await this.removeEntriesBySourceUri(widgetState.sourceUri);
+
+    if (!recordName) {
+      await this.postProbeWidgetState(widgetState);
+      return;
+    }
+
+    await this.startProbeWidgetSession(widgetState);
+  }
+
+  async startProbeWidgetSession(widgetState) {
+    if (!widgetState?.sourceUri || !widgetState.recordName) {
+      return;
+    }
+
+    await this.startProbeRuntimeSession({
+      sourceUri: widgetState.sourceUri,
+      sourceLabel: widgetState.panel?.title || "EPICS Probe",
+      recordName: widgetState.recordName,
+      progressTitle: `Starting EPICS probe for ${widgetState.recordName}`,
+      showProgress: false,
+    });
+    await this.postProbeWidgetState(widgetState);
+  }
+
+  async openPvlistWidget(options = {}) {
+    const widgetId = createNonce();
+    const sourceUri = `pvlist-widget:${widgetId}`;
+    const sourceModel = buildPvlistWidgetSourceModel(
+      options,
+      this.extractRecordDeclarations,
+      this.extractDatabaseTocMacroAssignments,
+    );
+    if (sourceModel?.sourceKind === "pvlist" && (sourceModel.diagnostics || []).length > 0) {
+      vscode.window.showErrorMessage(
+        `Cannot open PvList widget: ${sourceModel.diagnostics[0]?.message || "invalid .pvlist format."}`,
+      );
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      PVLIST_WIDGET_VIEW_TYPE,
+      sourceModel?.sourceLabel ? `PvList: ${sourceModel.sourceLabel}` : "EPICS PvList",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      },
+    );
+
+    const widgetState = {
+      widgetId,
+      sourceUri,
+      panel,
+      sourceModel,
+      macroValues: new Map(sourceModel?.macroValues || []),
+      rows: [],
+    };
+    this.pvlistWidgets.set(sourceUri, widgetState);
+
+    panel.webview.html = buildPvlistWidgetHtml(
+      panel.webview,
+      this.buildPvlistWidgetWebviewState(widgetState),
+    );
+
+    panel.onDidDispose(() => {
+      this.pvlistWidgets.delete(sourceUri);
+      void this.removeEntriesBySourceUri(sourceUri);
+    });
+
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (!message?.type) {
+        return;
+      }
+
+      if (message.type === "addPvlistWidgetChannels") {
+        await this.addPvlistWidgetChannels(widgetState, message.text);
+        return;
+      }
+
+      if (message.type === "savePvlistWidget") {
+        await this.savePvlistWidget(widgetState);
+        return;
+      }
+
+      if (message.type === "updatePvlistWidgetMacro" && message.name) {
+        await this.updatePvlistWidgetMacro(widgetState, message.name, message.value);
+        return;
+      }
+
+      if (message.type === "putPvlistValue" && message.key) {
+        await this.putRuntimeValueFromInput({ key: message.key }, message.value);
+      }
+    });
+
+    await this.applyPvlistWidgetMonitoring(widgetState);
+  }
+
+  async openMonitorWidget(options = {}) {
+    const widgetId = createNonce();
+    const sourceUri = `monitor-widget:${widgetId}`;
+    const initialChannels = Array.isArray(options?.initialChannels)
+      ? options.initialChannels
+      : [];
+    const panel = vscode.window.createWebviewPanel(
+      MONITOR_WIDGET_VIEW_TYPE,
+      getMonitorWidgetPanelTitle(initialChannels),
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      },
+    );
+
+    const widgetState = {
+      widgetId,
+      sourceUri,
+      panel,
+      sourceLabel: String(options?.sourceLabel || "EPICS Monitor"),
+      channelRows: [],
+      historyLines: [],
+      bufferSize: DEFAULT_MONITOR_WIDGET_BUFFER_SIZE,
+      sessionsByRowId: new Map(),
+      lastError: "",
+    };
+    this.monitorWidgets.set(sourceUri, widgetState);
+
+    for (const channelName of initialChannels) {
+      this.addMonitorWidgetRow(widgetState, channelName);
+    }
+    if (!widgetState.channelRows.length) {
+      this.addMonitorWidgetRow(widgetState, "");
+    }
+
+    panel.webview.html = buildMonitorWidgetHtml(
+      panel.webview,
+      this.buildMonitorWidgetWebviewState(widgetState),
+    );
+
+    panel.onDidDispose(() => {
+      this.monitorWidgets.delete(sourceUri);
+      void this.disposeMonitorWidget(widgetState);
+    });
+
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (!message?.type) {
+        return;
+      }
+
+      if (message.type === "addMonitorWidgetChannelRow") {
+        this.addMonitorWidgetRow(widgetState, "");
+        await this.postMonitorWidgetState(widgetState);
+        return;
+      }
+
+      if (message.type === "updateMonitorWidgetChannel" && message.rowId) {
+        await this.updateMonitorWidgetChannel(
+          widgetState,
+          String(message.rowId),
+          message.channelName,
+        );
+        return;
+      }
+
+      if (message.type === "updateMonitorWidgetBufferSize") {
+        await this.updateMonitorWidgetBufferSize(widgetState, message.value);
+        return;
+      }
+
+      if (message.type === "exportMonitorWidgetData") {
+        await this.exportMonitorWidgetData(widgetState);
+      }
+    });
+
+    await this.startMonitorWidgetRows(widgetState);
+  }
+
+  addMonitorWidgetRow(widgetState, initialChannelName = "") {
+    const row = {
+      id: createNonce(),
+      channelName: String(initialChannelName || "").trim(),
+      connectionAttemptId: 0,
+      status: String(initialChannelName || "").trim() ? "connecting" : "idle",
+      lastError: "",
+    };
+    widgetState.channelRows.push(row);
+    this.updateMonitorWidgetPanelTitle(widgetState);
+    return row;
+  }
+
+  async updateMonitorWidgetChannel(widgetState, rowId, nextChannelName) {
+    const row = widgetState?.channelRows?.find((candidate) => candidate.id === rowId);
+    if (!row) {
+      return;
+    }
+
+    const normalizedChannelName = String(nextChannelName || "").trim();
+    if (row.channelName === normalizedChannelName) {
+      return;
+    }
+
+    await this.stopMonitorWidgetRowSession(widgetState, row);
+    row.channelName = normalizedChannelName;
+    row.lastError = "";
+    row.status = normalizedChannelName ? "connecting" : "idle";
+    this.updateMonitorWidgetPanelTitle(widgetState);
+    await this.postMonitorWidgetState(widgetState);
+
+    if (normalizedChannelName) {
+      await this.startMonitorWidgetRow(widgetState, row);
+    }
+  }
+
+  async updateMonitorWidgetBufferSize(widgetState, nextValue) {
+    const parsed = Number.parseInt(String(nextValue || "").trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      vscode.window.showErrorMessage("Buffer size must be a positive integer.");
+      await this.postMonitorWidgetState(widgetState);
+      return;
+    }
+
+    widgetState.bufferSize = parsed;
+    trimMonitorWidgetHistory(widgetState);
+    await this.postMonitorWidgetState(widgetState);
+  }
+
+  async exportMonitorWidgetData(widgetState) {
+    const targetUri = await vscode.window.showSaveDialog({
+      defaultUri: getDefaultMonitorWidgetSaveUri(widgetState),
+      filters: {
+        "Text": ["txt"],
+      },
+      saveLabel: "Export Monitor Data",
+    });
+    if (!targetUri) {
+      return;
+    }
+
+    const fileText = buildMonitorWidgetExportText(widgetState);
+    await vscode.workspace.fs.writeFile(targetUri, Buffer.from(fileText, "utf8"));
+    vscode.window.showInformationMessage(
+      `Exported monitor data to ${path.basename(targetUri.fsPath || targetUri.path || "monitor-data.txt")}.`,
+    );
+  }
+
+  async startMonitorWidgetRows(widgetState, runtimeContext) {
+    if (!widgetState) {
+      return;
+    }
+
+    const activeRows = widgetState.channelRows.filter((row) => String(row.channelName || "").trim());
+    if (!activeRows.length) {
+      await this.postMonitorWidgetState(widgetState);
+      return;
+    }
+
+    let activeRuntimeContext = runtimeContext;
+    try {
+      activeRuntimeContext = activeRuntimeContext || await this.ensureRuntimeContext();
+      widgetState.lastError = "";
+    } catch (error) {
+      widgetState.lastError = getErrorMessage(error);
+      await this.postMonitorWidgetState(widgetState);
+      return;
+    }
+
+    await Promise.allSettled(
+      activeRows.map((row) => this.startMonitorWidgetRow(widgetState, row, activeRuntimeContext)),
+    );
+    await this.postMonitorWidgetState(widgetState);
+  }
+
+  async startMonitorWidgetRow(widgetState, row, runtimeContext) {
+    if (!widgetState || !row) {
+      return;
+    }
+
+    const rawChannelName = String(row.channelName || "").trim();
+    if (!rawChannelName) {
+      return;
+    }
+
+    const attemptId = Number(row.connectionAttemptId || 0) + 1;
+    row.connectionAttemptId = attemptId;
+    row.status = "connecting";
+    row.lastError = "";
+    void this.postMonitorWidgetState(widgetState);
+
+    const definition = parseMonitorWidgetChannelReference(
+      rawChannelName,
+      this.getDefaultProtocol(),
+    );
+    let session = undefined;
+
+    try {
+      const activeRuntimeContext = runtimeContext || await this.ensureRuntimeContext();
+      if (!this.isCurrentMonitorWidgetAttempt(widgetState, row, attemptId)) {
+        return;
+      }
+
+      const channel = await activeRuntimeContext.createChannel(
+        definition.pvName,
+        definition.protocol,
+        this.getChannelCreationTimeoutSeconds(),
+      );
+      if (!this.isCurrentMonitorWidgetAttempt(widgetState, row, attemptId)) {
+        try {
+          await channel?.destroyHard?.();
+        } catch (error) {
+          // Ignore cleanup failures for superseded monitor widget channel attempts.
+        }
+        return;
+      }
+      if (!channel) {
+        throw new Error(
+          `Failed to create ${definition.protocol.toUpperCase()} channel for ${definition.pvName}.`,
+        );
+      }
+
+      session = {
+        rowId: row.id,
+        rawChannelName,
+        pvName: definition.pvName,
+        protocol: definition.protocol,
+        pvRequest: definition.pvRequest,
+        channel,
+        monitor: undefined,
+        caEnumChoices: undefined,
+        pvaEnumChoices: undefined,
+      };
+
+      channel.setDestroySoftCallback(() => {
+        if (!this.isCurrentMonitorWidgetAttempt(widgetState, row, attemptId)) {
+          return;
+        }
+        row.status = "disconnected";
+        void this.postMonitorWidgetState(widgetState);
+      });
+      channel.setDestroyHardCallback(() => {
+        if (!this.isCurrentMonitorWidgetAttempt(widgetState, row, attemptId)) {
+          return;
+        }
+        widgetState.sessionsByRowId.delete(row.id);
+        row.status = row.channelName ? "stopped" : "idle";
+        void this.postMonitorWidgetState(widgetState);
+      });
+
+      const monitor =
+        definition.protocol === "pva"
+          ? await channel.createMonitorPva(
+            this.getMonitorSubscribeTimeoutSeconds(),
+            definition.pvRequest,
+            (activeMonitor) => {
+              this.handleMonitorWidgetUpdate(widgetState, row, session, activeMonitor);
+            },
+          )
+          : (() => {
+            const caMonitorOptions = getCaEnumMonitorOptions(channel);
+            if (caMonitorOptions) {
+              return channel.createMonitor(
+                this.getMonitorSubscribeTimeoutSeconds(),
+                (activeMonitor) => {
+                  this.handleMonitorWidgetUpdate(widgetState, row, session, activeMonitor);
+                },
+                caMonitorOptions.dbrType,
+                caMonitorOptions.valueCount,
+              );
+            }
+
+            return channel.createMonitor(
+              this.getMonitorSubscribeTimeoutSeconds(),
+              (activeMonitor) => {
+                this.handleMonitorWidgetUpdate(widgetState, row, session, activeMonitor);
+              },
+            );
+          })();
+
+      if (!this.isCurrentMonitorWidgetAttempt(widgetState, row, attemptId)) {
+        await this.cleanupMonitorWidgetSession({
+          ...session,
+          monitor: await monitor,
+        });
+        return;
+      }
+
+      session.monitor = await monitor;
+      widgetState.sessionsByRowId.set(row.id, session);
+      row.status = getRuntimeMonitorState(session.monitor) === "SUBSCRIBED"
+        ? "subscribed"
+        : "connecting";
+      void this.postMonitorWidgetState(widgetState);
+    } catch (error) {
+      if (!this.isCurrentMonitorWidgetAttempt(widgetState, row, attemptId)) {
+        return;
+      }
+      row.status = "error";
+      row.lastError = getErrorMessage(error);
+      widgetState.sessionsByRowId.delete(row.id);
+      await this.cleanupMonitorWidgetSession(session);
+      void this.postMonitorWidgetState(widgetState);
+    }
+  }
+
+  handleMonitorWidgetUpdate(widgetState, row, session, monitor) {
+    if (!widgetState || !row || !session) {
+      return;
+    }
+
+    const activeSession = widgetState.sessionsByRowId.get(row.id);
+    if (activeSession && activeSession !== session) {
+      return;
+    }
+
+    if (!activeSession && session.monitor) {
+      widgetState.sessionsByRowId.set(row.id, session);
+    }
+
+    row.status = "subscribed";
+    row.lastError = "";
+
+    const runtimeLibrary = this.requireRuntimeLibrarySafe();
+    const formattedLine = buildMonitorWidgetHistoryLine(session, monitor, runtimeLibrary);
+    if (formattedLine) {
+      widgetState.historyLines.push(formattedLine);
+      trimMonitorWidgetHistory(widgetState);
+    }
+
+    void this.postMonitorWidgetState(widgetState);
+  }
+
+  async stopMonitorWidgetRowSession(widgetState, row) {
+    if (!widgetState || !row) {
+      return;
+    }
+
+    row.connectionAttemptId = Number(row.connectionAttemptId || 0) + 1;
+    const session = widgetState.sessionsByRowId.get(row.id);
+    widgetState.sessionsByRowId.delete(row.id);
+    await this.cleanupMonitorWidgetSession(session);
+    row.status = row.channelName ? "stopped" : "idle";
+  }
+
+  stopMonitorWidgetSessions(widgetState) {
+    if (!widgetState) {
+      return;
+    }
+
+    for (const row of widgetState.channelRows || []) {
+      row.connectionAttemptId = Number(row.connectionAttemptId || 0) + 1;
+      row.status = row.channelName ? "stopped" : "idle";
+      row.lastError = "";
+    }
+
+    for (const session of widgetState.sessionsByRowId.values()) {
+      try {
+        session.monitor?.destroyHard?.();
+      } catch (error) {
+        // Ignore best-effort monitor cleanup failures while stopping the context.
+      }
+      try {
+        session.channel?.destroyHard?.();
+      } catch (error) {
+        // Ignore best-effort channel cleanup failures while stopping the context.
+      }
+    }
+
+    widgetState.sessionsByRowId.clear();
+  }
+
+  async restartMonitorWidgets(runtimeContext) {
+    await Promise.allSettled(
+      [...this.monitorWidgets.values()].map((widgetState) =>
+        this.restartMonitorWidgetSessions(widgetState, runtimeContext)),
+    );
+  }
+
+  async restartMonitorWidgetSessions(widgetState, runtimeContext) {
+    this.stopMonitorWidgetSessions(widgetState);
+    await this.startMonitorWidgetRows(widgetState, runtimeContext);
+  }
+
+  async disposeMonitorWidget(widgetState) {
+    if (!widgetState) {
+      return;
+    }
+    for (const row of widgetState.channelRows || []) {
+      row.connectionAttemptId = Number(row.connectionAttemptId || 0) + 1;
+    }
+    const sessions = [...widgetState.sessionsByRowId.values()];
+    widgetState.sessionsByRowId.clear();
+    await Promise.allSettled(sessions.map((session) => this.cleanupMonitorWidgetSession(session)));
+  }
+
+  async cleanupMonitorWidgetSession(session) {
+    if (!session) {
+      return;
+    }
+
+    try {
+      session.monitor?.destroyHard?.();
+    } catch (error) {
+      // Ignore monitor teardown errors while cleaning up widget sessions.
+    }
+
+    try {
+      await session.channel?.destroyHard?.();
+    } catch (error) {
+      // Ignore channel teardown errors while cleaning up widget sessions.
+    }
+  }
+
+  isCurrentMonitorWidgetAttempt(widgetState, row, attemptId) {
+    return (
+      Boolean(widgetState) &&
+      this.monitorWidgets.get(widgetState.sourceUri) === widgetState &&
+      Boolean(row) &&
+      widgetState.channelRows.includes(row) &&
+      Number(row.connectionAttemptId || 0) === Number(attemptId)
+    );
+  }
+
+  updateMonitorWidgetPanelTitle(widgetState) {
+    if (!widgetState?.panel) {
+      return;
+    }
+
+    widgetState.panel.title = getMonitorWidgetPanelTitle(
+      widgetState.channelRows.map((row) => row.channelName),
+    );
+  }
+
+  async savePvlistWidget(widgetState) {
+    const sourceModel = widgetState?.sourceModel;
+    if (!sourceModel) {
+      return;
+    }
+
+    const fileText = buildPvlistWidgetFileText(sourceModel, widgetState.macroValues);
+    const currentUriText = sourceModel.sourceDocumentUri
+      ? String(sourceModel.sourceDocumentUri)
+      : "";
+    let targetUri =
+      sourceModel.sourceKind === "pvlist" && currentUriText
+        ? safeParseUri(currentUriText)
+        : undefined;
+
+    if (!targetUri) {
+      targetUri = await vscode.window.showSaveDialog({
+        defaultUri: getDefaultPvlistWidgetSaveUri(sourceModel),
+        filters: {
+          "PV List": ["pvlist"],
+        },
+        saveLabel: "Save PvList",
+      });
+    }
+
+    if (!targetUri) {
+      return;
+    }
+
+    await vscode.workspace.fs.writeFile(targetUri, Buffer.from(fileText, "utf8"));
+    sourceModel.sourceDocumentUri = targetUri.toString();
+    sourceModel.sourceLabel = path.basename(targetUri.fsPath || targetUri.path || "EPICS PvList");
+    if (widgetState.panel) {
+      widgetState.panel.title = `PvList: ${sourceModel.sourceLabel}`;
+    }
+    await this.postPvlistWidgetState(widgetState);
+    vscode.window.showInformationMessage(
+      `Saved PvList to ${path.basename(targetUri.fsPath || targetUri.path || "pvlist")}.`,
+    );
+  }
+
+  async addPvlistWidgetChannels(widgetState, text) {
+    const sourceModel = widgetState?.sourceModel;
+    if (!sourceModel) {
+      return;
+    }
+
+    const nextEntries = parseAddedPvlistChannelLines(text);
+    if (!nextEntries.length) {
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    const rawPvNames = Array.isArray(sourceModel.rawPvNames) ? sourceModel.rawPvNames : [];
+    const seenPvNames = new Set(rawPvNames.map((entry) => String(entry || "").trim()).filter(Boolean));
+    let didChange = false;
+
+    for (const channelName of nextEntries) {
+      if (seenPvNames.has(channelName)) {
+        continue;
+      }
+      seenPvNames.add(channelName);
+      rawPvNames.push(channelName);
+      didChange = true;
+      for (const macroName of extractOrderedEpicsMacroNames([channelName])) {
+        if (!Array.isArray(sourceModel.macroNames)) {
+          sourceModel.macroNames = [];
+        }
+        if (!sourceModel.macroNames.includes(macroName)) {
+          sourceModel.macroNames.push(macroName);
+          widgetState.macroValues.set(macroName, widgetState.macroValues.get(macroName) || "");
+        }
+      }
+    }
+
+    if (!didChange) {
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    await this.applyPvlistWidgetMonitoring(widgetState);
+  }
+
+  async updatePvlistWidgetMacro(widgetState, macroName, macroValue) {
+    if (!widgetState?.macroValues || !macroName) {
+      return;
+    }
+
+    const normalizedMacroName = String(macroName);
+    const normalizedMacroValue = String(macroValue ?? "");
+    if ((widgetState.macroValues.get(normalizedMacroName) || "") === normalizedMacroValue) {
+      return;
+    }
+
+    widgetState.macroValues.set(normalizedMacroName, normalizedMacroValue);
+    await this.applyPvlistWidgetMonitoring(widgetState);
+  }
+
+  async applyPvlistWidgetMonitoring(widgetState) {
+    if (!widgetState?.sourceUri) {
+      return;
+    }
+
+    const plan = buildPvlistWidgetMonitorPlan(
+      widgetState.sourceModel,
+      widgetState.macroValues,
+      this.getDefaultProtocol(),
+    );
+    widgetState.rows = plan.rows;
+
+    const queuedEntries = await this.syncPvlistWidgetMonitorEntries(widgetState, plan);
+
+    if (queuedEntries.length) {
+      try {
+        const runtimeContext = await this.ensureRuntimeContext();
+        void this.connectEntriesInParallel(queuedEntries, runtimeContext);
+      } catch (error) {
+        if (!isContextInitializationCancelledError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    await this.postPvlistWidgetState(widgetState);
+  }
+
+  async syncPvlistWidgetMonitorEntries(widgetState, plan) {
+    const sourceUri = widgetState?.sourceUri;
+    if (!sourceUri) {
+      return [];
+    }
+
+    const desiredDefinitions = (plan?.definitions || []).map((definition) => ({
+      ...definition,
+      sourceKind: "pvlistWidget",
+      sourceUri,
+      sourceLabel: widgetState.sourceModel?.sourceLabel || "EPICS PvList",
+      hidden: true,
+    }));
+    const desiredKeys = new Set(desiredDefinitions.map((definition) => createMonitorKey(definition)));
+    const existingEntries = this.monitorEntries.filter(
+      (entry) => entry.sourceUri === sourceUri && entry.sourceKind === "pvlistWidget",
+    );
+    const removableEntries = existingEntries.filter((entry) => !desiredKeys.has(entry.key));
+
+    if (removableEntries.length) {
+      await this.removeSpecificMonitorEntries(removableEntries);
+    }
+
+    return desiredDefinitions
+      .map((definition) => this.queueMonitorEntry(definition, { hidden: true }))
+      .filter((entry) => Boolean(entry) && !entry.channel && !entry.monitor);
   }
 
   setHoverRefreshTimer(timer) {
@@ -304,15 +1225,17 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
-    if (!isStrictMonitorDocument(document)) {
+    if (!isStrictMonitorDocument(document) && !isProbeDocument(document)) {
       this.monitorDiagnostics.delete(document.uri);
       return;
     }
 
-    const analysis = analyzeStrictMonitorDocument(
-      document,
-      this.getDefaultProtocol(),
-    );
+    const analysis = isProbeDocument(document)
+      ? analyzeProbeDocument(document)
+      : analyzeStrictMonitorDocument(
+        document,
+        this.getDefaultProtocol(),
+      );
     const diagnostics = analysis.diagnostics.map((diagnostic) =>
       createMonitorDiagnostic(diagnostic),
     );
@@ -328,7 +1251,11 @@ class EpicsRuntimeMonitorController {
   }
 
   refreshVisibleMonitorHoverDecorations() {
-    if (!this.hoverDecorationType && !this.databaseTocValueDecorationType) {
+    if (
+      !this.hoverDecorationType &&
+      !this.databaseTocValueDecorationType &&
+      !this.probeDecorationTypes.length
+    ) {
       return;
     }
 
@@ -337,13 +1264,23 @@ class EpicsRuntimeMonitorController {
     for (const editor of vscode.window.visibleTextEditors) {
       this.refreshMonitorHoverDecorationsForEditor(editor);
       this.refreshDatabaseTocValueDecorationsForEditor(editor);
+      this.refreshProbeDecorationsForEditor(editor);
     }
+    this.refreshProbePanels();
   }
 
   reconcileMonitorStates() {
     for (const entry of this.monitorEntries) {
+      if (entry.sourceKind === "probe") {
+        continue;
+      }
+
       const channelState = getRuntimeChannelState(entry.channel);
       const monitorState = getRuntimeMonitorState(entry.monitor);
+      const hasLiveValue =
+        entry.status === "subscribed" &&
+        Boolean(entry.monitor) &&
+        entry.lastUpdated instanceof Date;
       let didChange = false;
       let shouldRecover = false;
 
@@ -351,6 +1288,7 @@ class EpicsRuntimeMonitorController {
         if (entry.status !== "subscribed" || entry.lastError) {
           entry.status = "subscribed";
           entry.lastError = undefined;
+          entry.hasEverSubscribed = true;
           didChange = true;
         }
 
@@ -367,7 +1305,7 @@ class EpicsRuntimeMonitorController {
         channelState === "CREATED" &&
         (!entry.monitor || monitorState === "FAILED" || monitorState === "DESTROYED")
       ) {
-        if (entry.status !== "connecting" || entry.lastError) {
+        if (!hasLiveValue && (entry.status !== "connecting" || entry.lastError)) {
           entry.status = "connecting";
           entry.lastError = undefined;
           didChange = true;
@@ -379,7 +1317,7 @@ class EpicsRuntimeMonitorController {
         channelState === "RESOLVED" ||
         monitorState === "SUBSCRIBING"
       ) {
-        if (entry.status !== "connecting" || entry.lastError) {
+        if (!hasLiveValue && (entry.status !== "connecting" || entry.lastError)) {
           entry.status = "connecting";
           entry.lastError = undefined;
           didChange = true;
@@ -414,7 +1352,10 @@ class EpicsRuntimeMonitorController {
       if (didChange) {
         this.refresh(entry);
       }
-      if (shouldRecover) {
+      if (
+        shouldRecover &&
+        (entry.sourceKind !== "probe" || !entry.hasEverSubscribed)
+      ) {
         void this.tryRecoverEntry(entry);
       }
     }
@@ -523,6 +1464,30 @@ class EpicsRuntimeMonitorController {
     for (const editor of vscode.window.visibleTextEditors) {
       if (editor.document.uri.toString() === document.uri.toString()) {
         editor.setDecorations(this.databaseTocValueDecorationType, []);
+      }
+    }
+  }
+
+  refreshProbeDecorationsForDocument(document) {
+    if (!isProbeDocument(document) || !document?.uri) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.toString() === document.uri.toString()) {
+        this.refreshProbeDecorationsForEditor(editor);
+      }
+    }
+  }
+
+  clearProbeDecorationsForDocument(document) {
+    if (!this.probeDecorationTypes.length || !document?.uri) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.toString() === document.uri.toString()) {
+        this.clearProbeDecorationsForEditor(editor);
       }
     }
   }
@@ -646,6 +1611,75 @@ class EpicsRuntimeMonitorController {
     }
 
     editor.setDecorations(this.databaseTocValueDecorationType, decorationOptions);
+  }
+
+  refreshProbeDecorationsForEditor(editor) {
+    if (!this.probeDecorationTypes.length || !editor) {
+      return;
+    }
+
+    const document = editor.document;
+    if (!isProbeDocument(document) || !document?.uri) {
+      this.clearProbeDecorationsForEditor(editor);
+      return;
+    }
+
+    const analysis = analyzeProbeDocument(document);
+    if (analysis.diagnostics?.length || !analysis.recordName) {
+      this.clearProbeDecorationsForEditor(editor);
+      return;
+    }
+
+    const session = this.probeSessions.get(document.uri.toString());
+    if (!session || this.contextStatus === "stopped") {
+      this.clearProbeDecorationsForEditor(editor);
+      return;
+    }
+
+    const state = this.buildProbePanelState(session);
+    const anchorPosition = buildProbeOverlayAnchorPosition(document, analysis);
+    if (!anchorPosition) {
+      this.clearProbeDecorationsForEditor(editor);
+      return;
+    }
+
+    const overlayLines = buildProbeOverlayLines(state);
+    const range = new vscode.Range(anchorPosition, anchorPosition);
+    const hoverMessage = new vscode.MarkdownString(
+      buildProbeOverlayHoverMarkdown(state),
+    );
+
+    this.probeDecorationTypes.forEach((decorationType, index) => {
+      const lineText = overlayLines[index];
+      if (!lineText) {
+        editor.setDecorations(decorationType, []);
+        return;
+      }
+
+      editor.setDecorations(decorationType, [
+        {
+          range,
+          hoverMessage,
+          renderOptions: {
+            after: {
+              contentText: lineText,
+              margin: "0 0 0 1ch",
+              textDecoration: "none; display: block;",
+            },
+          },
+        },
+      ]);
+    });
+  }
+
+  clearProbeDecorationsForEditor(editor) {
+    if (!editor) {
+      return;
+    }
+
+    for (const decorationType of this.probeDecorationTypes) {
+      editor.setDecorations(decorationType, []);
+    }
   }
 
   findDocumentMonitorEntry(sourceUri, reference) {
@@ -774,6 +1808,7 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    this.disposeProbeSession(document.uri.toString());
     await this.removeEntriesBySourceUri(document.uri.toString());
     this.handleActiveEditorChange(vscode.window.activeTextEditor);
   }
@@ -785,6 +1820,11 @@ class EpicsRuntimeMonitorController {
     }
 
     if (!this.hasEntriesForSourceUri(document.uri.toString())) {
+      return;
+    }
+
+    if (isProbeDocument(document)) {
+      await this.startProbeDocumentRuntime(document);
       return;
     }
 
@@ -932,6 +1972,7 @@ class EpicsRuntimeMonitorController {
           const runtimeContext = await this.ensureRuntimeContext();
           this.handleActiveEditorChange(vscode.window.activeTextEditor);
           void this.connectEntriesInParallel(this.monitorEntries, runtimeContext);
+          await this.restartMonitorWidgets(runtimeContext);
         } catch (error) {
           if (!isContextInitializationCancelledError(error)) {
             throw error;
@@ -952,7 +1993,7 @@ class EpicsRuntimeMonitorController {
     const document = editor?.document;
     if (!isRuntimeDocument(document)) {
       vscode.window.showWarningMessage(
-        "Open a database, template, .monitor, or plain text file to start file runtime monitoring.",
+        "Open a database, template, .pvlist, .probe, or plain text file to start file runtime monitoring.",
       );
       return;
     }
@@ -963,6 +2004,12 @@ class EpicsRuntimeMonitorController {
       this.runtimeWorkspaceFolder = workspaceFolder;
     }
 
+    if (isProbeDocument(document)) {
+      await this.startProbeDocumentRuntime(document);
+      this.handleActiveEditorChange(vscode.window.activeTextEditor);
+      return;
+    }
+
     const analysis = analyzeRuntimeDocument(
       document,
       this.getDefaultProtocol(),
@@ -971,7 +2018,7 @@ class EpicsRuntimeMonitorController {
     const sourceLabel = getRuntimeDocumentLabel(document);
     if (analysis.diagnostics?.length) {
       vscode.window.showErrorMessage(
-        `Cannot start EPICS runtime for ${sourceLabel} until the .monitor file errors are fixed.`,
+        `Cannot start EPICS runtime for ${sourceLabel} until the file errors are fixed.`,
       );
       return;
     }
@@ -1029,8 +2076,550 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    if (isProbeDocument(document)) {
+      this.disposeProbeSession(document.uri.toString());
+    }
     await this.removeEntriesBySourceUri(document.uri.toString());
     this.handleActiveEditorChange(vscode.window.activeTextEditor);
+  }
+
+  async startProbeDocumentRuntime(document) {
+    const sourceUri = document?.uri?.toString();
+    if (!sourceUri) {
+      return;
+    }
+
+    const analysis = analyzeProbeDocument(document);
+    const sourceLabel = getRuntimeDocumentLabel(document);
+    if (analysis.diagnostics?.length) {
+      vscode.window.showErrorMessage(
+        `Cannot start EPICS runtime for ${sourceLabel} until the probe file errors are fixed.`,
+      );
+      return;
+    }
+    if (!analysis.recordName) {
+      vscode.window.showWarningMessage(
+        `No EPICS probe target was found in ${sourceLabel}.`,
+      );
+      return;
+    }
+
+    await this.startProbeRuntimeSession({
+      sourceUri,
+      sourceLabel,
+      recordName: analysis.recordName,
+      progressTitle: `Starting EPICS probe for ${sourceLabel}`,
+      showProgress: true,
+    });
+    this.refreshProbePanels();
+  }
+
+  async startProbeRuntimeSession({
+    sourceUri,
+    sourceLabel,
+    recordName,
+    progressTitle,
+    showProgress = true,
+  }) {
+    if (!sourceUri || !recordName) {
+      return undefined;
+    }
+
+    this.probeSessions.delete(sourceUri);
+    await this.removeEntriesBySourceUri(sourceUri);
+
+    const session = {
+      sourceUri,
+      sourceLabel,
+      recordName,
+      recordType: undefined,
+      fieldEntriesStarted: false,
+      fieldEntryStartInProgress: false,
+    };
+    this.probeSessions.set(sourceUri, session);
+
+    const bootstrapDefinitions = [
+      {
+        pvName: recordName,
+        protocol: this.getDefaultProtocol(),
+        pvRequest: "",
+        hidden: true,
+        sourceKind: "probe",
+        probeRole: "main",
+      },
+      {
+        pvName: `${recordName}.RTYP`,
+        protocol: this.getDefaultProtocol(),
+        pvRequest: "",
+        hidden: true,
+        sourceKind: "probe",
+        probeRole: "recordType",
+        probeFieldName: "RTYP",
+      },
+    ];
+
+    const startWork = async () => {
+      const queuedEntries = bootstrapDefinitions
+        .map((definition) =>
+          this.queueMonitorEntry(
+            {
+              ...definition,
+              sourceUri,
+              sourceLabel,
+              recordType: session.recordType,
+            },
+            {
+              hidden: true,
+            },
+          ),
+        )
+        .filter(Boolean);
+      try {
+        const runtimeContext = await this.ensureRuntimeContext();
+        this.handleActiveEditorChange(vscode.window.activeTextEditor);
+        void this.connectEntriesInParallel(queuedEntries, runtimeContext);
+      } catch (error) {
+        if (!isContextInitializationCancelledError(error)) {
+          throw error;
+        }
+      }
+    };
+
+    if (showProgress) {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: progressTitle || `Starting EPICS probe for ${sourceLabel}`,
+        },
+        startWork,
+      );
+    } else {
+      await startWork();
+    }
+
+    return session;
+  }
+
+  async stopProbeDocumentRuntime(document) {
+    const sourceUri = document?.uri?.toString();
+    if (!sourceUri) {
+      return;
+    }
+
+    this.disposeProbeSession(sourceUri);
+    await this.removeEntriesBySourceUri(sourceUri);
+    this.refreshProbePanels();
+  }
+
+  disposeProbeSession(sourceUri) {
+    if (!sourceUri) {
+      return;
+    }
+    const session = this.probeSessions.get(sourceUri);
+    if (!session) {
+      return;
+    }
+    this.probeSessions.delete(sourceUri);
+  }
+
+  async ensureProbeFieldEntries(session) {
+    if (!session || session.fieldEntriesStarted || session.fieldEntryStartInProgress) {
+      return;
+    }
+    const recordType = this.getProbeResolvedRecordType(session);
+    if (!recordType) {
+      return;
+    }
+    session.recordType = recordType;
+    session.fieldEntryStartInProgress = true;
+    try {
+      const fieldNames = (this.getFieldNamesForRecordType?.(recordType) || []).filter(
+        (fieldName) => String(fieldName || "").toUpperCase() !== "RTYP",
+      );
+      const definitions = fieldNames.map((fieldName) => ({
+        pvName: `${session.recordName}.${fieldName}`,
+        protocol: this.getDefaultProtocol(),
+        pvRequest: "",
+        hidden: true,
+        sourceKind: "probe",
+        probeRole: "field",
+        probeFieldName: fieldName,
+        recordType,
+        sourceUri: session.sourceUri,
+        sourceLabel: session.sourceLabel,
+      }));
+      const queuedEntries = definitions
+        .map((definition) => this.queueMonitorEntry(definition, { hidden: true }))
+        .filter(Boolean);
+      session.fieldEntriesStarted = true;
+      if (queuedEntries.length) {
+        const runtimeContext = await this.ensureRuntimeContext();
+        void this.connectEntriesInBatches(queuedEntries, runtimeContext);
+      }
+    } finally {
+      session.fieldEntryStartInProgress = false;
+    }
+  }
+
+  getProbeResolvedRecordType(session) {
+    if (session?.recordType) {
+      return session.recordType;
+    }
+    const typeEntry = this.monitorEntries.find(
+      (entry) =>
+        entry.sourceUri === session?.sourceUri &&
+        entry.sourceKind === "probe" &&
+        entry.probeRole === "recordType",
+    );
+    const recordType = String(typeEntry?.valueText || "").trim();
+    return recordType || undefined;
+  }
+
+  refreshProbePanels() {
+    for (const session of this.probeSessions.values()) {
+      if (!session.fieldEntriesStarted && this.getProbeResolvedRecordType(session)) {
+        void this.ensureProbeFieldEntries(session);
+      }
+    }
+    this.refreshVisibleProbeDecorations();
+    this.refreshProbeWebviews();
+    this.refreshProbeWidgets();
+  }
+
+  refreshProbeWebviews() {
+    for (const probeWebviewState of this.probeWebviews.values()) {
+      for (const panel of probeWebviewState.panels) {
+        void this.postProbeWebviewState(probeWebviewState.document, panel);
+      }
+    }
+  }
+
+  refreshProbeWidgets() {
+    for (const widgetState of this.probeWidgets.values()) {
+      void this.postProbeWidgetState(widgetState);
+    }
+  }
+
+  refreshPvlistWidgets() {
+    for (const widgetState of this.pvlistWidgets.values()) {
+      void this.postPvlistWidgetState(widgetState);
+    }
+  }
+
+  refreshMonitorWidgets() {
+    for (const widgetState of this.monitorWidgets.values()) {
+      void this.postMonitorWidgetState(widgetState);
+    }
+  }
+
+  refreshVisibleProbeDecorations() {
+    if (!this.probeDecorationTypes.length) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      this.refreshProbeDecorationsForEditor(editor);
+    }
+  }
+
+  buildProbePanelState(session) {
+    const mainEntry = this.monitorEntries.find(
+      (entry) =>
+        entry.sourceUri === session.sourceUri &&
+        entry.sourceKind === "probe" &&
+        entry.probeRole === "main",
+    );
+    const recordType = this.getProbeResolvedRecordType(session);
+    const fieldEntries = this.monitorEntries.filter(
+      (entry) =>
+        entry.sourceUri === session.sourceUri &&
+        entry.sourceKind === "probe" &&
+        entry.probeRole === "field" &&
+        entry.hasEverSubscribed,
+    );
+    const orderedFieldNames = recordType
+      ? (this.getFieldNamesForRecordType?.(recordType) || []).map((fieldName) =>
+        String(fieldName || "").toUpperCase(),
+      )
+      : [];
+    const fieldOrder = new Map(
+      orderedFieldNames.map((fieldName, index) => [fieldName, index]),
+    );
+    fieldEntries.sort((left, right) => {
+      const leftOrder = fieldOrder.get(String(left.probeFieldName || "").toUpperCase());
+      const rightOrder = fieldOrder.get(String(right.probeFieldName || "").toUpperCase());
+      if (leftOrder !== undefined && rightOrder !== undefined) {
+        return leftOrder - rightOrder;
+      }
+      if (leftOrder !== undefined) {
+        return -1;
+      }
+      if (rightOrder !== undefined) {
+        return 1;
+      }
+      return String(left.probeFieldName || "").localeCompare(
+        String(right.probeFieldName || ""),
+      );
+    });
+    return {
+      recordName: session.recordName,
+      recordType: recordType || "(not loaded)",
+      sourceLabel: session.sourceLabel,
+      runtimeStatus: this.contextStatus,
+      value: getProbeEntryDisplayValue(mainEntry),
+      valueKey: mainEntry?.key,
+      valueCanPut: this.canPutRuntimeValue(mainEntry),
+      lastUpdated: mainEntry?.lastUpdated ? mainEntry.lastUpdated.toLocaleTimeString() : "Waiting for data",
+      access: getProbeAccessLabel(mainEntry, this.requireRuntimeLibrarySafe()),
+      fieldStatusText: !recordType
+        ? "Waiting for the record type before loading fields..."
+        : session.fieldEntryStartInProgress || !session.fieldEntriesStarted
+          ? "Connecting field channels..."
+          : "No connectable fields have reported data yet.",
+      fields: fieldEntries.map((entry) => ({
+        key: entry.key,
+        fieldName: entry.probeFieldName,
+        pvName: entry.pvName,
+        value: getProbeEntryDisplayValue(entry),
+        updated: entry.lastUpdated ? entry.lastUpdated.toLocaleTimeString() : "",
+        canPut: this.canPutRuntimeValue(entry),
+      })),
+    };
+  }
+
+  buildProbeWebviewState(document) {
+    const sourceUri = document?.uri?.toString();
+    const analysis = analyzeProbeDocument(document);
+    const session = sourceUri ? this.probeSessions.get(sourceUri) : undefined;
+    const panelState = session ? this.buildProbePanelState(session) : undefined;
+
+    let message = "";
+    if (analysis.diagnostics?.length) {
+      message = analysis.diagnostics[0]?.message || "";
+    } else if (!analysis.recordName) {
+      message = "No EPICS probe target was found in this file.";
+    } else if (this.contextStatus === "stopped") {
+      message = "Start the probe to create the EPICS context and connect channels.";
+    } else if (!panelState) {
+      message = "Probe is starting...";
+    }
+
+    return {
+      sourceLabel: getRuntimeDocumentLabel(document),
+      recordName: analysis.recordName || "",
+      contextStatus: this.contextStatus,
+      contextError: this.contextError || "",
+      canStart: !analysis.diagnostics?.length && Boolean(analysis.recordName),
+      canStop: Boolean(session),
+      message,
+      state: panelState || undefined,
+      diagnostics: analysis.diagnostics || [],
+    };
+  }
+
+  async postProbeWebviewState(document, webviewPanel) {
+    if (!document?.uri || !webviewPanel?.webview) {
+      return;
+    }
+
+    const payload = this.buildProbeWebviewState(document);
+    await webviewPanel.webview.postMessage({
+      type: "probeRuntimeState",
+      state: payload,
+    });
+  }
+
+  buildProbeWidgetWebviewState(widgetState) {
+    const sourceUri = widgetState?.sourceUri;
+    const session = sourceUri ? this.probeSessions.get(sourceUri) : undefined;
+    const panelState = session ? this.buildProbePanelState(session) : undefined;
+    const recordName = String(widgetState?.recordName || "").trim();
+
+    let message = "";
+    if (!recordName) {
+      message = "Enter a channel name and press Enter to start the probe.";
+    } else if (this.contextStatus === "stopped" && !session) {
+      message = "Press Enter after changing the channel name to start the probe.";
+    } else if (!panelState) {
+      message = "Probe is starting...";
+    }
+
+    return {
+      sourceLabel: widgetState?.panel?.title || "EPICS Probe",
+      recordName,
+      contextStatus: this.contextStatus,
+      contextError: this.contextError || "",
+      canProcess: Boolean(session && panelState?.recordName),
+      message,
+      state: panelState || undefined,
+    };
+  }
+
+  buildPvlistWidgetWebviewState(widgetState) {
+    const sourceUri = widgetState?.sourceUri;
+    const entries = this.monitorEntries.filter(
+      (entry) => entry.sourceUri === sourceUri && entry.sourceKind === "pvlistWidget",
+    );
+    const entryByPvName = new Map(entries.map((entry) => [entry.pvName, entry]));
+    const macros = (widgetState?.sourceModel?.macroNames || []).map((macroName) => ({
+      name: macroName,
+      value: widgetState?.macroValues?.get(macroName) || "",
+    }));
+    const rows = (widgetState?.rows || []).map((row) => {
+      const entry = row?.pvName ? entryByPvName.get(row.pvName) : undefined;
+      return {
+        id: row.id,
+        channelName: row.channelName,
+        key: entry?.key,
+        canPut: this.canPutRuntimeValue(entry),
+        value: row.valueText || getProbeEntryDisplayValue(entry),
+      };
+    });
+
+    let message = "";
+    if ((widgetState?.sourceModel?.diagnostics || []).length > 0) {
+      message = widgetState.sourceModel.diagnostics[0]?.message || "";
+    } else if (!rows.length) {
+      message = "No resolvable PV list entries are available with the current macro values.";
+    }
+
+    return {
+      sourceLabel: widgetState?.sourceModel?.sourceLabel || "EPICS PvList",
+      contextStatus: this.contextStatus,
+      contextError: this.contextError || "",
+      macros,
+      rows,
+      message,
+    };
+  }
+
+  buildMonitorWidgetWebviewState(widgetState) {
+    const rows = (widgetState?.channelRows || []).map((row) => ({
+      id: row.id,
+      channelName: row.channelName,
+      statusText: row.lastError
+        ? `(${row.lastError})`
+        : row.status === "connecting"
+          ? "(connecting...)"
+          : row.status === "disconnected"
+            ? "(disconnected)"
+            : row.status === "stopped"
+              ? "(stopped)"
+              : row.status === "subscribed"
+                ? ""
+                : "",
+    }));
+
+    let message = "";
+    if (widgetState?.lastError) {
+      message = widgetState.lastError;
+    } else if (this.contextError) {
+      message = this.contextError;
+    } else if (this.contextStatus === "stopped" && rows.some((row) => String(row.channelName || "").trim())) {
+      message = "Runtime context is stopped.";
+    } else if (!rows.some((row) => String(row.channelName || "").trim())) {
+      message = "Add channels to start monitoring.";
+    } else if (!widgetState?.historyLines?.length) {
+      message = "Waiting for monitor data.";
+    }
+
+    return {
+      sourceLabel: widgetState?.sourceLabel || "EPICS Monitor",
+      contextStatus: this.contextStatus,
+      contextError: this.contextError || "",
+      bufferSize: widgetState?.bufferSize || DEFAULT_MONITOR_WIDGET_BUFFER_SIZE,
+      rows,
+      historyText: (widgetState?.historyLines || []).join("\n"),
+      message,
+    };
+  }
+
+  async postProbeWidgetState(widgetState) {
+    if (!widgetState?.panel?.webview) {
+      return;
+    }
+
+    const payload = this.buildProbeWidgetWebviewState(widgetState);
+    await widgetState.panel.webview.postMessage({
+      type: "probeWidgetState",
+      state: payload,
+    });
+  }
+
+  async postPvlistWidgetState(widgetState) {
+    if (!widgetState?.panel?.webview) {
+      return;
+    }
+
+    const payload = this.buildPvlistWidgetWebviewState(widgetState);
+    await widgetState.panel.webview.postMessage({
+      type: "pvlistWidgetState",
+      state: payload,
+    });
+  }
+
+  async postMonitorWidgetState(widgetState) {
+    if (!widgetState?.panel?.webview) {
+      return;
+    }
+
+    const payload = this.buildMonitorWidgetWebviewState(widgetState);
+    await widgetState.panel.webview.postMessage({
+      type: "monitorWidgetState",
+      state: payload,
+    });
+  }
+
+  async processProbeWidget(widgetState) {
+    const recordName = String(widgetState?.recordName || "").trim();
+    if (!recordName) {
+      return;
+    }
+
+    let channel;
+    try {
+      const runtimeContext = await this.ensureRuntimeContext();
+      const runtimeLibrary = this.requireRuntimeLibrary();
+      const protocol = this.getDefaultProtocol();
+      channel = await runtimeContext.createChannel(
+        `${recordName}.PROC`,
+        protocol,
+        this.getChannelCreationTimeoutSeconds(),
+      );
+      if (!channel) {
+        throw new Error(`Failed to create ${protocol.toUpperCase()} channel for ${recordName}.PROC.`);
+      }
+      const result = protocol === "pva"
+        ? await channel.putPva("value", [1])
+        : await channel.put(1, undefined, true);
+      if (!isSuccessfulRuntimePutResult(result, runtimeLibrary, protocol)) {
+        throw new Error(
+          getRuntimePutFailureMessage(result, runtimeLibrary, protocol),
+        );
+      }
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to process ${recordName}: ${getErrorMessage(error)}`,
+      );
+    } finally {
+      try {
+        await channel?.destroyHard?.();
+      } catch (error) {
+        try {
+          await channel?.destroy?.();
+        } catch (destroyError) {
+          // Ignore best-effort cleanup failures for ad-hoc PROC puts.
+        }
+      }
+    }
+  }
+
+  requireRuntimeLibrarySafe() {
+    try {
+      return this.requireRuntimeLibrary();
+    } catch (error) {
+      return undefined;
+    }
   }
 
   async openProjectRuntimeConfiguration() {
@@ -1146,6 +2735,25 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    await this.putRuntimeValueFromInput(entry, input, putSupport);
+  }
+
+  async putRuntimeValueFromInput(target, input, resolvedPutSupport) {
+    const entry = this.resolveRuntimePutEntry(target);
+    if (!entry) {
+      return;
+    }
+
+    const putSupport = resolvedPutSupport || this.getRuntimePutSupport(entry);
+    if (!putSupport.canPut) {
+      vscode.window.showWarningMessage(putSupport.reason);
+      return;
+    }
+
+    if (!this.activePutRequestKeys.has(entry.key)) {
+      this.activePutRequestKeys.add(entry.key);
+    }
+
     const parsed = parseRuntimePutInput(input, putSupport);
     if (parsed.error) {
       this.activePutRequestKeys.delete(entry.key);
@@ -1200,6 +2808,10 @@ class EpicsRuntimeMonitorController {
       pvName: definition.pvName,
       protocol: definition.protocol,
       pvRequest: definition.pvRequest || "",
+      hidden: Boolean(options.hidden || definition.hidden),
+      sourceKind: definition.sourceKind,
+      probeRole: definition.probeRole,
+      probeFieldName: definition.probeFieldName,
       tocRecordName: definition.tocRecordName,
       recordType: definition.recordType,
       sourceUri: definition.sourceUri,
@@ -1213,6 +2825,8 @@ class EpicsRuntimeMonitorController {
       serverAddress: undefined,
       connectionAttemptId: 0,
       recoveryInProgress: false,
+      softDisconnectTimer: undefined,
+      hasEverSubscribed: false,
       caEnumChoices: undefined,
       pvaEnumChoices: undefined,
     };
@@ -1227,6 +2841,22 @@ class EpicsRuntimeMonitorController {
     );
   }
 
+  async connectEntriesInBatches(
+    entries,
+    runtimeContext,
+    batchSize = PROBE_FIELD_CONNECT_BATCH_SIZE,
+  ) {
+    const normalizedBatchSize =
+      Math.max(1, Number(batchSize) || PROBE_FIELD_CONNECT_BATCH_SIZE);
+    const pendingEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+    for (let index = 0; index < pendingEntries.length; index += normalizedBatchSize) {
+      const batch = pendingEntries.slice(index, index + normalizedBatchSize);
+      await Promise.allSettled(
+        batch.map((entry) => this.connectEntry(entry, runtimeContext)),
+      );
+    }
+  }
+
   async connectEntry(entry, runtimeContext) {
     if (!entry || !this.monitorEntries.includes(entry)) {
       return;
@@ -1234,6 +2864,7 @@ class EpicsRuntimeMonitorController {
 
     const attemptId = Number(entry.connectionAttemptId || 0) + 1;
     entry.connectionAttemptId = attemptId;
+    this.clearSoftDisconnectTimer(entry);
     entry.status = "connecting";
     entry.lastError = undefined;
     this.refresh(entry);
@@ -1288,34 +2919,37 @@ class EpicsRuntimeMonitorController {
       this.refresh(entry);
     } finally {
       if (!keepResources) {
-        await this.cleanupConnectionResources(monitor, channel);
+        await this.cleanupConnectionResources(entry, monitor, channel);
       }
       this.handleActiveEditorChange(vscode.window.activeTextEditor);
     }
   }
 
   attachChannelToEntry(entry, channel, attemptId) {
+    entry.channel = channel;
+    entry.serverAddress = channel.getServerAddress();
+
+    if (entry?.sourceKind === "probe") {
+      return;
+    }
+
     channel.setDestroySoftCallback(() => {
       if (!this.isCurrentConnectionAttempt(entry, attemptId)) {
         return;
       }
-      entry.status = "disconnected";
-      entry.lastError = "Channel disconnected. Waiting for recovery.";
-      this.refresh(entry);
+      this.scheduleSoftDisconnect(entry, attemptId);
     });
     channel.setDestroyHardCallback(() => {
       if (!this.isCurrentConnectionAttempt(entry, attemptId)) {
         return;
       }
+      this.clearSoftDisconnectTimer(entry);
       entry.status = "destroyed";
       entry.channel = undefined;
       entry.monitor = undefined;
       entry.lastError = "Channel was destroyed.";
       this.refresh(entry);
     });
-
-    entry.channel = channel;
-    entry.serverAddress = channel.getServerAddress();
   }
 
   async createMonitorForEntry(entry, channel) {
@@ -1352,8 +2986,10 @@ class EpicsRuntimeMonitorController {
   applyMonitorState(entry, monitor) {
     const monitorState = getRuntimeMonitorState(monitor);
     if (monitorState === "SUBSCRIBED") {
+      this.clearSoftDisconnectTimer(entry);
       entry.status = "subscribed";
       entry.lastError = undefined;
+      entry.hasEverSubscribed = true;
       this.updateEntryValue(entry, monitor);
       this.refresh(entry);
       return;
@@ -1373,6 +3009,7 @@ class EpicsRuntimeMonitorController {
     const monitor = entry.monitor;
     const channel = entry.channel;
     entry.connectionAttemptId = Number(entry.connectionAttemptId || 0) + 1;
+    this.clearSoftDisconnectTimer(entry);
 
     entry.monitor = undefined;
     entry.channel = undefined;
@@ -1384,26 +3021,30 @@ class EpicsRuntimeMonitorController {
       // Ignore monitor teardown errors while cleaning up the UI state.
     }
 
-    try {
-      await channel?.destroyHard();
-    } catch (error) {
-      // Ignore channel teardown errors while cleaning up the UI state.
+    if (entry?.sourceKind !== "probe") {
+      try {
+        await channel?.destroyHard();
+      } catch (error) {
+        // Ignore channel teardown errors while cleaning up the UI state.
+      }
     }
 
     entry.status = "stopped";
   }
 
-  async cleanupConnectionResources(monitor, channel) {
+  async cleanupConnectionResources(entry, monitor, channel) {
     try {
       monitor?.destroyHard();
     } catch (error) {
       // Ignore teardown errors for abandoned async connection attempts.
     }
 
-    try {
-      await channel?.destroyHard();
-    } catch (error) {
-      // Ignore teardown errors for abandoned async connection attempts.
+    if (entry?.sourceKind !== "probe") {
+      try {
+        await channel?.destroyHard();
+      } catch (error) {
+        // Ignore teardown errors for abandoned async connection attempts.
+      }
     }
   }
 
@@ -1412,26 +3053,60 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    this.clearSoftDisconnectTimer(entry);
     entry.status = "subscribed";
     entry.lastError = undefined;
+    entry.hasEverSubscribed = true;
     this.updateEntryValue(entry, monitor);
     this.refresh(entry);
   }
 
+  scheduleSoftDisconnect(entry, attemptId) {
+    this.clearSoftDisconnectTimer(entry);
+    entry.softDisconnectTimer = setTimeout(() => {
+      entry.softDisconnectTimer = undefined;
+      if (!this.isCurrentConnectionAttempt(entry, attemptId)) {
+        return;
+      }
+      if (entry.status === "subscribed") {
+        return;
+      }
+      entry.status = "disconnected";
+      entry.lastError = "Channel disconnected. Waiting for recovery.";
+      this.refresh(entry);
+    }, 1500);
+  }
+
+  clearSoftDisconnectTimer(entry) {
+    if (!entry?.softDisconnectTimer) {
+      return;
+    }
+    clearTimeout(entry.softDisconnectTimer);
+    entry.softDisconnectTimer = undefined;
+  }
+
   updateEntryValue(entry, monitor) {
-    entry.lastUpdated = new Date();
+    let runtimeValue;
     if (entry.protocol === "pva") {
       updatePvaEnumChoicesCache(entry, monitor.getPvaData());
-      entry.valueText = formatRuntimeValue(
-        getPvaRuntimeDisplayValue(monitor.getPvaData(), entry.pvaEnumChoices),
+      runtimeValue = getPvaRuntimeDisplayValue(
+        monitor.getPvaData(),
+        entry.pvaEnumChoices,
       );
+    } else {
+      updateCaEnumChoicesCache(entry, monitor.getChannel().getDbrData?.());
+      runtimeValue = getCaRuntimeDisplayValue(
+        entry,
+        monitor.getChannel().getDbrData?.(),
+      );
+    }
+
+    if (shouldIgnoreTransientProbeFieldValue(entry, runtimeValue)) {
       return;
     }
 
-    updateCaEnumChoicesCache(entry, monitor.getChannel().getDbrData?.());
-    entry.valueText = formatRuntimeValue(
-      getCaRuntimeDisplayValue(entry, monitor.getChannel().getDbrData?.()),
-    );
+    entry.lastUpdated = new Date();
+    entry.valueText = formatRuntimeValue(runtimeValue);
   }
 
   isCurrentConnectionAttempt(entry, attemptId) {
@@ -1511,11 +3186,16 @@ class EpicsRuntimeMonitorController {
 
     for (const entry of this.monitorEntries) {
       entry.connectionAttemptId = Number(entry.connectionAttemptId || 0) + 1;
+      this.clearSoftDisconnectTimer(entry);
       entry.channel = undefined;
       entry.monitor = undefined;
       if (entry.status !== "error") {
         entry.status = "stopped";
       }
+    }
+
+    for (const widgetState of this.monitorWidgets.values()) {
+      this.stopMonitorWidgetSessions(widgetState);
     }
   }
 
@@ -1535,6 +3215,9 @@ class EpicsRuntimeMonitorController {
 
   refresh(element) {
     this._onDidChangeTreeData.fire(element);
+    this.refreshProbePanels();
+    this.refreshPvlistWidgets();
+    this.refreshMonitorWidgets();
   }
 
   createContextTreeItem() {
@@ -1628,16 +3311,17 @@ class EpicsRuntimeMonitorController {
       return entry;
     }
 
-    if (!this.monitorEntries.length) {
+    const visibleEntries = this.monitorEntries.filter((candidate) => !candidate.hidden);
+    if (!visibleEntries.length) {
       return undefined;
     }
 
-    if (this.monitorEntries.length === 1) {
-      return this.monitorEntries[0];
+    if (visibleEntries.length === 1) {
+      return visibleEntries[0];
     }
 
     const selected = await vscode.window.showQuickPick(
-      this.monitorEntries.map((candidate) => ({
+      visibleEntries.map((candidate) => ({
         label: candidate.pvName,
         description: candidate.protocol.toUpperCase(),
         detail: buildMonitorDescription(candidate),
@@ -1669,6 +3353,28 @@ class EpicsRuntimeMonitorController {
     return this.monitorEntries.some((entry) => entry.sourceUri === sourceUri);
   }
 
+  async removeSpecificMonitorEntries(entries) {
+    const removableEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+    if (!removableEntries.length) {
+      return;
+    }
+
+    const removableKeys = new Set(removableEntries.map((entry) => entry.key));
+    for (const entry of removableEntries) {
+      await this.disconnectEntry(entry);
+    }
+
+    this.monitorEntries = this.monitorEntries.filter(
+      (entry) => !removableKeys.has(entry.key),
+    );
+    this.refreshProbePanels();
+    if (!this.monitorEntries.length) {
+      this.stopContextInternal();
+    }
+    this.refresh();
+    this.handleActiveEditorChange(vscode.window.activeTextEditor);
+  }
+
   async removeEntriesBySourceUri(sourceUri) {
     if (!sourceUri) {
       return;
@@ -1677,22 +3383,7 @@ class EpicsRuntimeMonitorController {
     const entries = this.monitorEntries.filter(
       (entry) => entry.sourceUri === sourceUri,
     );
-    if (!entries.length) {
-      return;
-    }
-
-    for (const entry of entries) {
-      await this.disconnectEntry(entry);
-    }
-
-    this.monitorEntries = this.monitorEntries.filter(
-      (entry) => entry.sourceUri !== sourceUri,
-    );
-    if (!this.monitorEntries.length) {
-      this.stopContextInternal();
-    }
-    this.refresh();
-    this.handleActiveEditorChange(vscode.window.activeTextEditor);
+    await this.removeSpecificMonitorEntries(entries);
   }
 
   getChannelCreationTimeoutSeconds() {
@@ -2379,7 +4070,7 @@ function isRuntimeDocument(document) {
     return false;
   }
 
-  if (isDatabaseRuntimeDocument(document) || isStrictMonitorDocument(document)) {
+  if (isDatabaseRuntimeDocument(document) || isStrictMonitorDocument(document) || isProbeDocument(document)) {
     return true;
   }
 
@@ -2399,13 +4090,28 @@ function isStrictMonitorDocument(document) {
     return false;
   }
 
-  if (document.languageId === "monitor") {
+  if (document.languageId === "pvlist") {
     return true;
   }
 
   return (
     document.uri.scheme === "file" &&
-    path.extname(document.uri.fsPath).toLowerCase() === ".monitor"
+    path.extname(document.uri.fsPath).toLowerCase() === ".pvlist"
+  );
+}
+
+function isProbeDocument(document) {
+  if (!document?.uri) {
+    return false;
+  }
+
+  if (document.languageId === "probe") {
+    return true;
+  }
+
+  return (
+    document.uri.scheme === "file" &&
+    PROBE_RUNTIME_EXTENSIONS.has(path.extname(document.uri.fsPath).toLowerCase())
   );
 }
 
@@ -2461,7 +4167,7 @@ function normalizeProjectRuntimeConfiguration(rawConfig) {
     EPICS_CA_ADDR_LIST: [],
     EPICS_CA_AUTO_ADDR_LIST: defaults.EPICS_CA_AUTO_ADDR_LIST,
   };
-  const rawProtocol = rawConfig?.protocol ?? rawConfig?.defaultProtocol;
+  const rawProtocol = rawConfig?.protocol;
   normalized.protocol = PROJECT_RUNTIME_CONFIGURATION_PROTOCOL_VALUES.includes(
     normalizeRuntimeProtocol(rawProtocol),
   )
@@ -2519,7 +4225,15 @@ function createRuntimeEnvironmentFromProjectConfiguration(config) {
 }
 
 function serializeProjectRuntimeConfiguration(config) {
-  return `${JSON.stringify(normalizeProjectRuntimeConfiguration(config), null, 2)}\n`;
+  const normalized = normalizeProjectRuntimeConfiguration(config);
+  const serialized = {
+    EPICS_CA_ADDR_LIST: normalized.EPICS_CA_ADDR_LIST,
+    EPICS_CA_AUTO_ADDR_LIST: normalized.EPICS_CA_AUTO_ADDR_LIST,
+  };
+  if (normalized.protocol === "pva") {
+    serialized.protocol = "pva";
+  }
+  return `${JSON.stringify(serialized, null, 2)}\n`;
 }
 
 function buildProjectRuntimeConfigurationWebviewHtml(
@@ -2785,8 +4499,2255 @@ function buildProjectRuntimeConfigurationWebviewHtml(
 </html>`;
 }
 
+function buildProbeCustomEditorHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS Probe</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        position: sticky;
+        top: 0;
+        background: var(--vscode-editor-background);
+        z-index: 1;
+      }
+      button {
+        border: 1px solid var(--vscode-button-border, transparent);
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--vscode-foreground);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .status {
+        color: var(--vscode-descriptionForeground);
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 20px 24px 28px;
+      }
+      h1, h2, p {
+        margin: 0;
+      }
+      .message {
+        margin-top: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .error {
+        margin-top: 12px;
+        color: var(--vscode-errorForeground);
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 10px 16px;
+        margin-top: 16px;
+      }
+      .meta-label {
+        color: var(--vscode-descriptionForeground);
+      }
+      .fields {
+        margin-top: 24px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        margin-top: 10px;
+      }
+      th, td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        vertical-align: top;
+      }
+      th {
+        color: var(--vscode-descriptionForeground);
+        font-weight: 600;
+      }
+      td:first-child, th:first-child {
+        width: 18ch;
+      }
+      code {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .put-target {
+        cursor: pointer;
+      }
+      .put-target:hover {
+        text-decoration: underline;
+      }
+      .empty {
+        margin-top: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="startButton">Start Probe</button>
+      <button id="stopButton" class="secondary">Stop Probe</button>
+      <span id="statusText" class="status"></span>
+    </div>
+    <div id="content" class="content"></div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const doubleClickIntervalMs = ${JSON.stringify(MOUSE_DOUBLE_CLICK_INTERVAL_MS)};
+      const initialState = ${initialStateJson};
+      const content = document.getElementById("content");
+      const startButton = document.getElementById("startButton");
+      const stopButton = document.getElementById("stopButton");
+      const statusText = document.getElementById("statusText");
+      let pendingPutClick = undefined;
+
+      startButton.addEventListener("click", () => {
+        vscode.postMessage({ type: "startProbeRuntime" });
+      });
+      stopButton.addEventListener("click", () => {
+        vscode.postMessage({ type: "stopProbeRuntime" });
+      });
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function render(payload) {
+        const state = payload?.state;
+        const title = escapeHtml(payload?.recordName || payload?.sourceLabel || "EPICS Probe");
+        startButton.disabled = !payload?.canStart || payload?.canStop;
+        stopButton.disabled = !payload?.canStop;
+        statusText.textContent =
+          payload?.contextStatus === "running"
+            ? "Runtime active"
+            : payload?.contextStatus === "error"
+              ? "Runtime error"
+              : "Runtime stopped";
+
+        const message = payload?.message
+          ? '<p class="' + (payload?.diagnostics?.length ? 'error' : 'message') + '">' + escapeHtml(payload.message) + '</p>'
+          : '';
+
+        if (!state) {
+          content.innerHTML = '<h1>' + title + '</h1>' + message;
+          return;
+        }
+
+        const fieldRows = (state.fields || []).map((field) => {
+          const putClass = field.canPut ? 'put-target' : '';
+          const putTitle = field.canPut ? ' title="Double-click to put a new value"' : '';
+          return '<tr>' +
+            '<td><code>' + escapeHtml(field.fieldName) + '</code></td>' +
+            '<td class="' + putClass + '" data-key="' + escapeHtml(field.key) + '" data-can-put="' + (field.canPut ? "true" : "false") + '"' + putTitle + '>' + escapeHtml(field.value) + '</td>' +
+            '</tr>';
+        }).join('');
+
+        const valueClass = state.valueCanPut ? 'put-target' : '';
+        const valueTitle = state.valueCanPut ? ' title="Double-click to put a new value"' : '';
+        content.innerHTML =
+          '<h1>' + title + '</h1>' +
+          message +
+          '<div class="meta-grid">' +
+            '<div class="meta-label">Value</div><div class="' + valueClass + '" data-key="' + escapeHtml(state.valueKey || '') + '" data-can-put="' + (state.valueCanPut ? "true" : "false") + '"' + valueTitle + '>' + escapeHtml(state.value) + '</div>' +
+            '<div class="meta-label">Record Type</div><div><code>' + escapeHtml(state.recordType) + '</code></div>' +
+            '<div class="meta-label">Last Update</div><div>' + escapeHtml(state.lastUpdated) + '</div>' +
+            '<div class="meta-label">Permission</div><div>' + escapeHtml(state.access) + '</div>' +
+          '</div>' +
+          '<div class="fields">' +
+            '<h2>Fields</h2>' +
+            (fieldRows
+              ? '<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>' + fieldRows + '</tbody></table>'
+              : '<p class="empty">' + escapeHtml(state.fieldStatusText || 'No fields loaded.') + '</p>') +
+          '</div>';
+      }
+
+      content.addEventListener('click', (event) => {
+        const eventTarget = event.target instanceof Element
+          ? event.target
+          : event.target?.parentElement;
+        const target = eventTarget?.closest?.('[data-key][data-can-put="true"]');
+        if (!target) {
+          pendingPutClick = undefined;
+          return;
+        }
+        const key = target.getAttribute('data-key');
+        if (!key) {
+          pendingPutClick = undefined;
+          return;
+        }
+        const now = Date.now();
+        const isDoubleClick =
+          pendingPutClick?.key === key &&
+          now - pendingPutClick.time <= doubleClickIntervalMs;
+        pendingPutClick = isDoubleClick
+          ? undefined
+          : {
+              key,
+              time: now,
+            };
+        if (!isDoubleClick) {
+          return;
+        }
+        vscode.postMessage({
+          type: 'putProbeValue',
+          key,
+        });
+      });
+
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'probeRuntimeState') {
+          render(event.data.state);
+        }
+      });
+
+      render(initialState);
+    </script>
+  </body>
+</html>`;
+}
+
+function buildProbeWidgetHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS Probe</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        position: sticky;
+        top: 0;
+        background: var(--vscode-editor-background);
+        z-index: 1;
+      }
+      .toolbar label {
+        color: var(--vscode-descriptionForeground);
+      }
+      .toolbar input {
+        min-width: 280px;
+        padding: 6px 10px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font: inherit;
+      }
+      button {
+        border: 1px solid var(--vscode-button-border, transparent);
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .status {
+        color: var(--vscode-descriptionForeground);
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 20px 24px 28px;
+      }
+      h1, h2, p {
+        margin: 0;
+      }
+      .message {
+        margin-top: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .error {
+        margin-top: 12px;
+        color: var(--vscode-errorForeground);
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 10px 16px;
+        margin-top: 16px;
+      }
+      .meta-label {
+        color: var(--vscode-descriptionForeground);
+      }
+      .fields {
+        margin-top: 24px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        margin-top: 10px;
+      }
+      th, td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        vertical-align: top;
+      }
+      th {
+        color: var(--vscode-descriptionForeground);
+        font-weight: 600;
+      }
+      td:first-child, th:first-child {
+        width: 18ch;
+      }
+      code {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .put-target {
+        cursor: pointer;
+      }
+      .put-target:hover {
+        text-decoration: underline;
+      }
+      .empty {
+        margin-top: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <label for="channelInput">Channel</label>
+      <input id="channelInput" type="text" spellcheck="false" />
+      <button id="processButton" type="button">Process</button>
+      <span id="statusText" class="status"></span>
+    </div>
+    <div id="content" class="content"></div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const doubleClickIntervalMs = ${JSON.stringify(MOUSE_DOUBLE_CLICK_INTERVAL_MS)};
+      const initialState = ${initialStateJson};
+      const content = document.getElementById("content");
+      const channelInput = document.getElementById("channelInput");
+      const processButton = document.getElementById("processButton");
+      const statusText = document.getElementById("statusText");
+      let pendingPutClick = undefined;
+
+      channelInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        vscode.postMessage({
+          type: "updateProbeWidgetRecordName",
+          recordName: channelInput.value,
+        });
+      });
+
+      processButton.addEventListener("click", () => {
+        vscode.postMessage({ type: "processProbeWidget" });
+      });
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function render(payload) {
+        const state = payload?.state;
+        const title = escapeHtml(payload?.recordName || "EPICS Probe");
+        if (document.activeElement !== channelInput) {
+          channelInput.value = payload?.recordName || "";
+        }
+        processButton.disabled = !payload?.canProcess;
+        statusText.textContent =
+          payload?.contextStatus === "running" && payload?.recordName
+            ? "Running"
+            : payload?.recordName
+              ? "Stopped"
+              : "Idle";
+
+        const message = payload?.message
+          ? '<p class="message">' + escapeHtml(payload.message) + '</p>'
+          : '';
+
+        if (!state) {
+          content.innerHTML = '<h1>' + title + '</h1>' + message;
+          return;
+        }
+
+        const fieldRows = (state.fields || []).map((field) => {
+          const putClass = field.canPut ? 'put-target' : '';
+          const putTitle = field.canPut ? ' title="Double-click to put a new value"' : '';
+          return '<tr>' +
+            '<td><code>' + escapeHtml(field.fieldName) + '</code></td>' +
+            '<td class="' + putClass + '" data-key="' + escapeHtml(field.key) + '" data-can-put="' + (field.canPut ? "true" : "false") + '"' + putTitle + '>' + escapeHtml(field.value) + '</td>' +
+            '</tr>';
+        }).join('');
+
+        const valueClass = state.valueCanPut ? 'put-target' : '';
+        const valueTitle = state.valueCanPut ? ' title="Double-click to put a new value"' : '';
+        content.innerHTML =
+          '<h1>' + title + '</h1>' +
+          message +
+          '<div class="meta-grid">' +
+            '<div class="meta-label">Value</div><div class="' + valueClass + '" data-key="' + escapeHtml(state.valueKey || '') + '" data-can-put="' + (state.valueCanPut ? "true" : "false") + '"' + valueTitle + '>' + escapeHtml(state.value) + '</div>' +
+            '<div class="meta-label">Record Type</div><div><code>' + escapeHtml(state.recordType) + '</code></div>' +
+            '<div class="meta-label">Last Update</div><div>' + escapeHtml(state.lastUpdated) + '</div>' +
+            '<div class="meta-label">Permission</div><div>' + escapeHtml(state.access) + '</div>' +
+          '</div>' +
+          '<div class="fields">' +
+            '<h2>Fields</h2>' +
+            (fieldRows
+              ? '<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>' + fieldRows + '</tbody></table>'
+              : '<p class="empty">' + escapeHtml(state.fieldStatusText || 'No fields loaded.') + '</p>') +
+          '</div>';
+      }
+
+      content.addEventListener('click', (event) => {
+        const eventTarget = event.target instanceof Element
+          ? event.target
+          : event.target?.parentElement;
+        const target = eventTarget?.closest?.('[data-key][data-can-put="true"]');
+        if (!target) {
+          pendingPutClick = undefined;
+          return;
+        }
+        const key = target.getAttribute('data-key');
+        if (!key) {
+          pendingPutClick = undefined;
+          return;
+        }
+        const now = Date.now();
+        const isDoubleClick =
+          pendingPutClick?.key === key &&
+          now - pendingPutClick.time <= doubleClickIntervalMs;
+        pendingPutClick = isDoubleClick
+          ? undefined
+          : { key, time: now };
+        if (!isDoubleClick) {
+          return;
+        }
+        vscode.postMessage({
+          type: 'putProbeValue',
+          key,
+        });
+      });
+
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'probeWidgetState') {
+          render(event.data.state);
+        }
+      });
+
+      render(initialState);
+    </script>
+  </body>
+</html>`;
+}
+
+function buildMonitorWidgetHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS Monitor</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .header {
+        border-bottom: 1px solid var(--vscode-panel-border);
+        background: var(--vscode-editor-background);
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .toolbar-left, .toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .toolbar-title { font-weight: 600; }
+      .toolbar-status { color: var(--vscode-descriptionForeground); }
+      .action-button {
+        padding: 6px 12px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 4px;
+        background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+        color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+        cursor: pointer;
+        font: inherit;
+      }
+      .action-button:hover {
+        background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+      }
+      .channel-rows {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .channel-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .channel-label {
+        color: var(--vscode-descriptionForeground);
+        min-width: 6ch;
+      }
+      .channel-input, .config-input {
+        flex: 1;
+        padding: 6px 10px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font: inherit;
+        box-sizing: border-box;
+      }
+      .channel-status {
+        color: var(--vscode-descriptionForeground);
+        min-width: 16ch;
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 16px 24px 24px;
+      }
+      .message {
+        margin-bottom: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .history {
+        margin: 0;
+        white-space: pre;
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+        font-size: var(--vscode-editor-font-size, inherit);
+        line-height: 1.45;
+      }
+      .empty {
+        color: var(--vscode-descriptionForeground);
+      }
+      .overlay-page {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .overlay-title {
+        margin: 0;
+        font-size: 1.2rem;
+        font-weight: 600;
+      }
+      .overlay-hint {
+        color: var(--vscode-descriptionForeground);
+      }
+      .config-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: 320px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <div class="toolbar-title">Monitor</div>
+          <div id="statusText" class="toolbar-status"></div>
+        </div>
+        <div class="toolbar-right">
+          <button id="addChannelButton" class="action-button">Add Channel</button>
+          <button id="configureButton" class="action-button">Configure</button>
+          <button id="exportButton" class="action-button">Export Data</button>
+          <button id="doneButton" class="action-button" hidden>Done</button>
+        </div>
+      </div>
+      <div id="channelRows" class="channel-rows"></div>
+    </div>
+    <div id="content" class="content"></div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const initialState = ${initialStateJson};
+      const content = document.getElementById("content");
+      const channelRows = document.getElementById("channelRows");
+      const statusText = document.getElementById("statusText");
+      const addChannelButton = document.getElementById("addChannelButton");
+      const configureButton = document.getElementById("configureButton");
+      const exportButton = document.getElementById("exportButton");
+      const doneButton = document.getElementById("doneButton");
+      let currentState = initialState;
+      let overlayMode = false;
+      let editingState = undefined;
+      let suppressFocusSync = false;
+      let isRendering = false;
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function captureEditingState() {
+        const activeElement = document.activeElement;
+        if (!activeElement || !(activeElement instanceof HTMLInputElement)) {
+          return;
+        }
+        if (activeElement.classList.contains("channel-input")) {
+          editingState = {
+            type: "channel",
+            rowId: activeElement.dataset.rowId,
+            value: activeElement.value,
+            selectionStart: activeElement.selectionStart,
+            selectionEnd: activeElement.selectionEnd,
+          };
+          return;
+        }
+        if (activeElement.classList.contains("config-input")) {
+          editingState = {
+            type: "buffer",
+            value: activeElement.value,
+            selectionStart: activeElement.selectionStart,
+            selectionEnd: activeElement.selectionEnd,
+          };
+        }
+      }
+
+      function restoreActiveInput() {
+        if (!editingState?.type) {
+          return;
+        }
+
+        let input = undefined;
+        if (editingState.type === "channel") {
+          input = [...channelRows.querySelectorAll(".channel-input")].find(
+            (candidate) => candidate.dataset.rowId === editingState.rowId,
+          );
+        } else if (editingState.type === "buffer") {
+          input = content.querySelector(".config-input");
+        }
+        if (!input) {
+          return;
+        }
+
+        const fallbackCaret = String(editingState.value || "").length;
+        const selectionStart =
+          typeof editingState.selectionStart === "number"
+            ? editingState.selectionStart
+            : fallbackCaret;
+        const selectionEnd =
+          typeof editingState.selectionEnd === "number"
+            ? editingState.selectionEnd
+            : fallbackCaret;
+        suppressFocusSync = true;
+        input.focus();
+        suppressFocusSync = false;
+        input.setSelectionRange(selectionStart, selectionEnd);
+      }
+
+      function updateEditingSelection(input) {
+        if (!editingState) {
+          return;
+        }
+        if (editingState.type === "channel" && editingState.rowId === input.dataset.rowId) {
+          editingState = {
+            ...editingState,
+            value: input.value,
+            selectionStart: input.selectionStart,
+            selectionEnd: input.selectionEnd,
+          };
+        } else if (editingState.type === "buffer" && input.classList.contains("config-input")) {
+          editingState = {
+            ...editingState,
+            value: input.value,
+            selectionStart: input.selectionStart,
+            selectionEnd: input.selectionEnd,
+          };
+        }
+      }
+
+      function commitBufferSizeAndClose() {
+        const input = content.querySelector(".config-input");
+        vscode.postMessage({
+          type: "updateMonitorWidgetBufferSize",
+          value: input ? input.value : currentState?.bufferSize,
+        });
+        overlayMode = false;
+        editingState = undefined;
+        render(currentState);
+      }
+
+      addChannelButton.addEventListener("click", () => {
+        vscode.postMessage({ type: "addMonitorWidgetChannelRow" });
+      });
+
+      configureButton.addEventListener("click", () => {
+        overlayMode = true;
+        render(currentState);
+      });
+
+      exportButton.addEventListener("click", () => {
+        vscode.postMessage({ type: "exportMonitorWidgetData" });
+      });
+
+      doneButton.addEventListener("click", () => {
+        commitBufferSizeAndClose();
+      });
+
+      channelRows.addEventListener("focusin", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("channel-input") || suppressFocusSync) {
+          return;
+        }
+        editingState = {
+          type: "channel",
+          rowId: input.dataset.rowId,
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      });
+
+      channelRows.addEventListener("input", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("channel-input")) {
+          return;
+        }
+        editingState = {
+          type: "channel",
+          rowId: input.dataset.rowId,
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      });
+
+      channelRows.addEventListener("keydown", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("channel-input")) {
+          return;
+        }
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        vscode.postMessage({
+          type: "updateMonitorWidgetChannel",
+          rowId: input.dataset.rowId,
+          channelName: input.value,
+        });
+      });
+
+      channelRows.addEventListener("keyup", (event) => {
+        const input = event.target;
+        if (input instanceof HTMLInputElement && input.classList.contains("channel-input")) {
+          updateEditingSelection(input);
+        }
+      });
+
+      channelRows.addEventListener("mouseup", (event) => {
+        const input = event.target;
+        if (input instanceof HTMLInputElement && input.classList.contains("channel-input")) {
+          updateEditingSelection(input);
+        }
+      });
+
+      channelRows.addEventListener("focusout", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("channel-input")) {
+          return;
+        }
+        if (isRendering) {
+          return;
+        }
+        if (editingState?.type === "channel" && editingState.rowId === input.dataset.rowId) {
+          editingState = undefined;
+        }
+      });
+
+      content.addEventListener("focusin", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("config-input") || suppressFocusSync) {
+          return;
+        }
+        editingState = {
+          type: "buffer",
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      });
+
+      content.addEventListener("input", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("config-input")) {
+          return;
+        }
+        editingState = {
+          type: "buffer",
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      });
+
+      content.addEventListener("keydown", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("config-input")) {
+          return;
+        }
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        commitBufferSizeAndClose();
+      });
+
+      content.addEventListener("keyup", (event) => {
+        const input = event.target;
+        if (input instanceof HTMLInputElement && input.classList.contains("config-input")) {
+          updateEditingSelection(input);
+        }
+      });
+
+      content.addEventListener("mouseup", (event) => {
+        const input = event.target;
+        if (input instanceof HTMLInputElement && input.classList.contains("config-input")) {
+          updateEditingSelection(input);
+        }
+      });
+
+      content.addEventListener("focusout", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.classList.contains("config-input")) {
+          return;
+        }
+        if (isRendering) {
+          return;
+        }
+        if (editingState?.type === "buffer") {
+          editingState = undefined;
+        }
+      });
+
+      function render(payload) {
+        captureEditingState();
+        currentState = payload || {};
+        isRendering = true;
+
+        const wasPinnedToBottom =
+          !overlayMode &&
+          content.scrollTop + content.clientHeight >= content.scrollHeight - 16;
+        const previousScrollTop = content.scrollTop;
+
+        statusText.textContent =
+          payload?.contextStatus === "connected"
+            ? "Running"
+            : payload?.contextStatus === "connecting"
+              ? "Connecting"
+              : payload?.contextStatus === "error"
+                ? "Error"
+                : "";
+        addChannelButton.hidden = overlayMode;
+        configureButton.hidden = overlayMode;
+        exportButton.hidden = overlayMode;
+        doneButton.hidden = !overlayMode;
+
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        channelRows.innerHTML = rows.map((row, index) => {
+          const currentValue =
+            editingState?.type === "channel" && editingState.rowId === row.id
+              ? editingState.value
+              : row.channelName || "";
+          return '<div class="channel-row">' +
+            '<div class="channel-label">Channel ' + String(index + 1) + '</div>' +
+            '<input class="channel-input" data-row-id="' + escapeHtml(row.id) + '" type="text" spellcheck="false" value="' + escapeHtml(currentValue) + '" />' +
+            '<div class="channel-status">' + escapeHtml(row.statusText || "") + '</div>' +
+          '</div>';
+        }).join("");
+
+        const messageHtml = payload?.message
+          ? '<div class="message">' + escapeHtml(payload.message) + '</div>'
+          : "";
+        const historyHtml =
+          payload?.historyText
+            ? '<pre class="history">' + escapeHtml(payload.historyText) + '</pre>'
+            : '<div class="empty">No monitor events have been recorded yet.</div>';
+        const configValue =
+          editingState?.type === "buffer"
+            ? editingState.value
+            : String(payload?.bufferSize || "");
+
+        content.innerHTML = overlayMode
+          ? '<div class="overlay-page">' +
+              '<div><div class="overlay-title">Monitor Configuration</div><div class="overlay-hint">Buffer size controls how many monitor lines are kept in this widget.</div></div>' +
+              '<div class="config-row"><label for="bufferSizeInput">Buffer size</label><input id="bufferSizeInput" class="config-input" type="text" spellcheck="false" value="' + escapeHtml(configValue) + '" /></div>' +
+            '</div>'
+          : messageHtml + historyHtml;
+
+        restoreActiveInput();
+        isRendering = false;
+
+        if (!overlayMode) {
+          if (wasPinnedToBottom) {
+            content.scrollTop = content.scrollHeight;
+          } else {
+            content.scrollTop = previousScrollTop;
+          }
+        }
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data?.type === "monitorWidgetState") {
+          render(event.data.state);
+        }
+      });
+
+      render(initialState);
+    </script>
+  </body>
+</html>`;
+}
+
+function buildPvlistWidgetSourceModel(
+  options = {},
+  extractRecordDeclarations,
+  extractDatabaseTocMacroAssignments,
+) {
+  const sourceKind = options?.sourceKind === "pvlist" ? "pvlist" : "database";
+  const sourceLabel = String(options?.sourceLabel || "EPICS PvList");
+  const sourceText = String(options?.sourceText || "");
+  const sourceDocumentUri = options?.sourceDocumentUri
+    ? String(options.sourceDocumentUri)
+    : "";
+
+  if (sourceKind === "pvlist") {
+    return {
+      ...parsePvlistWidgetSourceText(sourceText, sourceLabel),
+      sourceDocumentUri,
+    };
+  }
+
+  const declarations =
+    typeof extractRecordDeclarations === "function"
+      ? extractRecordDeclarations(sourceText)
+      : extractDatabaseMonitorDeclarationsFallback(sourceText);
+  const rawPvNames = [];
+  const seen = new Set();
+  for (const declaration of declarations) {
+    const name = String(declaration?.name || "").trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    rawPvNames.push(name);
+  }
+
+  const macroNames = extractOrderedEpicsMacroNames([sourceText]);
+  const macroAssignments =
+    typeof extractDatabaseTocMacroAssignments === "function"
+      ? extractDatabaseTocMacroAssignments(sourceText)
+      : new Map();
+  const macroValues = new Map(
+    macroNames.map((macroName) => [
+      macroName,
+      macroAssignments.get(macroName)?.hasAssignment
+        ? String(macroAssignments.get(macroName)?.value || "")
+        : "",
+    ]),
+  );
+
+  return {
+    sourceKind,
+    sourceLabel,
+    sourceDocumentUri,
+    sourceText,
+    rawPvNames,
+    macroNames,
+    macroValues,
+    diagnostics: [],
+  };
+}
+
+function parsePvlistWidgetSourceText(text, sourceLabel) {
+  const lines = String(text || "").split(/\r?\n/);
+  const diagnostics = [];
+  const rawPvNames = [];
+  const macroNames = [];
+  const macroValues = new Map();
+  const seenMacroNames = new Set();
+  const seenPvNames = new Set();
+
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+    const lineText = lines[lineNumber];
+    const trimmedLine = lineText.trim();
+    const startCharacter = lineText.indexOf(trimmedLine);
+    const endCharacter = startCharacter + trimmedLine.length;
+
+    if (!trimmedLine || trimmedLine.startsWith("#")) {
+      continue;
+    }
+
+    const macroMatch = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (macroMatch) {
+      const macroName = macroMatch[1];
+      if (macroValues.has(macroName)) {
+        diagnostics.push({
+          lineNumber,
+          startCharacter,
+          endCharacter,
+          message: `Duplicate pvlist macro "${macroName}".`,
+        });
+      } else {
+        macroValues.set(macroName, macroMatch[2] || "");
+      }
+      if (!seenMacroNames.has(macroName)) {
+        seenMacroNames.add(macroName);
+        macroNames.push(macroName);
+      }
+      continue;
+    }
+
+    if (trimmedLine.includes("=")) {
+      diagnostics.push({
+        lineNumber,
+        startCharacter,
+        endCharacter,
+        message: 'PV list macro definitions must be exactly "NAME = value" with no extra text.',
+      });
+      continue;
+    }
+
+    if (/\s/.test(trimmedLine)) {
+      diagnostics.push({
+        lineNumber,
+        startCharacter,
+        endCharacter,
+        message: "PV list lines must contain exactly one record name with no extra text.",
+      });
+      continue;
+    }
+
+    if (!seenPvNames.has(trimmedLine)) {
+      seenPvNames.add(trimmedLine);
+      rawPvNames.push(trimmedLine);
+    }
+    for (const macroName of extractOrderedEpicsMacroNames([trimmedLine])) {
+      if (!seenMacroNames.has(macroName)) {
+        seenMacroNames.add(macroName);
+        macroNames.push(macroName);
+        macroValues.set(macroName, "");
+      }
+    }
+  }
+
+  return {
+    sourceKind: "pvlist",
+    sourceLabel,
+    sourceText: String(text || ""),
+    rawPvNames,
+    macroNames,
+    macroValues,
+    diagnostics,
+  };
+}
+
+function parseAddedPvlistChannelLines(text) {
+  const entries = [];
+  const seen = new Set();
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const line = String(rawLine || "").trim();
+    if (!line || line.startsWith("#") || /\s/.test(line)) {
+      continue;
+    }
+    if (seen.has(line)) {
+      continue;
+    }
+    seen.add(line);
+    entries.push(line);
+  }
+  return entries;
+}
+
+function extractOrderedEpicsMacroNames(texts) {
+  const names = [];
+  const seen = new Set();
+  for (const text of Array.isArray(texts) ? texts : [texts]) {
+    const sourceText = String(text || "");
+    for (const match of sourceText.matchAll(/\$\(([^)=\s]+)(?:=[^)]*)?\)|\$\{([^}\s]+)\}/g)) {
+      const macroName = match[1] || match[2];
+      if (!macroName || seen.has(macroName)) {
+        continue;
+      }
+      seen.add(macroName);
+      names.push(macroName);
+    }
+  }
+  return names;
+}
+
+function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol) {
+  const rows = [];
+  const definitions = [];
+  const seen = new Set();
+  const protocol = normalizeRuntimeProtocol(defaultProtocol);
+
+  if (!sourceModel) {
+    return { rows, definitions };
+  }
+
+  const sourceKind = sourceModel.sourceKind === "pvlist" ? "pvlist" : "database";
+  const assignedMacroDefinitions = new Map();
+  for (const macroName of sourceModel.macroNames || []) {
+    const value = String(macroValues?.get(macroName) || "");
+    if (!value) {
+      continue;
+    }
+    assignedMacroDefinitions.set(macroName, {
+      name: macroName,
+      value,
+    });
+  }
+
+  const strictMacroCache = new Map();
+  const databaseAssignments = new Map(
+    [...assignedMacroDefinitions.entries()].map(([macroName, definition]) => [
+      macroName,
+      { hasAssignment: true, value: definition.value },
+    ]),
+  );
+  const databaseMacroDefinitions = createDatabaseMonitorMacroDefinitions(databaseAssignments);
+  const databaseMacroCache = new Map();
+
+  (sourceModel.rawPvNames || []).forEach((rawPvName, index) => {
+    let pvName = "";
+    let valueText = "";
+    let unresolved = false;
+    if (sourceKind === "pvlist") {
+      const expansion = expandStrictMonitorValue(
+        rawPvName,
+        assignedMacroDefinitions,
+        strictMacroCache,
+        [],
+      );
+      if (expansion.errors.length > 0) {
+        unresolved = true;
+        valueText = `(${expansion.errors[0]})`;
+      } else {
+        pvName = String(expansion.value || "").trim();
+        if (!pvName || /\s/.test(pvName) || hasUnresolvedEpicsMacroText(pvName)) {
+          unresolved = true;
+          valueText = "(set macros)";
+        }
+      }
+    } else {
+      pvName = normalizeDatabaseMonitorPvName(
+        expandDatabaseMonitorValue(
+          rawPvName,
+          databaseMacroDefinitions,
+          databaseMacroCache,
+          [],
+        ),
+        rawPvName,
+      );
+      if (!pvName || /\s/.test(pvName) || hasUnresolvedEpicsMacroText(pvName)) {
+        unresolved = true;
+        valueText = "(set macros)";
+      }
+    }
+
+    rows.push({
+      id: `pvlist-row:${index}`,
+      rawPvName,
+      channelName: unresolved ? rawPvName : pvName,
+      pvName: unresolved ? undefined : pvName,
+      valueText,
+    });
+
+    if (unresolved || !pvName) {
+      return;
+    }
+
+    const key = `${protocol}:${pvName}:`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    definitions.push({
+      pvName,
+      protocol,
+      pvRequest: "",
+    });
+  });
+
+  return { rows, definitions };
+}
+
+function buildPvlistWidgetFileText(sourceModel, macroValues, eol = "\n") {
+  const macroNames = Array.isArray(sourceModel?.macroNames) ? sourceModel.macroNames : [];
+  const rawPvNames = Array.isArray(sourceModel?.rawPvNames) ? sourceModel.rawPvNames : [];
+  const lines = [
+    "# this is a pvlist file for EPICS Workbench in VSCode",
+    "",
+  ];
+
+  if (macroNames.length > 0) {
+    for (const macroName of macroNames) {
+      lines.push(`${macroName} = ${String(macroValues?.get(macroName) || "")}`);
+    }
+    lines.push("");
+  }
+
+  lines.push(...rawPvNames.map((entry) => String(entry || "").trim()).filter(Boolean));
+  return lines.join(eol);
+}
+
+function getMonitorWidgetPanelTitle(channelNames) {
+  const normalizedChannels = (Array.isArray(channelNames) ? channelNames : [])
+    .map((channelName) => String(channelName || "").trim())
+    .filter(Boolean);
+  if (normalizedChannels.length === 0) {
+    return "EPICS Monitor";
+  }
+  if (normalizedChannels.length === 1) {
+    return `Monitor: ${normalizedChannels[0]}`;
+  }
+  return `Monitor: ${normalizedChannels[0]} (+${normalizedChannels.length - 1})`;
+}
+
+function trimMonitorWidgetHistory(widgetState) {
+  const bufferSize = Math.max(
+    1,
+    Number(widgetState?.bufferSize) || DEFAULT_MONITOR_WIDGET_BUFFER_SIZE,
+  );
+  while ((widgetState?.historyLines?.length || 0) > bufferSize) {
+    widgetState.historyLines.shift();
+  }
+}
+
+function buildMonitorWidgetExportText(widgetState, eol = "\n") {
+  const channelNames = (widgetState?.channelRows || [])
+    .map((row) => String(row?.channelName || "").trim())
+    .filter(Boolean);
+  const lines = [
+    channelNames.length === 1
+      ? `# monitor data for channel ${channelNames[0]}`
+      : channelNames.length > 1
+        ? `# monitor data for channels ${channelNames.join(", ")}`
+        : "# monitor data exported from EPICS Monitor widget",
+    "",
+    ...((widgetState?.historyLines || []).map((line) => String(line || ""))),
+  ];
+  return lines.join(eol);
+}
+
+function getDefaultMonitorWidgetSaveUri(widgetState) {
+  const firstChannelName = (widgetState?.channelRows || [])
+    .map((row) => String(row?.channelName || "").trim())
+    .find(Boolean);
+  const sanitizedBaseName = String(firstChannelName || "epics-monitor-data")
+    .replace(/^ca:\/\//i, "")
+    .replace(/^pva:\/\//i, "")
+    .replace(/[^\w.-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "epics-monitor-data";
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (workspaceRoot?.scheme === "file") {
+    return vscode.Uri.joinPath(workspaceRoot, `${sanitizedBaseName}.txt`);
+  }
+  return undefined;
+}
+
+function parseMonitorWidgetChannelReference(channelName, defaultProtocol) {
+  let pvName = String(channelName || "").trim();
+  let protocol = normalizeRuntimeProtocol(defaultProtocol);
+  if (/^ca:\/\//i.test(pvName)) {
+    protocol = "ca";
+    pvName = pvName.replace(/^ca:\/\//i, "");
+  } else if (/^pva:\/\//i.test(pvName)) {
+    protocol = "pva";
+    pvName = pvName.replace(/^pva:\/\//i, "");
+  }
+
+  return {
+    protocol,
+    pvName: pvName.trim(),
+    pvRequest: "",
+  };
+}
+
+function buildMonitorWidgetHistoryLine(session, monitor, runtimeLibrary) {
+  if (!session || !monitor) {
+    return "";
+  }
+
+  if (session.protocol === "pva") {
+    const pvaData = monitor.getPvaData?.();
+    updatePvaEnumChoicesCache(session, pvaData);
+    const valueText = formatRuntimeDisplayValue(
+      getPvaRuntimeDisplayValue(pvaData, session.pvaEnumChoices),
+    );
+    const timestampText = formatPvaMonitorTimestamp(pvaData);
+    const alarmText = formatPvaMonitorAlarmText(pvaData);
+    return [
+      String(session.pvName || "").padEnd(28),
+      timestampText,
+      valueText,
+      alarmText,
+    ].filter(Boolean).join(" ").trimEnd();
+  }
+
+  const dbrData = monitor.getChannel?.().getDbrData?.();
+  updateCaEnumChoicesCache(session, dbrData);
+  const valueText = formatRuntimeDisplayValue(
+    getCaRuntimeDisplayValue(session, dbrData),
+  );
+  const timestampText = formatCaMonitorTimestamp(dbrData);
+  const alarmText = formatCaMonitorAlarmText(dbrData, runtimeLibrary);
+  return [
+    String(session.pvName || "").padEnd(28),
+    timestampText,
+    valueText,
+    alarmText,
+  ].filter(Boolean).join(" ").trimEnd();
+}
+
+function formatCaMonitorTimestamp(dbrData) {
+  const secondsSinceEpoch = Number(dbrData?.secondsSinceEpoch);
+  if (!Number.isFinite(secondsSinceEpoch)) {
+    return "";
+  }
+  const nanoSeconds = Number(dbrData?.nanoSeconds || 0);
+  return formatMonitorTimestamp(
+    secondsSinceEpoch + EPICS_CA_EPOCH_OFFSET_SECONDS,
+    nanoSeconds,
+  );
+}
+
+function formatPvaMonitorTimestamp(pvaData) {
+  const timeStamp = pvaData?.timeStamp;
+  const secondsPastEpoch = timeStamp?.secondsPastEpoch;
+  if (secondsPastEpoch === undefined || secondsPastEpoch === null) {
+    return "";
+  }
+  const seconds = typeof secondsPastEpoch === "bigint"
+    ? Number(secondsPastEpoch)
+    : Number(secondsPastEpoch);
+  if (!Number.isFinite(seconds)) {
+    return "";
+  }
+  return formatMonitorTimestamp(seconds, Number(timeStamp?.nanoseconds || 0));
+}
+
+function formatMonitorTimestamp(epochSeconds, nanoseconds) {
+  const seconds = Number(epochSeconds);
+  if (!Number.isFinite(seconds)) {
+    return "";
+  }
+  const normalizedNanoseconds = Math.max(0, Number(nanoseconds || 0));
+  const date = new Date((seconds * 1000) + Math.floor(normalizedNanoseconds / 1e6));
+  const microseconds = Math.floor(normalizedNanoseconds / 1000)
+    .toString()
+    .padStart(6, "0");
+  return [
+    date.getFullYear().toString().padStart(4, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-") +
+    " " +
+    [
+      String(date.getHours()).padStart(2, "0"),
+      String(date.getMinutes()).padStart(2, "0"),
+      String(date.getSeconds()).padStart(2, "0"),
+    ].join(":") +
+    `.${microseconds}`;
+}
+
+function formatCaMonitorAlarmText(dbrData, runtimeLibrary) {
+  const statusText = formatCaAlarmStatusText(
+    Number(dbrData?.status),
+    runtimeLibrary,
+  );
+  const severityText = formatCaAlarmSeverityText(
+    Number(dbrData?.severity),
+    runtimeLibrary,
+  );
+  return [statusText, severityText].filter(Boolean).join(" ");
+}
+
+function formatPvaMonitorAlarmText(pvaData) {
+  const severityValue = Number(pvaData?.alarm?.severity);
+  if (!Number.isFinite(severityValue)) {
+    return "";
+  }
+  return formatCaAlarmSeverityText(severityValue);
+}
+
+function formatCaAlarmStatusText(value, runtimeLibrary) {
+  const statusName = resolveEnumName(value, runtimeLibrary?.CA_ALARM_STATUS, {
+    0: "NO_ALARM",
+    1: "READ",
+    2: "WRITE",
+    3: "HIHI",
+    4: "HIGH",
+    5: "LOLO",
+    6: "LOW",
+    7: "STATE",
+    8: "COS",
+    9: "COMM",
+    10: "TIMEOUT",
+    11: "HWLIMIT",
+    12: "CALC",
+    13: "SCAN",
+    14: "LINK",
+    15: "SOFT",
+    16: "BAD_SUB",
+    17: "UDF",
+    18: "DISABLE",
+    19: "SIMM",
+    20: "READ_ACCESS",
+    21: "WRITE_ACCESS",
+  });
+  if (!statusName) {
+    return "";
+  }
+  return statusName === "NO_ALARM" ? statusName : `${statusName}_ALARM`;
+}
+
+function formatCaAlarmSeverityText(value, runtimeLibrary) {
+  const severityName = resolveEnumName(value, runtimeLibrary?.CA_ALARM_SEVRITY, {
+    0: "NO_ALARM",
+    1: "MINOR",
+    2: "MAJOR",
+    3: "INVALID",
+  });
+  if (!severityName) {
+    return "";
+  }
+  return severityName === "NO_ALARM" ? severityName : `${severityName}_ALARM`;
+}
+
+function resolveEnumName(value, runtimeEnum, fallbackNames) {
+  if (!Number.isFinite(value)) {
+    return "";
+  }
+  if (runtimeEnum && Object.prototype.hasOwnProperty.call(runtimeEnum, value)) {
+    return String(runtimeEnum[value] || "");
+  }
+  return String(fallbackNames?.[value] || "");
+}
+
+function safeParseUri(value) {
+  try {
+    return value ? vscode.Uri.parse(String(value)) : undefined;
+  } catch (error) {
+    return undefined;
+  }
+}
+
+function getDefaultPvlistWidgetSaveUri(sourceModel) {
+  const sourceUri = safeParseUri(sourceModel?.sourceDocumentUri);
+  if (sourceUri?.scheme === "file") {
+    const sourcePath = sourceUri.fsPath;
+    if (sourceModel?.sourceKind === "pvlist") {
+      return sourceUri;
+    }
+    return vscode.Uri.file(
+      `${sourcePath.replace(/\.[^./\\]+$/, "")}.pvlist`,
+    );
+  }
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (workspaceRoot?.scheme === "file") {
+    const fallbackBaseName = String(sourceModel?.sourceLabel || "pvlist")
+      .replace(/\.[^./\\]+$/, "")
+      .replace(/[^\w.-]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "pvlist";
+    return vscode.Uri.joinPath(workspaceRoot, `${fallbackBaseName}.pvlist`);
+  }
+
+  return undefined;
+}
+
+function hasUnresolvedEpicsMacroText(value) {
+  return /\$\(([^)=\s]+)(?:=[^)]*)?\)|\$\{([^}\s]+)\}/.test(String(value || ""));
+}
+
+function buildPvlistWidgetHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS PvList</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body { display: flex; flex-direction: column; }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        position: sticky;
+        top: 0;
+        background: var(--vscode-editor-background);
+        z-index: 1;
+      }
+      .toolbar-left, .toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .toolbar-title { font-weight: 600; }
+      .toolbar-status { color: var(--vscode-descriptionForeground); }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 20px 24px 28px;
+      }
+      h2 { margin: 0 0 12px; font-size: 1.1rem; }
+      .section + .section { margin-top: 24px; }
+      .message { margin-bottom: 16px; color: var(--vscode-descriptionForeground); }
+      .bulk-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        height: 100%;
+      }
+      .bulk-input {
+        min-height: 240px;
+        flex: 1;
+        resize: vertical;
+        padding: 10px 12px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: inherit;
+        line-height: 1.4;
+        box-sizing: border-box;
+      }
+      .bulk-actions {
+        display: flex;
+        justify-content: flex-start;
+      }
+      .overlay-page {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .overlay-title {
+        margin: 0;
+        font-size: 1.2rem;
+        font-weight: 600;
+      }
+      .overlay-hint {
+        color: var(--vscode-descriptionForeground);
+      }
+      .action-button {
+        padding: 6px 12px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 4px;
+        background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+        color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+        cursor: pointer;
+        font: inherit;
+      }
+      .action-button:hover {
+        background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+      }
+      .macros {
+        display: grid;
+        grid-template-columns: max-content minmax(220px, 420px);
+        gap: 10px 16px;
+        align-items: center;
+      }
+      .macro-name {
+        color: var(--vscode-descriptionForeground);
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .macro-input, .inline-put-input {
+        padding: 6px 10px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font: inherit;
+        box-sizing: border-box;
+      }
+      .inline-put-input {
+        width: 100%;
+        margin: 0;
+        min-height: calc(1em + 2px);
+        padding: 0 6px;
+        line-height: 1.4;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+      th, td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        vertical-align: top;
+      }
+      th {
+        color: var(--vscode-descriptionForeground);
+        font-weight: 600;
+      }
+      td:first-child, th:first-child {
+        width: 38ch;
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .value-cell {
+        cursor: pointer;
+        position: relative;
+      }
+      .value-cell:hover { text-decoration: underline; }
+      .value-cell.readonly { cursor: default; }
+      .value-cell.readonly:hover { text-decoration: none; }
+      .value-display {
+        min-height: 1.4em;
+        white-space: pre-wrap;
+      }
+      .value-display.hidden {
+        visibility: hidden;
+      }
+      .value-edit-shell {
+        position: absolute;
+        inset: 8px 10px;
+        display: flex;
+        align-items: center;
+        pointer-events: none;
+      }
+      .value-edit-shell .inline-put-input { pointer-events: auto; }
+      .empty { color: var(--vscode-descriptionForeground); }
+    </style>
+  </head>
+	  <body>
+	    <div class="toolbar">
+	      <div class="toolbar-left">
+          <div class="toolbar-title">PvList</div>
+          <div id="statusText" class="toolbar-status"></div>
+        </div>
+	      <div class="toolbar-right">
+          <button id="addChannelsButton" class="action-button">Add Channels</button>
+	        <button id="saveButton" class="action-button">Save</button>
+          <button id="doneButton" class="action-button" hidden>Done</button>
+	      </div>
+	    </div>
+	    <div id="content" class="content"></div>
+	    <script nonce="${nonce}">
+	      const vscode = acquireVsCodeApi();
+      const doubleClickIntervalMs = ${JSON.stringify(MOUSE_DOUBLE_CLICK_INTERVAL_MS)};
+	      const initialState = ${initialStateJson};
+	      const content = document.getElementById("content");
+	      const statusText = document.getElementById("statusText");
+	      const addChannelsButton = document.getElementById("addChannelsButton");
+	      const saveButton = document.getElementById("saveButton");
+	      const doneButton = document.getElementById("doneButton");
+	      let currentState = initialState;
+      let pendingClick = undefined;
+      let editingState = undefined;
+      let draftState = undefined;
+      let isRendering = false;
+      let suppressFocusSync = false;
+      let overlayMode = false;
+
+      function captureActiveEditingState() {
+        const activeElement = document.activeElement;
+        if (!activeElement || !(activeElement instanceof HTMLInputElement)) {
+          return;
+        }
+        if (activeElement.classList.contains("macro-input")) {
+          editingState = {
+            type: "macro",
+            name: activeElement.dataset.macroName,
+            value: activeElement.value,
+            selectionStart: activeElement.selectionStart,
+            selectionEnd: activeElement.selectionEnd,
+          };
+          return;
+        }
+        if (activeElement.classList.contains("inline-put-input")) {
+          editingState = {
+            type: "value",
+            key: activeElement.dataset.putKey,
+            value: activeElement.value,
+            selectionStart: activeElement.selectionStart,
+            selectionEnd: activeElement.selectionEnd,
+          };
+        }
+      }
+
+      function captureActiveDraftState() {
+        const activeElement = document.activeElement;
+        if (!activeElement || !(activeElement instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        if (!activeElement.classList.contains("bulk-input")) {
+          return;
+        }
+        draftState = {
+          type: activeElement.dataset.draftType,
+          value: activeElement.value,
+          selectionStart: activeElement.selectionStart,
+          selectionEnd: activeElement.selectionEnd,
+        };
+      }
+
+      function updateActiveDraftSelection(input) {
+        if (draftState?.type !== input.dataset.draftType) {
+          return;
+        }
+        draftState = {
+          ...draftState,
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      }
+
+      function focusActiveDraftInput() {
+        if (!draftState?.type) {
+          return;
+        }
+        const draftInput = [...content.querySelectorAll(".bulk-input")].find(
+          (candidate) => candidate.dataset.draftType === draftState.type,
+        );
+        if (!draftInput) {
+          return;
+        }
+        const fallbackCaret = String(draftState.value || "").length;
+        const selectionStart =
+          typeof draftState.selectionStart === "number"
+            ? draftState.selectionStart
+            : fallbackCaret;
+        const selectionEnd =
+          typeof draftState.selectionEnd === "number"
+            ? draftState.selectionEnd
+            : fallbackCaret;
+        suppressFocusSync = true;
+        draftInput.focus();
+        suppressFocusSync = false;
+        draftInput.setSelectionRange(selectionStart, selectionEnd);
+      }
+
+	      saveButton.addEventListener("click", () => {
+	        vscode.postMessage({ type: "savePvlistWidget" });
+	      });
+
+      addChannelsButton.addEventListener("click", () => {
+        overlayMode = true;
+        editingState = undefined;
+        pendingClick = undefined;
+        render(currentState);
+      });
+
+      doneButton.addEventListener("click", () => {
+        overlayMode = false;
+        render(currentState);
+      });
+
+	      function updateActiveMacroSelection(input) {
+        if (editingState?.type !== "macro" || editingState.name !== input.dataset.macroName) {
+          return;
+        }
+        editingState = {
+          ...editingState,
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      }
+
+      function focusActiveMacroInput() {
+        if (editingState?.type !== "macro") {
+          return;
+        }
+        const macroInput = [...content.querySelectorAll(".macro-input")].find(
+          (candidate) => candidate.dataset.macroName === editingState.name,
+        );
+        if (!macroInput) {
+          return;
+        }
+        const fallbackCaret = String(editingState.value || "").length;
+        const selectionStart =
+          typeof editingState.selectionStart === "number"
+            ? editingState.selectionStart
+            : fallbackCaret;
+        const selectionEnd =
+          typeof editingState.selectionEnd === "number"
+            ? editingState.selectionEnd
+            : fallbackCaret;
+        suppressFocusSync = true;
+        macroInput.focus();
+        suppressFocusSync = false;
+        macroInput.setSelectionRange(selectionStart, selectionEnd);
+      }
+
+      function updateActiveValueSelection(input) {
+        if (editingState?.type !== "value" || editingState.key !== input.dataset.putKey) {
+          return;
+        }
+        editingState = {
+          ...editingState,
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      }
+
+      function focusActiveValueInput() {
+        if (editingState?.type !== "value") {
+          return;
+        }
+        const valueInput = [...content.querySelectorAll(".inline-put-input")].find(
+          (candidate) => candidate.dataset.putKey === editingState.key,
+        );
+        if (!valueInput) {
+          return;
+        }
+        const fallbackCaret = String(editingState.value || "").length;
+        const selectionStart =
+          typeof editingState.selectionStart === "number"
+            ? editingState.selectionStart
+            : fallbackCaret;
+        const selectionEnd =
+          typeof editingState.selectionEnd === "number"
+            ? editingState.selectionEnd
+            : fallbackCaret;
+        suppressFocusSync = true;
+        valueInput.focus();
+        suppressFocusSync = false;
+        valueInput.setSelectionRange(selectionStart, selectionEnd);
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function render(payload) {
+        captureActiveEditingState();
+        captureActiveDraftState();
+        currentState = payload || {};
+        statusText.textContent = payload?.contextStatus || "";
+        addChannelsButton.hidden = overlayMode;
+        doneButton.hidden = !overlayMode;
+        const messageHtml = payload?.message
+          ? '<div class="message">' + escapeHtml(payload.message) + '</div>'
+          : "";
+        const channelDraftValue =
+          draftState?.type === "channels"
+            ? draftState.value
+            : "";
+        const macros = Array.isArray(payload?.macros) ? payload.macros : [];
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const macrosHtml = macros.length
+          ? '<div class="macros">' + macros.map((macro) => {
+              const currentValue =
+                editingState?.type === "macro" && editingState.name === macro.name
+                  ? editingState.value
+                  : macro.value || "";
+              return '<div class="macro-name">' + escapeHtml(macro.name) + '</div>' +
+                '<input class="macro-input" data-macro-name="' + escapeHtml(macro.name) +
+                '" type="text" spellcheck="false" value="' + escapeHtml(currentValue) + '" />';
+            }).join("") + '</div>'
+          : '<div class="empty">No macros are used by this source.</div>';
+        const rowsHtml = rows.length
+          ? '<table><thead><tr><th>Channel</th><th>Value</th></tr></thead><tbody>' +
+            rows.map((row) => {
+              const isEditingValue =
+                editingState?.type === "value" && editingState.key === row.key;
+              const valueHtml =
+                '<div class="value-display ' + (isEditingValue ? 'hidden' : '') + '">' +
+                  escapeHtml(row.value || "") +
+                '</div>' +
+                (isEditingValue
+                  ? '<div class="value-edit-shell"><input class="inline-put-input" data-put-key="' +
+                    escapeHtml(row.key || "") +
+                    '" type="text" spellcheck="false" value="' + escapeHtml(editingState.value || "") + '" /></div>'
+                  : '');
+              const canPut = Boolean(row.canPut && row.key);
+              return '<tr>' +
+                '<td>' + escapeHtml(row.channelName || "") + '</td>' +
+                '<td class="value-cell ' + (canPut ? "" : "readonly") + '" data-put-key="' +
+                escapeHtml(row.key || "") + '">' + valueHtml + '</td>' +
+                '</tr>';
+            }).join("") + '</tbody></table>'
+          : '<div class="empty">No channel rows are available.</div>';
+
+        isRendering = true;
+        content.innerHTML = overlayMode
+          ? '<div class="overlay-page">' +
+              '<div><div class="overlay-title">Add Channels</div><div class="overlay-hint">One channel per line. Macros will be detected automatically from channel names.</div></div>' +
+              '<div class="bulk-editor">' +
+                '<textarea class="bulk-input" data-draft-type="channels" spellcheck="false" placeholder="One channel per line">' +
+                  escapeHtml(channelDraftValue) +
+                '</textarea>' +
+                '<div class="bulk-actions"><button class="action-button" data-action="add-channels">Add Channels</button></div>' +
+              '</div>' +
+            '</div>'
+          : messageHtml +
+            '<div class="section"><h2>Macros</h2>' + macrosHtml + '</div>' +
+            '<div class="section"><h2>Channels</h2>' + rowsHtml + '</div>';
+        isRendering = false;
+
+        for (const draftInput of content.querySelectorAll(".bulk-input")) {
+          draftInput.addEventListener("focus", () => {
+            if (suppressFocusSync) {
+              return;
+            }
+            draftState = {
+              type: draftInput.dataset.draftType,
+              value: draftInput.value,
+              selectionStart: draftInput.selectionStart,
+              selectionEnd: draftInput.selectionEnd,
+            };
+          });
+          draftInput.addEventListener("input", (event) => {
+            draftState = {
+              type: draftInput.dataset.draftType,
+              value: event.target.value,
+              selectionStart: event.target.selectionStart,
+              selectionEnd: event.target.selectionEnd,
+            };
+          });
+          draftInput.addEventListener("keyup", () => {
+            updateActiveDraftSelection(draftInput);
+          });
+          draftInput.addEventListener("mouseup", () => {
+            updateActiveDraftSelection(draftInput);
+          });
+          draftInput.addEventListener("select", () => {
+            updateActiveDraftSelection(draftInput);
+          });
+          draftInput.addEventListener("blur", () => {
+            if (isRendering) {
+              return;
+            }
+            if (draftState?.type === draftInput.dataset.draftType) {
+              draftState = undefined;
+            }
+          });
+        }
+
+        for (const actionButton of content.querySelectorAll(".action-button")) {
+          actionButton.addEventListener("click", () => {
+            const draftInput = content.querySelector('.bulk-input[data-draft-type="channels"]');
+            const text = draftInput?.value || "";
+            if (draftInput) {
+              draftInput.value = "";
+            }
+            draftState = undefined;
+            vscode.postMessage({
+              type: "addPvlistWidgetChannels",
+              text,
+            });
+          });
+        }
+
+        for (const macroInput of content.querySelectorAll(".macro-input")) {
+          macroInput.addEventListener("focus", () => {
+            if (suppressFocusSync) {
+              return;
+            }
+            editingState = {
+              type: "macro",
+              name: macroInput.dataset.macroName,
+              value: macroInput.value,
+              selectionStart: macroInput.selectionStart,
+              selectionEnd: macroInput.selectionEnd,
+            };
+          });
+          macroInput.addEventListener("input", (event) => {
+            editingState = {
+              type: "macro",
+              name: macroInput.dataset.macroName,
+              value: event.target.value,
+              selectionStart: event.target.selectionStart,
+              selectionEnd: event.target.selectionEnd,
+            };
+          });
+          macroInput.addEventListener("keyup", () => {
+            updateActiveMacroSelection(macroInput);
+          });
+          macroInput.addEventListener("mouseup", () => {
+            updateActiveMacroSelection(macroInput);
+          });
+          macroInput.addEventListener("select", () => {
+            updateActiveMacroSelection(macroInput);
+          });
+          macroInput.addEventListener("blur", () => {
+            if (isRendering) {
+              return;
+            }
+            if (editingState?.type === "macro" && editingState.name === macroInput.dataset.macroName) {
+              editingState = undefined;
+            }
+          });
+          macroInput.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") {
+              return;
+            }
+            const macroName = macroInput.dataset.macroName;
+            editingState = undefined;
+            vscode.postMessage({
+              type: "updatePvlistWidgetMacro",
+              name: macroName,
+              value: macroInput.value,
+            });
+          });
+        }
+
+        for (const valueCell of content.querySelectorAll(".value-cell")) {
+          valueCell.addEventListener("click", () => {
+            const key = valueCell.dataset.putKey;
+            if (!key || valueCell.classList.contains("readonly")) {
+              pendingClick = undefined;
+              return;
+            }
+            if (editingState?.type === "value") {
+              if (editingState.key === key) {
+                focusActiveValueInput();
+              }
+              pendingClick = undefined;
+              return;
+            }
+            const now = Date.now();
+            if (
+              pendingClick &&
+              pendingClick.key === key &&
+              now - pendingClick.timestamp <= doubleClickIntervalMs
+            ) {
+              const row = rows.find((candidate) => candidate.key === key);
+              editingState = {
+                type: "value",
+                key,
+                value: row?.value || "",
+                selectionStart: undefined,
+                selectionEnd: undefined,
+              };
+              pendingClick = undefined;
+              render(currentState);
+              focusActiveValueInput();
+              return;
+            }
+            pendingClick = { key, timestamp: now };
+          });
+        }
+
+        for (const input of content.querySelectorAll(".inline-put-input")) {
+          input.addEventListener("input", (event) => {
+            editingState = {
+              type: "value",
+              key: input.dataset.putKey,
+              value: event.target.value,
+              selectionStart: event.target.selectionStart,
+              selectionEnd: event.target.selectionEnd,
+            };
+          });
+          input.addEventListener("keyup", () => {
+            updateActiveValueSelection(input);
+          });
+          input.addEventListener("mouseup", () => {
+            updateActiveValueSelection(input);
+          });
+          input.addEventListener("select", () => {
+            updateActiveValueSelection(input);
+          });
+          input.addEventListener("blur", () => {
+            if (editingState?.type !== "value" || editingState.key !== input.dataset.putKey) {
+              return;
+            }
+            updateActiveValueSelection(input);
+            requestAnimationFrame(() => {
+              if (
+                editingState?.type === "value" &&
+                editingState.key === input.dataset.putKey &&
+                document.activeElement !== input
+              ) {
+                focusActiveValueInput();
+              }
+            });
+          });
+          input.addEventListener("keydown", (event) => {
+            updateActiveValueSelection(input);
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              const key = input.dataset.putKey;
+              const value = input.value;
+              editingState = undefined;
+              pendingClick = undefined;
+              input.blur();
+              render(currentState);
+              vscode.postMessage({
+                type: "putPvlistValue",
+                key,
+                value,
+              });
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              editingState = undefined;
+              pendingClick = undefined;
+              render(currentState);
+              return;
+            }
+          });
+        }
+
+        if (editingState?.type === "macro") {
+          focusActiveMacroInput();
+        }
+
+        if (editingState?.type === "value") {
+          focusActiveValueInput();
+        } else if (draftState?.type) {
+          focusActiveDraftInput();
+        }
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data?.type === "pvlistWidgetState") {
+          render(event.data.state);
+        }
+      });
+
+      render(initialState);
+    </script>
+  </body>
+</html>`;
+}
+
 function createNonce() {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+class EpicsProbeCustomEditorProvider {
+  constructor(controller) {
+    this.controller = controller;
+  }
+
+  async resolveCustomTextEditor(document, webviewPanel) {
+    await this.controller.resolveProbeCustomEditor(document, webviewPanel);
+  }
 }
 
 function escapeHtml(value) {
@@ -2818,6 +6779,10 @@ function analyzeRuntimeDocument(document, defaultProtocol, databaseHelpers = {})
     };
   }
 
+  if (isProbeDocument(document)) {
+    return analyzeProbeDocument(document);
+  }
+
   if (isStrictMonitorDocument(document)) {
     return analyzeStrictMonitorDocument(document, defaultProtocol);
   }
@@ -2831,6 +6796,152 @@ function analyzeRuntimeDocument(document, defaultProtocol, databaseHelpers = {})
 
 function analyzeStrictMonitorDocument(document, defaultProtocol) {
   return analyzeStrictMonitorText(document?.getText(), defaultProtocol);
+}
+
+function analyzeProbeDocument(document) {
+  const text = document?.getText?.() || "";
+  const lines = String(text).split(/\r?\n/);
+  const diagnostics = [];
+  const recordLines = [];
+
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+    const lineText = lines[lineNumber];
+    const trimmedLine = lineText.trim();
+    const startCharacter = lineText.indexOf(trimmedLine);
+    const endCharacter = startCharacter + trimmedLine.length;
+
+    if (!trimmedLine) {
+      continue;
+    }
+
+    if (trimmedLine.startsWith("#")) {
+      continue;
+    }
+
+    recordLines.push({
+      lineNumber,
+      startCharacter,
+      endCharacter,
+      value: trimmedLine,
+    });
+  }
+
+  if (recordLines.length > 1) {
+    for (const recordLine of recordLines) {
+      diagnostics.push({
+        lineNumber: recordLine.lineNumber,
+        startCharacter: recordLine.startCharacter,
+        endCharacter: recordLine.endCharacter,
+        message: "Probe files must contain exactly one non-empty record-name line.",
+      });
+    }
+  }
+
+  const recordLine = recordLines[0];
+  if (recordLine) {
+    if (/\$\(|\$\{/.test(recordLine.value)) {
+      diagnostics.push({
+        lineNumber: recordLine.lineNumber,
+        startCharacter: recordLine.startCharacter,
+        endCharacter: recordLine.endCharacter,
+        message: "Probe record names cannot contain EPICS macros.",
+      });
+    }
+
+    if (/\s/.test(recordLine.value)) {
+      diagnostics.push({
+        lineNumber: recordLine.lineNumber,
+        startCharacter: recordLine.startCharacter,
+        endCharacter: recordLine.endCharacter,
+        message: "Probe files allow only one record name with no extra text.",
+      });
+    }
+  }
+
+  return {
+    recordName:
+      diagnostics.length === 0 && recordLine
+        ? recordLine.value
+        : undefined,
+    recordLineNumber: recordLine?.lineNumber,
+    recordType: undefined,
+    definitions: [],
+    diagnostics,
+    lineReferences: [],
+  };
+}
+
+function buildProbeOverlayAnchorPosition(document, analysis) {
+  const recordLineNumber = Number(analysis?.recordLineNumber);
+  if (!Number.isInteger(recordLineNumber) || recordLineNumber < 0) {
+    return undefined;
+  }
+
+  const line = document.lineAt(recordLineNumber);
+  return new vscode.Position(recordLineNumber, line.text.length);
+}
+
+function buildProbeOverlayLines(state) {
+  if (!state) {
+    return [];
+  }
+
+  const lines = [
+    `Probe`,
+    `Value: ${state.value}`,
+    `Type: ${state.recordType}`,
+    `Updated: ${state.lastUpdated}`,
+    `Access: ${state.access}`,
+  ];
+
+  if (state.fields.length) {
+    const fieldLines = state.fields
+      .slice(0, Math.max(0, PROBE_OVERLAY_MAX_LINES - 6))
+      .map((field) => {
+      const valueText = truncateText(String(field.value || ""), 28);
+      return `${field.fieldName}: ${valueText}`;
+      });
+    lines.push("Fields:");
+    lines.push(...fieldLines);
+    if (state.fields.length > fieldLines.length) {
+      lines.push(`+${state.fields.length - fieldLines.length} more fields`);
+    }
+  } else if (state.fieldStatusText) {
+    lines.push(state.fieldStatusText);
+  }
+
+  return lines;
+}
+
+function buildProbeOverlayHoverMarkdown(state) {
+  if (!state) {
+    return "Probe session is not available.";
+  }
+
+  const lines = [
+    `**${escapeMarkdownText(state.recordName || "EPICS Probe")}**`,
+    "",
+    `Value: \`${escapeInlineCode(state.value)}\``,
+    `Record Type: \`${escapeInlineCode(state.recordType)}\``,
+    `Last Update: ${escapeMarkdownText(state.lastUpdated)}`,
+    `Permission: ${escapeMarkdownText(state.access)}`,
+  ];
+
+  if (state.fields.length) {
+    lines.push("", "**Fields**");
+    for (const field of state.fields) {
+      const updatedSuffix = field.updated
+        ? ` (${escapeMarkdownText(field.updated)})`
+        : "";
+      lines.push(
+        `- \`${escapeInlineCode(field.fieldName)}\`: \`${escapeInlineCode(field.value)}\`${updatedSuffix}`,
+      );
+    }
+  } else if (state.fieldStatusText) {
+    lines.push("", escapeMarkdownText(state.fieldStatusText));
+  }
+
+  return lines.join("\n");
 }
 
 function extractDatabaseMonitorDefinitions(text, defaultProtocol, databaseHelpers = {}) {
@@ -3014,7 +7125,7 @@ function analyzeStrictMonitorText(text, defaultProtocol) {
       continue;
     }
 
-    const macroMatch = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\S+)\s*$/);
+    const macroMatch = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
     if (macroMatch) {
       const macroName = macroMatch[1];
       if (macroDefinitions.has(macroName)) {
@@ -3022,7 +7133,7 @@ function analyzeStrictMonitorText(text, defaultProtocol) {
           lineNumber,
           startCharacter,
           endCharacter,
-          message: `Duplicate monitor macro "${macroName}".`,
+          message: `Duplicate pvlist macro "${macroName}".`,
         });
       } else {
         macroDefinitions.set(macroName, {
@@ -3042,7 +7153,7 @@ function analyzeStrictMonitorText(text, defaultProtocol) {
         lineNumber,
         startCharacter,
         endCharacter,
-        message: 'Monitor macro definitions must be exactly "NAME = value" with no extra text.',
+        message: 'PV list macro definitions must be exactly "NAME = value" with no extra text.',
       });
       parsedLines.push({ type: "invalid" });
       continue;
@@ -3053,7 +7164,7 @@ function analyzeStrictMonitorText(text, defaultProtocol) {
         lineNumber,
         startCharacter,
         endCharacter,
-        message: "Monitor record lines must contain exactly one record name with no extra text.",
+        message: "PV list lines must contain exactly one record name with no extra text.",
       });
       parsedLines.push({ type: "invalid" });
       continue;
@@ -3098,7 +7209,7 @@ function analyzeStrictMonitorText(text, defaultProtocol) {
         lineNumber: parsedLine.lineNumber,
         startCharacter: parsedLine.startCharacter,
         endCharacter: parsedLine.endCharacter,
-        message: "Monitor record name resolves to invalid text.",
+        message: "PV list entry resolves to invalid text.",
       });
       continue;
     }
@@ -3205,7 +7316,7 @@ function resolveStrictMonitorMacro(
     return {
       value: "",
       errors: [
-        `Circular monitor macro reference: ${[...stack, macroName].join(" -> ")}.`,
+        `Circular pvlist macro reference: ${[...stack, macroName].join(" -> ")}.`,
       ],
     };
   }
@@ -3223,7 +7334,7 @@ function resolveStrictMonitorMacro(
 
     return {
       value: "",
-      errors: [`Undefined monitor macro "${macroName}".`],
+      errors: [`Undefined pvlist macro "${macroName}".`],
     };
   }
 
@@ -3441,6 +7552,151 @@ function formatRuntimeDisplayValue(value) {
     return JSON.stringify(value);
   } catch (error) {
     return String(value);
+  }
+}
+
+function shouldIgnoreTransientProbeFieldValue(entry, value) {
+  if (entry?.sourceKind !== "probe" || entry?.probeRole !== "field") {
+    return false;
+  }
+
+  if (value === undefined || value === null) {
+    return true;
+  }
+
+  if (Array.isArray(value) && value.length === 0) {
+    return true;
+  }
+
+  return false;
+}
+
+function getProbeEntryDisplayValue(entry) {
+  if (!entry) {
+    return "(connecting...)";
+  }
+
+  if (
+    entry.status === "connecting" ||
+    entry.status === "pending" ||
+    entry.status === "disconnected" ||
+    entry.status === "stopped"
+  ) {
+    return "(connecting...)";
+  }
+
+  if (entry.status === "error" || entry.status === "destroyed") {
+    return "(connecting...)";
+  }
+
+  if (entry.valueText) {
+    return entry.valueText;
+  }
+
+  const value = getMonitorHoverValue(entry);
+  if (value === undefined) {
+    return entry.valueText || "(connecting...)";
+  }
+
+  return formatRuntimeDisplayValue(value);
+}
+
+function getProbeAccessLabel(entry, runtimeLibrary) {
+  if (!entry) {
+    return "(connecting...)";
+  }
+
+  if (
+    entry.status === "connecting" ||
+    entry.status === "pending" ||
+    entry.status === "disconnected" ||
+    entry.status === "stopped"
+  ) {
+    return "(connecting...)";
+  }
+
+  if (entry.protocol === "pva") {
+    return canPutProbeEntry(entry) ? "Read/Write" : "Read only";
+  }
+
+  if (!runtimeLibrary || !entry.channel?.getAccessRight) {
+    return canPutProbeEntry(entry) ? "Read/Write" : "Read only";
+  }
+
+  const accessRight = entry.channel.getAccessRight?.();
+  if (accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.READ_ONLY) {
+    return "Read only";
+  }
+  if (
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.WRITE_ONLY ||
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.READ_WRITE
+  ) {
+    return "Read/Write";
+  }
+  if (
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.NOT_AVAILABLE ||
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.NO_ACCESS
+  ) {
+    return "No access";
+  }
+
+  return canPutProbeEntry(entry) ? "Read/Write" : "Read only";
+}
+
+function canPutProbeEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+
+  if (entry.probeRole === "recordType") {
+    return false;
+  }
+
+  if (
+    entry.status === "connecting" ||
+    entry.status === "pending" ||
+    entry.status === "disconnected" ||
+    entry.status === "stopped" ||
+    entry.status === "error" ||
+    entry.status === "destroyed"
+  ) {
+    return false;
+  }
+
+  if (entry.protocol === "pva") {
+    const currentValue = getMonitorHoverValue(entry);
+    if (currentValue === undefined || Array.isArray(currentValue)) {
+      return false;
+    }
+    if (isPvaEnumLikeValue(currentValue)) {
+      return true;
+    }
+    return typeof currentValue === "string" || typeof currentValue === "number";
+  }
+
+  const valueCount = Number(entry.channel?.getValueCount?.() || 0);
+  if (valueCount > 1) {
+    return false;
+  }
+
+  const runtimeLibrary = safeRequireRuntimeLibrary();
+  if (!runtimeLibrary || !entry.channel?.getAccessRight) {
+    return false;
+  }
+
+  const accessRight = entry.channel.getAccessRight?.();
+  return !(
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.NOT_AVAILABLE ||
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.NO_ACCESS ||
+    accessRight === runtimeLibrary.Channel_ACCESS_RIGHTS.READ_ONLY
+  );
+}
+
+function safeRequireRuntimeLibrary() {
+  try {
+    return require("epics-tca");
+  } catch (error) {
+    return undefined;
   }
 }
 

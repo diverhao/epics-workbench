@@ -32,8 +32,7 @@ for (const [fileName, filePath] of [...dbdFilesByName.entries()].sort()) {
   }
 
   const recordType = recordTypeMatch[1];
-  const fields = [...extractFieldsForRecordTypeFromDbdFile(filePath, recordType, new Set())]
-    .sort();
+  const fields = [...extractFieldsForRecordTypeFromDbdFile(filePath, recordType, new Set())];
   if (fields.length > 0) {
     output[recordType] = fields;
   }

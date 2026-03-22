@@ -3,3 +3,4 @@ node_modules/
 dev-doc/
 /appTest/
 .DS_Store
+/jetbrains/TASKS.md

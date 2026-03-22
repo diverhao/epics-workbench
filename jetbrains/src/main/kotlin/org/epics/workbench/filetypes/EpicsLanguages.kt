@@ -44,10 +44,16 @@ class EpicsSequencerLanguage private constructor() : Language("EPICS Sequencer")
   }
 }
 
-class EpicsMonitorLanguage private constructor() : Language("EPICS Monitor") {
+class EpicsMonitorLanguage private constructor() : Language("EPICS PV List") {
   companion object {
     @JvmField
     val INSTANCE = EpicsMonitorLanguage()
   }
 }
 
+class EpicsProbeLanguage private constructor() : Language("EPICS Probe") {
+  companion object {
+    @JvmField
+    val INSTANCE = EpicsProbeLanguage()
+  }
+}

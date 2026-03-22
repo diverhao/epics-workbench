@@ -91,3 +91,15 @@ class EpicsMonitorSyntaxHighlighterFactory : SyntaxHighlighterFactory() {
     }
   }
 }
+
+class EpicsProbeSyntaxHighlighterFactory : SyntaxHighlighterFactory() {
+  override fun getSyntaxHighlighter(project: Project?, virtualFile: VirtualFile?): SyntaxHighlighter {
+    return object : SyntaxHighlighterBase() {
+      override fun getHighlightingLexer(): Lexer = EpicsProbeLexer()
+
+      override fun getTokenHighlights(tokenType: IElementType): Array<com.intellij.openapi.editor.colors.TextAttributesKey> {
+        return epicsHighlights(tokenType)
+      }
+    }
+  }
+}

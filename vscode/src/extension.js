@@ -1,6 +1,9 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
+const { createDatabaseExcelTools } = require("./databaseExcel");
+const { createDatabaseExcelImportTools } = require("./databaseExcelImport");
 const {
   formatDatabaseText,
   formatSubstitutionText,
@@ -21,6 +24,8 @@ const LANGUAGE_IDS = {
   substitutions: "substitutions",
   dbd: "database definition",
   sequencer: "sequencer",
+  pvlist: "pvlist",
+  probe: "probe",
 };
 
 const DATABASE_EXTENSIONS = new Set([".db", ".vdb", ".template"]);
@@ -60,7 +65,17 @@ const EXPAND_ALL_RECORDS_COMMAND = "vscode-epics.expandAllRecords";
 const GENERATE_DATABASE_TOC_COMMAND = "vscode-epics.generateDatabaseToc";
 const COPY_AS_MONITOR_FILE_COMMAND = "vscode-epics.copyAsMonitorFile";
 const COPY_AS_EXPANDED_DB_COMMAND = "vscode-epics.copyAsExpandedDb";
+const EXPORT_DATABASE_TO_EXCEL_COMMAND = "vscode-epics.exportDatabaseToExcel";
+const IMPORT_DATABASE_FROM_EXCEL_COMMAND = "vscode-epics.importDatabaseFromExcel";
+const OPEN_EXCEL_IMPORT_PREVIEW_COMMAND = "vscode-epics.openExcelImportPreview";
+const OPEN_IN_PROBE_COMMAND = "vscode-epics.openInProbe";
+const OPEN_IN_PVLIST_COMMAND = "vscode-epics.openInPvList";
+const OPEN_IN_MONITOR_COMMAND = "vscode-epics.openInMonitor";
+const OPEN_PROBE_WIDGET_COMMAND = "vscode-epics.openProbeWidget";
+const OPEN_PVLIST_WIDGET_COMMAND = "vscode-epics.openPvlistWidget";
+const OPEN_MONITOR_WIDGET_COMMAND = "vscode-epics.openMonitorWidget";
 const UPDATE_MENU_FIELD_VALUE_COMMAND = "vscode-epics.updateMenuFieldValue";
+const EXCEL_IMPORT_PREVIEW_VIEW_TYPE = "vscode-epics.excelImportPreview";
 const STREAM_PROTOCOL_PATH_VARIABLE = "STREAM_PROTOCOL_PATH";
 const DBD_DEVICE_LINK_TYPES = ["INST_IO"];
 const TRIGGER_SUGGEST_COMMAND = "editor.action.triggerSuggest";
@@ -200,6 +215,7 @@ let recordTypeSuggestAnchor;
 let fieldNameSuggestAnchor;
 let recordTemplateFields = new Map();
 let recordTemplateStaticData = {
+  fieldOrderByRecordType: new Map(),
   fieldTypesByRecordType: new Map(),
   fieldMenuChoicesByRecordType: new Map(),
   fieldInitialValuesByRecordType: new Map(),
@@ -222,16 +238,24 @@ const {
   compareLabels,
   escapeRegExp,
 });
+const { buildDatabaseWorkbookBuffer } = createDatabaseExcelTools({
+  extractRecordDeclarations,
+  extractFieldDeclarationsInRecord,
+});
+const { importDatabaseWorkbookBuffer } = createDatabaseExcelImportTools();
 
 function activate(context) {
   registerRuntimeMonitor(context, {
     extractDatabaseTocEntries,
     extractDatabaseTocMacroAssignments,
     extractRecordDeclarations,
+    getFieldNamesForRecordType: getRuntimeProbeFieldNamesForRecordType,
+    getFieldTypeForRecordType: getRuntimeProbeFieldTypeForRecordType,
   });
   const staticData = loadStaticData(context.extensionPath);
   recordTemplateFields = new Map(staticData.recordTemplateFields || []);
   recordTemplateStaticData = {
+    fieldOrderByRecordType: staticData.fieldOrderByRecordType,
     fieldTypesByRecordType: staticData.fieldTypesByRecordType,
     fieldMenuChoicesByRecordType: staticData.fieldMenuChoicesByRecordType,
     fieldInitialValuesByRecordType: staticData.fieldInitialValuesByRecordType,
@@ -532,6 +556,39 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand(COPY_AS_EXPANDED_DB_COMMAND, async () => {
       await copySubstitutionsAsExpandedDatabaseInActiveEditor(workspaceIndex);
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(EXPORT_DATABASE_TO_EXCEL_COMMAND, async () => {
+      await exportDatabaseToExcelInActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      IMPORT_DATABASE_FROM_EXCEL_COMMAND,
+      async (resourceUri) => {
+        await importDatabaseFromExcelResource(resourceUri);
+      },
+    ),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_EXCEL_IMPORT_PREVIEW_COMMAND, async () => {
+      await openExcelImportPreviewPanel(context);
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_IN_PROBE_COMMAND, async () => {
+      await openInProbeFromActiveEditor(workspaceIndex);
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_IN_PVLIST_COMMAND, async () => {
+      await openInPvlistFromActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_IN_MONITOR_COMMAND, async () => {
+      await openInMonitorFromActiveEditor(workspaceIndex);
     }),
   );
   context.subscriptions.push(
@@ -1135,6 +1192,7 @@ function loadStaticData(extensionPath) {
     recordTypes,
     allFields,
     fieldsByRecordType,
+    fieldOrderByRecordType: new Map(Object.entries(embeddedRecordFields)),
     recordTemplateFields: new Map(Object.entries(recordTemplateFields)),
     fieldTypesByRecordType,
     fieldMenuChoicesByRecordType,
@@ -4795,6 +4853,49 @@ function getFieldNamesForRecordType(snapshot, recordType) {
   return [...fallbackLabels].sort(compareLabels);
 }
 
+function getRuntimeProbeFieldNamesForRecordType(recordType) {
+  const labels = [];
+  const seen = new Set();
+  const addFieldName = (fieldName) => {
+    const normalizedFieldName = String(fieldName || "");
+    if (!normalizedFieldName || seen.has(normalizedFieldName)) {
+      return;
+    }
+    seen.add(normalizedFieldName);
+    labels.push(normalizedFieldName);
+  };
+
+  if (recordType) {
+    for (const fieldName of recordTemplateStaticData.fieldOrderByRecordType.get(recordType) || []) {
+      addFieldName(fieldName);
+    }
+    for (const fieldName of recordTemplateFields.get(recordType) || []) {
+      addFieldName(fieldName);
+    }
+    for (const fieldName of recordTemplateStaticData.fieldTypesByRecordType.get(recordType)?.keys() || []) {
+      addFieldName(fieldName);
+    }
+  }
+
+  if (labels.length === 0) {
+    for (const fieldName of COMMON_RECORD_FIELDS) {
+      addFieldName(fieldName);
+    }
+  }
+
+  return labels;
+}
+
+function getRuntimeProbeFieldTypeForRecordType(recordType, fieldName) {
+  if (!recordType || !fieldName) {
+    return undefined;
+  }
+
+  return recordTemplateStaticData.fieldTypesByRecordType
+    .get(recordType)
+    ?.get(fieldName);
+}
+
 function getAvailableFieldNamesForRecordInstance(
   snapshot,
   document,
@@ -6509,13 +6610,526 @@ async function copyDatabaseAsMonitorFileInActiveEditor() {
   const recordLabel = `${recordNames.length} record${recordNames.length === 1 ? "" : "s"}`;
   const macroLabel = `${macroNames.length} macro${macroNames.length === 1 ? "" : "s"}`;
   vscode.window.showInformationMessage(
-    `Copied ${recordLabel} and ${macroLabel} as a .monitor file.`,
+    `Copied ${recordLabel} and ${macroLabel} as a .pvlist file.`,
   );
+}
+
+async function exportDatabaseToExcelInActiveEditor() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isDatabaseDocument(editor.document)) {
+    return;
+  }
+
+  const document = editor.document;
+  const workbookBuffer = buildDatabaseWorkbookBuffer(document.getText());
+  const sourcePath = document.uri.scheme === "file" ? document.uri.fsPath : "database";
+  const defaultUri = document.uri.scheme === "file"
+    ? vscode.Uri.file(
+      `${sourcePath.replace(/\.[^./\\]+$/, "")}.xlsx`,
+    )
+    : undefined;
+  const targetUri = await vscode.window.showSaveDialog({
+    defaultUri,
+    filters: {
+      "Excel Workbook": ["xlsx"],
+    },
+    saveLabel: "Export to Excel",
+  });
+  if (!targetUri) {
+    return;
+  }
+
+  await vscode.workspace.fs.writeFile(targetUri, workbookBuffer);
+  vscode.window.showInformationMessage(
+    `Exported ${path.basename(sourcePath)} to ${path.basename(targetUri.fsPath || targetUri.path)}.`,
+  );
+}
+
+async function importDatabaseFromExcelResource(resourceUri) {
+  let targetUri =
+    resourceUri instanceof vscode.Uri
+      ? resourceUri
+      : Array.isArray(resourceUri) && resourceUri[0] instanceof vscode.Uri
+        ? resourceUri[0]
+        : resourceUri?.fsPath
+          ? vscode.Uri.file(resourceUri.fsPath)
+          : undefined;
+  if (!targetUri) {
+    const selectedUris = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectMany: false,
+      filters: {
+        "Excel Workbook": ["xlsx"],
+      },
+      openLabel: "Import as EPICS Database",
+    });
+    targetUri = selectedUris?.[0];
+  }
+  if (!targetUri || path.extname(targetUri.fsPath || targetUri.path).toLowerCase() !== ".xlsx") {
+    return;
+  }
+
+  let workbookBuffer;
+  let fileStats;
+  try {
+    workbookBuffer = Buffer.from(await vscode.workspace.fs.readFile(targetUri));
+    fileStats = await vscode.workspace.fs.stat(targetUri);
+  } catch (error) {
+    vscode.window.showErrorMessage(
+      `Failed to read ${path.basename(targetUri.fsPath || targetUri.path)}: ${getErrorMessage(error)}`,
+    );
+    return;
+  }
+
+  const importedSheets = importDatabaseWorkbookBuffer(workbookBuffer, {
+    sourceFileName: path.basename(targetUri.fsPath || targetUri.path),
+    sourceCreatedAt: fileStats?.ctime ? new Date(fileStats.ctime) : undefined,
+    sourceModifiedAt: fileStats?.mtime ? new Date(fileStats.mtime) : undefined,
+    importedAt: new Date(),
+  });
+  if (!importedSheets.length) {
+    vscode.window.showWarningMessage(
+      `No EPICS-style sheets were found in ${path.basename(targetUri.fsPath || targetUri.path)}.`,
+    );
+    return;
+  }
+
+  await openImportedDatabaseTabs(importedSheets);
+  const sheetLabel = `${importedSheets.length} sheet${importedSheets.length === 1 ? "" : "s"}`;
+  vscode.window.showInformationMessage(
+    `Imported ${sheetLabel} from ${path.basename(targetUri.fsPath || targetUri.path)}.`,
+  );
+}
+
+async function openExcelImportPreviewPanel(context) {
+  const panel = vscode.window.createWebviewPanel(
+    EXCEL_IMPORT_PREVIEW_VIEW_TYPE,
+    "EPICS Excel Import Preview",
+    vscode.ViewColumn.Active,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    },
+  );
+  panel.webview.html = buildExcelImportPreviewWebviewHtml(panel.webview);
+  panel.webview.onDidReceiveMessage(async (message) => {
+    if (message?.type !== "importExcelPreviewWorkbook") {
+      return;
+    }
+
+    let workbookBuffer;
+    try {
+      workbookBuffer = Buffer.from(String(message.base64 || ""), "base64");
+    } catch (error) {
+      await panel.webview.postMessage({
+        type: "excelImportPreviewResult",
+        success: false,
+        message: `Failed to decode workbook: ${getErrorMessage(error)}`,
+      });
+      return;
+    }
+
+    let importedSheets;
+    try {
+      importedSheets = importDatabaseWorkbookBuffer(workbookBuffer, {
+        sourceFileName: message.name || "dropped.xlsx",
+        sourceModifiedAt: message.lastModified ? new Date(message.lastModified) : undefined,
+        importedAt: new Date(),
+      });
+    } catch (error) {
+      await panel.webview.postMessage({
+        type: "excelImportPreviewResult",
+        success: false,
+        message: getErrorMessage(error),
+      });
+      return;
+    }
+
+    if (!importedSheets.length) {
+      await panel.webview.postMessage({
+        type: "excelImportPreviewResult",
+        success: false,
+        message: `No EPICS-style sheets were found in ${message.name || "the dropped workbook"}.`,
+      });
+      return;
+    }
+
+    await openImportedDatabaseTabs(importedSheets);
+    const sheetLabel = `${importedSheets.length} sheet${importedSheets.length === 1 ? "" : "s"}`;
+    await panel.webview.postMessage({
+      type: "excelImportPreviewResult",
+      success: true,
+      message: `Imported ${sheetLabel} from ${message.name || "the dropped workbook"}.`,
+    });
+  });
+}
+
+async function openImportedDatabaseTabs(importedSheets) {
+  for (let index = 0; index < importedSheets.length; index += 1) {
+    const importedSheet = importedSheets[index];
+    await openUntitledImportedDatabaseDocument(
+      importedSheet.suggestedFileName,
+      importedSheet.text,
+      index + 1 < importedSheets.length,
+    );
+  }
+}
+
+async function openUntitledImportedDatabaseDocument(fileName, text, preserveFocus) {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.tmpdir();
+  const untitledUri = vscode.Uri.file(path.join(workspaceRoot, fileName)).with({
+    scheme: "untitled",
+  });
+  const document = await vscode.workspace.openTextDocument(untitledUri);
+  const editor = await vscode.window.showTextDocument(document, { preview: false, preserveFocus });
+  await editor.edit((editBuilder) => {
+    editBuilder.replace(
+      new vscode.Range(new vscode.Position(0, 0), document.positionAt(document.getText().length)),
+      text,
+    );
+  });
+  await vscode.languages.setTextDocumentLanguage(editor.document, LANGUAGE_IDS.database);
+}
+
+async function openInProbeFromActiveEditor(workspaceIndex) {
+  const target = await resolveProbeTargetAtActiveEditor(workspaceIndex);
+  await vscode.commands.executeCommand(OPEN_PROBE_WIDGET_COMMAND, {
+    recordName: target?.recordName || "",
+  });
+}
+
+async function openInPvlistFromActiveEditor() {
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  if (!document) {
+    return;
+  }
+
+  const sourceLabel = getDocumentDisplayLabel(document);
+  if (isDatabaseDocument(document)) {
+    await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
+      sourceKind: "database",
+      sourceLabel,
+      sourceDocumentUri: document.uri.toString(),
+      sourceText: document.getText(),
+    });
+    return;
+  }
+
+  if (isPvlistDocument(document)) {
+    await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
+      sourceKind: "pvlist",
+      sourceLabel,
+      sourceDocumentUri: document.uri.toString(),
+      sourceText: document.getText(),
+    });
+  }
+}
+
+async function openInMonitorFromActiveEditor(workspaceIndex) {
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  const initialChannel = await resolveMonitorTargetAtActiveEditor(workspaceIndex);
+  await vscode.commands.executeCommand(OPEN_MONITOR_WIDGET_COMMAND, {
+    sourceLabel: getDocumentDisplayLabel(document),
+    initialChannels: initialChannel ? [initialChannel] : [],
+  });
+}
+
+async function resolveMonitorTargetAtActiveEditor(workspaceIndex) {
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  const position = editor?.selection?.active;
+  if (!document) {
+    return undefined;
+  }
+
+  if (isDatabaseDocument(document) || isStartupDocument(document)) {
+    const target = await resolveProbeTargetAtActiveEditor(workspaceIndex);
+    return String(target?.recordName || "").trim() || undefined;
+  }
+
+  if (isPvlistDocument(document) && position) {
+    const trimmedLine = String(document.lineAt(position.line).text || "").trim();
+    if (
+      trimmedLine &&
+      !trimmedLine.startsWith("#") &&
+      !/^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(trimmedLine) &&
+      !trimmedLine.includes("=") &&
+      !/\s/.test(trimmedLine)
+    ) {
+      return trimmedLine;
+    }
+    return undefined;
+  }
+
+  if (isProbeDocument(document)) {
+    for (const rawLine of document.getText().split(/\r?\n/)) {
+      const trimmedLine = String(rawLine || "").trim();
+      if (!trimmedLine || trimmedLine.startsWith("#")) {
+        continue;
+      }
+      if (/\s/.test(trimmedLine) || /\$\(|\$\{/.test(trimmedLine)) {
+        return undefined;
+      }
+      return trimmedLine;
+    }
+  }
+
+  return undefined;
+}
+
+async function resolveProbeTargetAtActiveEditor(workspaceIndex) {
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  const position = editor?.selection?.active;
+  if (!document || !position) {
+    return undefined;
+  }
+
+  if (isDatabaseDocument(document)) {
+    const tocTarget = resolveProbeTargetFromDatabaseToc(document, position);
+    if (tocTarget) {
+      return tocTarget;
+    }
+
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+    const declaration = extractRecordDeclarations(text).find(
+      (candidate) => offset >= candidate.nameStart && offset <= candidate.nameEnd,
+    );
+    if (declaration) {
+      return {
+        recordName: declaration.name,
+        recordType: declaration.recordType,
+      };
+    }
+
+    const snapshot = await workspaceIndex.getSnapshot();
+    const fieldDeclaration = getRecordScopedFieldDeclarationAtPosition(
+      snapshot,
+      document,
+      position,
+    );
+    if (fieldDeclaration) {
+      const linkedRecordName = resolveLinkedRecordName(
+        snapshot,
+        document,
+        fieldDeclaration.value,
+      );
+      if (linkedRecordName) {
+        return {
+          recordName: linkedRecordName,
+          recordType:
+            getRecordDefinitionsForName(snapshot, document, linkedRecordName)[0]?.recordType,
+        };
+      }
+    }
+  }
+
+  if (isStartupDocument(document)) {
+    const argument = getStartupDbpfArgumentAtPosition(document, position);
+    if (!argument) {
+      return undefined;
+    }
+
+    const snapshot = await workspaceIndex.getSnapshot();
+    const loadedDefinitionsByName = getStartupLoadedRecordDefinitionMap(
+      snapshot,
+      document,
+      position,
+    );
+    const recordName =
+      extractLinkedRecordCandidates(argument.value).find((candidate) =>
+        loadedDefinitionsByName.has(candidate),
+      ) || extractLinkedRecordCandidates(argument.value)[0];
+    if (!recordName) {
+      return undefined;
+    }
+
+    const definitions = loadedDefinitionsByName.get(recordName) || [];
+    return {
+      recordName,
+      recordType: definitions[0]?.recordType,
+    };
+  }
+
+  return undefined;
+}
+
+function resolveProbeTargetFromDatabaseToc(document, position) {
+  const text = document.getText();
+  const offset = document.offsetAt(position);
+  const tocEntry = extractDatabaseTocEntries(text).find(
+    (entry) => offset >= entry.nameStart && offset <= entry.nameEnd,
+  );
+  if (!tocEntry) {
+    return undefined;
+  }
+
+  return {
+    recordName: expandProbeRecordNameFromToc(
+      tocEntry.recordName,
+      extractDatabaseTocMacroAssignments(text),
+    ),
+    recordType: tocEntry.recordType,
+  };
+}
+
+function expandProbeRecordNameFromToc(recordName, macroAssignments) {
+  return String(recordName || "").replace(
+    /\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}/g,
+    (match, parenName, defaultValue, braceName) => {
+      const macroName = parenName || braceName;
+      const assignment = macroAssignments.get(macroName);
+      if (assignment?.hasAssignment) {
+        return assignment.value;
+      }
+      return defaultValue !== undefined ? defaultValue : match;
+    },
+  );
+}
+
+function buildExcelImportPreviewWebviewHtml(webview) {
+  const nonce = String(Date.now());
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EPICS Excel Import Preview</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    body {
+      font-family: var(--vscode-font-family);
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      margin: 0;
+      padding: 24px;
+    }
+    .panel {
+      border: 1px dashed var(--vscode-panel-border);
+      border-radius: 12px;
+      padding: 28px;
+      min-height: 220px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 16px;
+      background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-editorHoverWidget-background) 14%);
+    }
+    .panel.dragover {
+      border-color: var(--vscode-focusBorder);
+      background: color-mix(in srgb, var(--vscode-editor-background) 70%, var(--vscode-focusBorder) 30%);
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+    p {
+      margin: 0;
+      line-height: 1.5;
+      opacity: 0.9;
+    }
+    button {
+      width: fit-content;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 999px;
+      cursor: pointer;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      font: inherit;
+    }
+    button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    .status {
+      min-height: 1.5em;
+      color: var(--vscode-descriptionForeground);
+    }
+  </style>
+</head>
+<body>
+  <div id="drop-panel" class="panel">
+    <h1>Drop an EPICS Excel workbook here</h1>
+    <p>If the workbook contains EPICS-style sheets whose first row starts with <code>Record</code> and <code>Type</code>, each matching sheet will open as a temporary EPICS database tab.</p>
+    <button id="pick-file" type="button">Choose Workbook...</button>
+    <input id="file-input" type="file" accept=".xlsx" hidden />
+    <div id="status" class="status">Ready.</div>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const dropPanel = document.getElementById("drop-panel");
+    const statusNode = document.getElementById("status");
+    const fileInput = document.getElementById("file-input");
+    const pickButton = document.getElementById("pick-file");
+
+    function setStatus(message) {
+      statusNode.textContent = message;
+    }
+
+    async function postWorkbook(file) {
+      if (!file) {
+        return;
+      }
+      setStatus("Importing " + file.name + "...");
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+      }
+      vscode.postMessage({
+        type: "importExcelPreviewWorkbook",
+        name: file.name,
+        lastModified: file.lastModified,
+        base64: btoa(binary),
+      });
+    }
+
+    dropPanel.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      dropPanel.classList.add("dragover");
+    });
+    dropPanel.addEventListener("dragleave", () => {
+      dropPanel.classList.remove("dragover");
+    });
+    dropPanel.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      dropPanel.classList.remove("dragover");
+      const file = event.dataTransfer?.files?.[0];
+      if (file) {
+        await postWorkbook(file);
+      }
+    });
+    pickButton.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      if (file) {
+        await postWorkbook(file);
+      }
+      fileInput.value = "";
+    });
+
+    window.addEventListener("message", (event) => {
+      const message = event.data;
+      if (message?.type === "excelImportPreviewResult") {
+        setStatus(message.message || (message.success ? "Import complete." : "Import failed."));
+      }
+    });
+  </script>
+</body>
+</html>`;
 }
 
 function buildMonitorFileText(recordNames, macroNames, eol = "\n") {
   const lines = [
-    "# this is a monitor file for EPICS Workbench in VSCode",
+    "# this is a pvlist file for EPICS Workbench in VSCode",
     "# Fill in the macro values below, then open this file and click the EPICS play button in the status bar.",
     "# Each non-comment line after the macro block monitors one EPICS record or PV.",
     "",
@@ -9635,6 +10249,26 @@ function isStartupDocument(document) {
 
 function isSubstitutionsDocument(document) {
   return document && document.languageId === LANGUAGE_IDS.substitutions;
+}
+
+function isPvlistDocument(document) {
+  return document && document.languageId === LANGUAGE_IDS.pvlist;
+}
+
+function isProbeDocument(document) {
+  return document && document.languageId === LANGUAGE_IDS.probe;
+}
+
+function getDocumentDisplayLabel(document) {
+  if (!document?.uri) {
+    return "EPICS";
+  }
+
+  return (
+    path.basename(document.uri.fsPath || document.uri.path || document.fileName || "") ||
+    document.fileName ||
+    "EPICS"
+  );
 }
 
 function isStartupStateDocument(document) {

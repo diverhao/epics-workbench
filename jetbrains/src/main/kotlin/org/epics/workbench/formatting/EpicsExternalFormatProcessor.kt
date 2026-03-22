@@ -97,16 +97,16 @@ class EpicsExternalFormatProcessor : ExternalFormatProcessor {
     private const val DATABASE_LANGUAGE_ID = "EPICS Database"
     private const val SUBSTITUTIONS_LANGUAGE_ID = "EPICS Substitutions"
     private const val SEQUENCER_LANGUAGE_ID = "EPICS Sequencer"
-    private const val MONITOR_LANGUAGE_ID = "EPICS Monitor"
+    private const val MONITOR_LANGUAGE_ID = "EPICS PV List"
     private const val DATABASE_FILE_TYPE = "EPICS Database"
     private const val SUBSTITUTIONS_FILE_TYPE = "EPICS Substitutions"
     private const val SEQUENCER_FILE_TYPE = "EPICS Sequencer"
-    private const val MONITOR_FILE_TYPE = "EPICS Monitor"
+    private const val MONITOR_FILE_TYPE = "EPICS PV List"
     private const val DEFAULT_INDENT_SIZE = 4
     private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")
     private val SUBSTITUTIONS_EXTENSIONS = setOf("substitutions", "sub", "subs")
     private const val SEQUENCER_EXTENSION = "st"
-    private const val MONITOR_EXTENSION = "monitor"
+    private const val MONITOR_EXTENSION = "pvlist"
   }
 
   private enum class FormatKind {

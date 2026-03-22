@@ -55,11 +55,18 @@
       extensions="st"
     />
     <fileType
-      name="EPICS Monitor"
-      language="EPICS Monitor"
+      name="EPICS PV List"
+      language="EPICS PV List"
       implementationClass="org.epics.workbench.filetypes.EpicsMonitorFileType"
       fieldName="INSTANCE"
-      extensions="monitor"
+      extensions="pvlist"
+    />
+    <fileType
+      name="EPICS Probe"
+      language="EPICS Probe"
+      implementationClass="org.epics.workbench.filetypes.EpicsProbeFileType"
+      fieldName="INSTANCE"
+      extensions="probe"
     />
     <lang.syntaxHighlighterFactory
       language="EPICS Database"
@@ -74,9 +81,13 @@
       implementationClass="org.epics.workbench.highlighting.EpicsStartupSyntaxHighlighterFactory"
     />
     <lang.syntaxHighlighterFactory
-      language="EPICS Monitor"
+      language="EPICS PV List"
       implementationClass="org.epics.workbench.highlighting.EpicsMonitorSyntaxHighlighterFactory"
     />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Probe"
+      implementationClass="org.epics.workbench.highlighting.EpicsProbeSyntaxHighlighterFactory"
+    />
     <spellchecker.support
       language="EPICS Database"
       implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
@@ -102,7 +113,11 @@
       implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
     />
     <spellchecker.support
-      language="EPICS Monitor"
+      language="EPICS PV List"
+      implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
+    />
+    <spellchecker.support
+      language="EPICS Probe"
       implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
     />
     <lang.inspectionSuppressor
@@ -130,7 +145,11 @@
       implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
     />
     <lang.inspectionSuppressor
-      language="EPICS Monitor"
+      language="EPICS PV List"
+      implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
+    />
+    <lang.inspectionSuppressor
+      language="EPICS Probe"
       implementationClass="org.epics.workbench.spellcheck.EpicsSpellcheckingInspectionSuppressor"
     />
     <lang.quoteHandler
@@ -158,7 +177,11 @@
       implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
     />
     <lang.quoteHandler
-      language="EPICS Monitor"
+      language="EPICS PV List"
+      implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
+    />
+    <lang.quoteHandler
+      language="EPICS Probe"
       implementationClass="org.epics.workbench.editor.EpicsQuoteHandler"
     />
     <completion.contributor
@@ -184,11 +207,20 @@
     <postStartupActivity implementation="org.epics.workbench.inspections.EpicsDatabaseValidationActivity" />
     <postStartupActivity implementation="org.epics.workbench.documentation.EpicsHoverDocumentationActivity" />
     <postStartupActivity implementation="org.epics.workbench.runtime.EpicsMonitorRuntimeActivity" />
+    <projectConfigurable
+      groupId="tools"
+      id="org.epics.workbench.runtime.configuration"
+      instance="org.epics.workbench.runtime.EpicsRuntimeProjectConfigurable"
+    />
     <toolWindow
       id="EPICS Workbench"
       anchor="right"
       factoryClass="org.epics.workbench.EpicsWorkbenchToolWindowFactory"
     />
+    <fileEditorProvider implementation="org.epics.workbench.export.EpicsExcelImportPreviewFileEditorProvider" />
+    <fileEditorProvider implementation="org.epics.workbench.widget.EpicsWidgetFileEditorProvider" />
+    <fileEditorProvider implementation="org.epics.workbench.widget.EpicsPvlistWidgetFileEditorProvider" />
+    <fileEditorProvider implementation="org.epics.workbench.widget.EpicsMonitorWidgetFileEditorProvider" />
   </extensions>
 
   <actions>
@@ -205,6 +237,75 @@
       class="org.epics.workbench.toc.UpdateDatabaseTocAction"
       text="Update Table of Contents"
       description="Generate or refresh the EPICS record table of contents for this database file"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.ExportDatabaseToExcelAction"
+      class="org.epics.workbench.export.ExportDatabaseToExcelAction"
+      text="Export to Excel"
+      description="Export the EPICS database file as an Excel workbook"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.CopyDatabaseAsMonitorFileAction"
+      class="org.epics.workbench.monitor.CopyDatabaseAsMonitorFileAction"
+      text="Copy as PV List File"
+      description="Copy the selected EPICS database records as pvlist text"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.ImportDatabaseFromExcelAction"
+      class="org.epics.workbench.export.ImportDatabaseFromExcelAction"
+      text="Import as EPICS Database"
+      description="Import EPICS-style Excel sheets as temporary database tabs"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.OpenExcelImportPreviewAction"
+      class="org.epics.workbench.export.OpenExcelImportPreviewAction"
+      text="Open Excel Import Preview"
+      description="Open a preview tab that accepts dropped Excel workbooks"
+    >
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.OpenInProbeAction"
+      class="org.epics.workbench.probe.OpenInProbeAction"
+      text="Probe"
+      description="Open the current EPICS record target in a file-less probe widget"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.OpenInPvlistAction"
+      class="org.epics.workbench.pvlist.OpenInPvlistAction"
+      text="PvList"
+      description="Open the current database or pvlist source in a file-less PvList widget"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.OpenEpicsMonitorWidgetAction"
+      class="org.epics.workbench.widget.OpenEpicsMonitorWidgetAction"
+      text="Open Monitor Widget"
+      description="Open a file-less EPICS Monitor widget"
+    >
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.OpenInMonitorAction"
+      class="org.epics.workbench.monitor.OpenInMonitorAction"
+      text="Monitor"
+      description="Open the current EPICS channel target in a file-less Monitor widget"
     >
       <add-to-group group-id="EditorPopupMenu" anchor="last" />
       <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />

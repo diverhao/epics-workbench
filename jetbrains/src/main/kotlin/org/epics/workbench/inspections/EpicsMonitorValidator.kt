@@ -44,9 +44,9 @@ internal object EpicsMonitorValidator {
         }
 
         val message = if (unresolved.size == 1) {
-          """Undefined monitor macro "${unresolved.first()}"."""
+          """Undefined pvlist macro "${unresolved.first()}"."""
         } else {
-          """Undefined monitor macros: ${unresolved.joinToString(", ") { "\"$it\"" }}."""
+          """Undefined pvlist macros: ${unresolved.joinToString(", ") { "\"$it\"" }}."""
         }
         issues += EpicsDatabaseValueValidator.ValidationIssue(
           startOffset = reference.startOffset,
@@ -78,7 +78,7 @@ internal object EpicsMonitorValidator {
     return EpicsDatabaseValueValidator.ValidationIssue(
       startOffset = lineStartOffset + first.range.first,
       endOffset = lineStartOffset + last.range.last + 1,
-      message = "Monitor lines must contain only one channel name.",
+      message = "PV list lines must contain only one channel name.",
     )
   }
 

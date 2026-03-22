@@ -24,8 +24,12 @@ internal object EpicsDatabaseToc {
   internal data class TocRuntimeEntry(
     val recordType: String,
     val recordName: String,
+    val recordStart: Int,
+    val recordEnd: Int,
     val valueStart: Int,
     val valueEnd: Int,
+    val typeStart: Int,
+    val typeEnd: Int,
   )
 
   fun upsert(text: String, eol: String): String {
@@ -76,12 +80,29 @@ internal object EpicsDatabaseToc {
       entries += TocRuntimeEntry(
         recordType = entry.recordType,
         recordName = entry.recordName,
+        recordStart = entry.recordStart,
+        recordEnd = entry.recordEnd,
         valueStart = valueStart,
         valueEnd = valueEnd,
+        typeStart = entry.typeStart,
+        typeEnd = entry.typeEnd,
       )
     }
 
     return entries
+  }
+
+  internal fun findRuntimeEntryAtOffset(text: String, offset: Int): TocRuntimeEntry? {
+    val range = findBlockRange(text) ?: return null
+    if (offset !in range.start until range.endExclusive) {
+      return null
+    }
+
+    return extractRuntimeEntries(text).firstOrNull { entry ->
+      offset in entry.recordStart..entry.recordEnd ||
+        offset in entry.valueStart..entry.valueEnd ||
+        offset in entry.typeStart..entry.typeEnd
+    }
   }
 
   internal fun extractRuntimeMacroAssignments(text: String): Map<String, MacroAssignment> {
@@ -286,6 +307,8 @@ internal object EpicsDatabaseToc {
       return TocEntry(
         recordType = declaration.recordType,
         recordName = declaration.name,
+        recordStart = cellEntries[0].start,
+        recordEnd = cellEntries[0].end,
         typeStart = typeCell.start,
         typeEnd = typeCell.end,
         valueStart = if (hasValueColumn) cellEntries[1].displayStart else null,
@@ -515,6 +538,8 @@ internal object EpicsDatabaseToc {
   private data class TocEntry(
     val recordType: String,
     val recordName: String,
+    val recordStart: Int,
+    val recordEnd: Int,
     val typeStart: Int,
     val typeEnd: Int,
     val valueStart: Int?,

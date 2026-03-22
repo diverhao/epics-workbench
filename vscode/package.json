@@ -45,9 +45,54 @@
                     "command": "vscode-epics.copyAsMonitorFile"
                 },
                 {
-                    "when": "editorLangId == substitutions",
+                    "when": "editorLangId == database",
                     "group": "navigation@24",
+                    "command": "vscode-epics.exportDatabaseToExcel"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@25",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@26",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "group": "navigation@27",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == substitutions",
+                    "group": "navigation@28",
                     "command": "vscode-epics.copyAsExpandedDb"
+                },
+                {
+                    "when": "editorLangId == startup",
+                    "group": "navigation@29",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == startup",
+                    "group": "navigation@30",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == pvlist",
+                    "group": "navigation@31",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == pvlist",
+                    "group": "navigation@32",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == probe",
+                    "group": "navigation@33",
+                    "command": "vscode-epics.openInMonitor"
                 }
             ],
             "commandPalette": [
@@ -66,6 +111,22 @@
                 {
                     "when": "editorLangId == database",
                     "command": "vscode-epics.copyAsMonitorFile"
+                },
+                {
+                    "when": "editorLangId == database",
+                    "command": "vscode-epics.exportDatabaseToExcel"
+                },
+                {
+                    "when": "editorLangId == database || editorLangId == startup",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == database || editorLangId == pvlist",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == database || editorLangId == startup || editorLangId == pvlist || editorLangId == probe",
+                    "command": "vscode-epics.openInMonitor"
                 },
                 {
                     "when": "editorLangId == substitutions",
@@ -104,6 +165,13 @@
                     "when": "view == epicsRuntimeMonitors",
                     "command": "vscode-epics.clearRuntimeMonitors",
                     "group": "navigation"
+                }
+            ],
+            "explorer/context": [
+                {
+                    "when": "resourceExtname == .xlsx",
+                    "group": "navigation@30",
+                    "command": "vscode-epics.importDatabaseFromExcel"
                 }
             ]
         },
@@ -177,14 +245,25 @@
                 ]
             },
             {
-                "id": "monitor",
+                "id": "pvlist",
                 "extensions": [
-                    ".monitor"
+                    ".pvlist"
                 ],
-                "configuration": "./monitor-language-config.json",
+                "configuration": "./pvlist-language-config.json",
                 "aliases": [
-                    "EPICS monitor",
-                    "monitor"
+                    "EPICS PV List",
+                    "pvlist"
+                ]
+            },
+            {
+                "id": "probe",
+                "extensions": [
+                    ".probe"
+                ],
+                "configuration": "./lang-config.json",
+                "aliases": [
+                    "EPICS probe",
+                    "probe"
                 ]
             }
         ],
@@ -220,9 +299,26 @@
                 "language": "database definition"
             },
             {
-                "scopeName": "source.epics.monitor",
-                "path": "./syntaxes/monitor.tmLanguage.json",
-                "language": "monitor"
+                "scopeName": "source.epics.pvlist",
+                "path": "./syntaxes/pvlist.tmLanguage.json",
+                "language": "pvlist"
+            },
+            {
+                "scopeName": "source.epics.probe",
+                "path": "./syntaxes/probe.tmLanguage.json",
+                "language": "probe"
+            }
+        ],
+        "customEditors": [
+            {
+                "viewType": "epicsWorkbench.probeEditor",
+                "displayName": "EPICS Probe",
+                "selector": [
+                    {
+                        "filenamePattern": "*.probe"
+                    }
+                ],
+                "priority": "default"
             }
         ],
         "configurationDefaults": {
@@ -236,7 +332,10 @@
             "[database definition]": {
                 "editor.wordBasedSuggestions": "off"
             },
-            "[monitor]": {
+            "[pvlist]": {
+                "editor.wordBasedSuggestions": "off"
+            },
+            "[probe]": {
                 "editor.wordBasedSuggestions": "off"
             }
         },
@@ -302,13 +401,43 @@
                 "category": "EPICS"
             },
             {
-                "title": "Copy as Monitor File",
+                "title": "Copy as PV List File",
                 "command": "vscode-epics.copyAsMonitorFile",
                 "category": "EPICS"
             },
             {
                 "title": "Copy as expanded db",
                 "command": "vscode-epics.copyAsExpandedDb",
+                "category": "EPICS"
+            },
+            {
+                "title": "Export to Excel",
+                "command": "vscode-epics.exportDatabaseToExcel",
+                "category": "EPICS"
+            },
+            {
+                "title": "Import as EPICS Database",
+                "command": "vscode-epics.importDatabaseFromExcel",
+                "category": "EPICS"
+            },
+            {
+                "title": "Open Excel Import Preview",
+                "command": "vscode-epics.openExcelImportPreview",
+                "category": "EPICS"
+            },
+            {
+                "title": "Probe",
+                "command": "vscode-epics.openInProbe",
+                "category": "EPICS"
+            },
+            {
+                "title": "PvList",
+                "command": "vscode-epics.openInPvList",
+                "category": "EPICS"
+            },
+            {
+                "title": "Monitor",
+                "command": "vscode-epics.openInMonitor",
                 "category": "EPICS"
             },
             {
@@ -367,12 +496,17 @@
         "onLanguage:startup",
         "onLanguage:substitutions",
         "onLanguage:sequencer",
-        "onLanguage:monitor",
+        "onLanguage:pvlist",
+        "onLanguage:probe",
         "onLanguage:database definition",
+        "onCustomEditor:epicsWorkbench.probeEditor",
         "onLanguage:makefile",
         "onView:epicsRuntimeMonitors",
         "onCommand:vscode-epics.copyAsMonitorFile",
         "onCommand:vscode-epics.copyAsExpandedDb",
+        "onCommand:vscode-epics.exportDatabaseToExcel",
+        "onCommand:vscode-epics.openInProbe",
+        "onCommand:vscode-epics.openInMonitor",
         "onCommand:vscode-epics.addRuntimeMonitor",
         "onCommand:vscode-epics.removeRuntimeMonitor",
         "onCommand:vscode-epics.clearRuntimeMonitors",
@@ -384,7 +518,7 @@
         "onCommand:vscode-epics.openProjectRuntimeConfiguration"
     ],
     "dependencies": {
-        "epics-tca": "^1.1.32"
+        "epics-tca": "^1.1.33"
     },
     "__metadata": {
         "publisherId": "",

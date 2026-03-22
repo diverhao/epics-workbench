@@ -71,6 +71,7 @@ internal class EpicsDatabaseValidationListener(
       isDatabaseFile(file.name) -> EpicsDatabaseValueValidator.collectIssues(document.text)
       isStartupFile(file.name) -> EpicsStartupMacroValidator.collectIssues(project, file, document.text)
       isMonitorFile(file.name) -> EpicsMonitorValidator.collectIssues(document.text)
+      isProbeFile(file.name) -> EpicsProbeValidator.collectIssues(document.text)
       else -> emptyList()
     }
   }
@@ -126,11 +127,15 @@ internal class EpicsDatabaseValidationListener(
   }
 
   private fun isSupportedFile(fileName: String): Boolean {
-    return isDatabaseFile(fileName) || isStartupFile(fileName) || isMonitorFile(fileName)
+    return isDatabaseFile(fileName) || isStartupFile(fileName) || isMonitorFile(fileName) || isProbeFile(fileName)
   }
 
   private fun isMonitorFile(fileName: String): Boolean {
-    return fileName.substringAfterLast('.', "").lowercase() == "monitor"
+    return fileName.substringAfterLast('.', "").lowercase() == "pvlist"
+  }
+
+  private fun isProbeFile(fileName: String): Boolean {
+    return fileName.substringAfterLast('.', "").lowercase() == "probe"
   }
 
   companion object {

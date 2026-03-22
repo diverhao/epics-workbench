@@ -9,6 +9,7 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorFontType
+import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
@@ -17,12 +18,16 @@ import com.intellij.openapi.editor.event.EditorFactoryListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
 import com.intellij.openapi.editor.event.EditorMouseEventArea
 import com.intellij.openapi.editor.event.EditorMouseListener
+import com.intellij.openapi.editor.impl.EditorEmbeddedComponentManager
 import com.intellij.openapi.editor.markup.CustomHighlighterRenderer
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorManagerEvent
+import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.startup.ProjectActivity
@@ -59,11 +64,17 @@ import org.epics.pva.data.PVAStringArray
 import org.epics.pva.data.PVAStructure
 import org.epics.pva.data.PVAValue
 import org.epics.pva.data.nt.PVAEnum
+import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
+import org.epics.workbench.pvlist.EpicsPvlistWidgetPlan
+import org.epics.workbench.pvlist.EpicsPvlistWidgetSupport
+import org.epics.workbench.probe.EpicsProbeDocumentAnalysis
 import org.epics.workbench.toc.EpicsDatabaseToc
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Rectangle
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.geom.Rectangle2D
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -73,6 +84,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 class EpicsMonitorRuntimeActivity : ProjectActivity {
   override suspend fun execute(project: Project) {
     project.service<EpicsMonitorRuntimeService>().initialize()
+  }
+}
+
+private class ProbeEditorOverlay(
+  private val editor: EditorEx,
+  private val panel: EpicsProbeViewPanel,
+  private val inlay: Disposable,
+  private val resizeListener: ComponentAdapter,
+) : Disposable {
+  override fun dispose() {
+    editor.contentComponent.removeComponentListener(resizeListener)
+    panel.dispose()
+    inlay.dispose()
   }
 }
 
@@ -89,7 +113,7 @@ interface EpicsMonitorRuntimeStateListener {
 
 @Service(Service.Level.PROJECT)
 class EpicsMonitorRuntimeService(
-  private val project: Project,
+  internal val project: Project,
 ) : DocumentListener, EditorFactoryListener, EditorMouseListener, Disposable {
   @Volatile
   private var initialized = false
@@ -103,6 +127,15 @@ class EpicsMonitorRuntimeService(
   @Volatile
   private var pvaClient: PVAClient? = null
 
+  @Volatile
+  internal var defaultProtocol: MonitorProtocol = MonitorProtocol.CA
+
+  @Volatile
+  private var activeProbeSession: EpicsProbeRuntimeSession? = null
+
+  private val widgetProbeSessions = ConcurrentHashMap<String, EpicsProbeRuntimeSession>()
+  private val widgetPvlistSessions = ConcurrentHashMap<String, EpicsPvlistWidgetSession>()
+
   fun initialize() {
     if (initialized) {
       return
@@ -112,7 +145,16 @@ class EpicsMonitorRuntimeService(
     multicaster.addDocumentListener(this, this)
     EditorFactory.getInstance().addEditorFactoryListener(this, this)
     multicaster.addEditorMouseListener(this, this)
+    project.messageBus.connect(this).subscribe(
+      FileEditorManagerListener.FILE_EDITOR_MANAGER,
+      object : FileEditorManagerListener {
+        override fun selectionChanged(event: FileEditorManagerEvent) {
+          refreshProbeOverlaysForSelection()
+        }
+      },
+    )
     refreshOpenEditors()
+    refreshProbeOverlaysForSelection()
   }
 
   fun isMonitoringActive(): Boolean = monitoringActive
@@ -121,10 +163,13 @@ class EpicsMonitorRuntimeService(
     if (project.isDisposed || monitoringActive) {
       return
     }
-    caContext = EpicsClientLibraries.createCaContext()
-    pvaClient = EpicsClientLibraries.createPvaClient()
+    val runtimeConfiguration = project.service<EpicsRuntimeProjectConfigurationService>().loadConfiguration()
+    defaultProtocol = runtimeConfiguration.protocol.toMonitorProtocol()
+    caContext = EpicsClientLibraries.createCaContext(runtimeConfiguration)
+    pvaClient = EpicsClientLibraries.createPvaClient(runtimeConfiguration)
     monitoringActive = true
     refreshOpenEditors()
+    refreshProbeOverlaysForSelection()
     publishStateChanged()
   }
 
@@ -133,12 +178,24 @@ class EpicsMonitorRuntimeService(
       return
     }
     monitoringActive = false
+    disposeActiveProbeSession()
+    disposeAllWidgetProbeSessions()
+    disposeAllWidgetPvlistSessions()
     disposeAllSessions()
     caContext?.let { context -> runCatching { context.destroy() } }
     pvaClient?.let { client -> runCatching { client.close() } }
     caContext = null
     pvaClient = null
+    refreshProbeOverlaysForSelection()
     publishStateChanged()
+  }
+
+  fun restartMonitoringIfActive() {
+    if (!monitoringActive) {
+      return
+    }
+    stopMonitoring()
+    startMonitoring()
   }
 
   fun toggleMonitoring() {
@@ -188,11 +245,26 @@ class EpicsMonitorRuntimeService(
   private fun updateDocument(document: Document) {
     val file = FileDocumentManager.getInstance().getFile(document)
     for (editor in EditorFactory.getInstance().getEditors(document, project)) {
-      if (file == null || !isRuntimeFile(file.name) || !monitoringActive) {
-        disposeSession(editor)
-      } else {
-        rebuildSession(editor, file.name, document.text)
+      when {
+        file == null -> {
+          disposeSession(editor)
+          disposeProbeOverlay(editor)
+        }
+        isProbeFileName(file.name) -> {
+          disposeSession(editor)
+        }
+        !isRuntimeFile(file.name) || !monitoringActive -> {
+          disposeSession(editor)
+          disposeProbeOverlay(editor)
+        }
+        else -> {
+          disposeProbeOverlay(editor)
+          rebuildSession(editor, file.name, document.text)
+        }
       }
+    }
+    if (file == null || isProbeFileName(file.name)) {
+      refreshProbeOverlaysForSelection()
     }
   }
 
@@ -203,7 +275,7 @@ class EpicsMonitorRuntimeService(
     }
     val states = when {
       isMonitorFile(fileName) -> {
-        val definition = parseMonitorDocument(text)
+        val definition = parseMonitorDocument(text, defaultProtocol)
         definition.entries.map { entry ->
           MonitorLineState(
             editor = editor,
@@ -212,7 +284,7 @@ class EpicsMonitorRuntimeService(
           )
         }
       }
-      isDatabaseFile(fileName) -> parseDatabaseTocStates(editor, text)
+      isDatabaseFile(fileName) -> parseDatabaseTocStates(editor, text, defaultProtocol)
       else -> emptyList()
     }
     if (states.isEmpty()) {
@@ -234,23 +306,423 @@ class EpicsMonitorRuntimeService(
     editor.putUserData(SESSION_KEY, null)
   }
 
-  private fun disposeAllSessions() {
+  private fun rebuildProbeOverlay(editor: Editor) {
+    disposeProbeOverlay(editor)
+    val context = getProbeContext(editor) ?: return
+    val offset = context.analysis.overlayOffset ?: return
+    val editorEx = editor as? EditorEx ?: return
+    val panel = EpicsProbeViewPanel(
+      stateProvider = { getProbeViewState(editor) },
+      putHandler = { key -> requestPutProbeValue(editor, key) },
+      isMonitoringActive = { isMonitoringActive() },
+      startHandler = { startMonitoring() },
+      stopHandler = { stopMonitoring() },
+      processHandler = { requestProcessProbe(editor) },
+    )
+    panel.updatePreferredSize(editorEx)
+    val properties = EditorEmbeddedComponentManager.Properties(
+      EditorEmbeddedComponentManager.ResizePolicy.any(),
+      null,
+      false,
+      false,
+      true,
+      true,
+      0,
+      offset,
+    )
+    val inlay = EditorEmbeddedComponentManager.getInstance().addComponent(editorEx, panel, properties)
+      ?: run {
+        panel.dispose()
+        return
+      }
+    val resizeListener =
+      object : ComponentAdapter() {
+        override fun componentResized(event: ComponentEvent) {
+          panel.updatePreferredSize(editorEx)
+        }
+      }
+    editorEx.contentComponent.addComponentListener(resizeListener)
+    editor.putUserData(PROBE_OVERLAY_KEY, ProbeEditorOverlay(editorEx, panel, inlay, resizeListener))
+    panel.refreshFromService()
+  }
+
+  private fun disposeProbeOverlay(editor: Editor) {
+    editor.getUserData(PROBE_OVERLAY_KEY)?.dispose()
+    editor.putUserData(PROBE_OVERLAY_KEY, null)
+  }
+
+  private fun refreshProbeOverlaysForSelection() {
+    val selectedEditor = FileEditorManager.getInstance(project).selectedTextEditor
     for (editor in EditorFactory.getInstance().allEditors) {
-      if (editor.project == project) {
-        disposeSession(editor)
+      if (editor.project != project) {
+        continue
+      }
+      val file = FileDocumentManager.getInstance().getFile(editor.document)
+      val shouldShow =
+        editor == selectedEditor &&
+          file != null &&
+          isProbeFileName(file.name)
+      if (shouldShow) {
+        rebuildProbeOverlay(editor)
+      } else {
+        disposeProbeOverlay(editor)
       }
     }
   }
 
+  private fun disposeAllSessions() {
+    for (editor in EditorFactory.getInstance().allEditors) {
+      if (editor.project == project) {
+        disposeSession(editor)
+        disposeProbeOverlay(editor)
+      }
+    }
+  }
+
+  internal fun getActiveProbeViewState(): EpicsProbeViewState? {
+    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
+    return getProbeViewState(editor)
+  }
+
+  internal fun getProbeViewState(editor: Editor): EpicsProbeViewState? {
+    val context = getProbeContext(editor)
+    if (context == null) {
+      disposeActiveProbeSession()
+      return null
+    }
+
+    if (context.analysis.issues.isNotEmpty()) {
+      disposeActiveProbeSession()
+      return EpicsProbeViewState(
+        recordName = context.analysis.recordName.orEmpty(),
+        recordType = "",
+        value = "",
+        valueKey = null,
+        valueCanPut = false,
+        lastUpdated = "",
+        access = "",
+        fields = emptyList(),
+        message = context.analysis.issues.first().message,
+      )
+    }
+
+    val recordName = context.analysis.recordName
+    if (recordName.isNullOrBlank()) {
+      disposeActiveProbeSession()
+      return EpicsProbeViewState(
+        recordName = "",
+        recordType = "",
+        value = "",
+        valueKey = null,
+        valueCanPut = false,
+        lastUpdated = "",
+        access = "",
+        fields = emptyList(),
+        message = "Probe files must contain exactly one record name.",
+      )
+    }
+
+    if (!monitoringActive) {
+      disposeActiveProbeSession()
+      return EpicsProbeViewState(
+        recordName = recordName,
+        recordType = "(stopped)",
+        value = "(stopped)",
+        valueKey = null,
+        valueCanPut = false,
+        lastUpdated = "Waiting for monitoring",
+        access = "(stopped)",
+        fields = emptyList(),
+        message = "Start Monitoring to view probe runtime values.",
+      )
+    }
+
+    val session = ensureActiveProbeSession(context) ?: return null
+    return session.buildViewState()
+  }
+
+  internal fun requestPutActiveProbeValue(key: String) {
+    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return
+    requestPutProbeValue(editor, key)
+  }
+
+  internal fun requestPutProbeValue(editor: Editor, key: String) {
+    ensureActiveProbeSession(getProbeContext(editor) ?: return)?.requestPut(key)
+  }
+
+  internal fun getWidgetProbeViewState(widgetId: String, recordNameInput: String): EpicsProbeViewState? {
+    val recordName = recordNameInput.trim()
+    if (recordName.isBlank()) {
+      releaseWidgetProbeSession(widgetId)
+      return EpicsProbeViewState(
+        recordName = "",
+        recordType = "",
+        value = "",
+        valueKey = null,
+        valueCanPut = false,
+        lastUpdated = "",
+        access = "",
+        fields = emptyList(),
+        message = "Enter a channel name and press Enter to start the probe.",
+      )
+    }
+
+    if (!monitoringActive) {
+      releaseWidgetProbeSession(widgetId)
+      return EpicsProbeViewState(
+        recordName = recordName,
+        recordType = "(stopped)",
+        value = "(stopped)",
+        valueKey = null,
+        valueCanPut = false,
+        lastUpdated = "Waiting for monitoring",
+        access = "(stopped)",
+        fields = emptyList(),
+        message = "Press Enter after changing the channel name to start the probe.",
+      )
+    }
+
+    return ensureWidgetProbeSession(widgetId, recordName)?.buildViewState()
+  }
+
+  internal fun requestPutWidgetValue(widgetId: String, recordNameInput: String, key: String) {
+    val recordName = recordNameInput.trim()
+    if (recordName.isBlank()) {
+      return
+    }
+    ensureWidgetProbeSession(widgetId, recordName)?.requestPut(key)
+  }
+
+  internal fun requestProcessProbe(editor: Editor) {
+    if (!monitoringActive) {
+      return
+    }
+    val context = getProbeContext(editor) ?: return
+    val recordName = context.analysis.recordName?.takeIf { it.isNotBlank() } ?: return
+    requestProcessRecord(recordName)
+  }
+
+  internal fun requestProcessWidget(widgetId: String, recordNameInput: String) {
+    if (!monitoringActive) {
+      return
+    }
+    val recordName = recordNameInput.trim()
+    if (recordName.isBlank()) {
+      return
+    }
+    ensureWidgetProbeSession(widgetId, recordName)
+    requestProcessRecord(recordName)
+  }
+
+  internal fun releaseWidgetProbeSession(widgetId: String) {
+    widgetProbeSessions.remove(widgetId)?.close()
+  }
+
+  internal fun getWidgetPvlistViewState(
+    widgetId: String,
+    model: EpicsPvlistWidgetModel,
+  ): EpicsPvlistWidgetViewState {
+    val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(model, defaultProtocol)
+    if (model.rawPvNames.isEmpty()) {
+      releaseWidgetPvlistSession(widgetId)
+      return EpicsPvlistWidgetViewState(
+        rows = emptyList(),
+        message = "Add channels to start monitoring.",
+      )
+    }
+
+    if (!monitoringActive) {
+      releaseWidgetPvlistSession(widgetId)
+      return buildStoppedPvlistViewState(plan)
+    }
+
+    val session = ensureWidgetPvlistSession(widgetId, plan)
+    return session?.buildViewState(plan, monitoringActive = true)
+      ?: EpicsPvlistWidgetViewState(
+        rows = plan.rows.map { row ->
+          EpicsPvlistWidgetRowViewState(
+            channelName = row.channelName,
+            value = row.unresolvedValue ?: "(connecting...)",
+            definitionKey = row.definitionKey,
+          )
+        },
+        message = "Connecting PV list channels.",
+      )
+  }
+
+  internal fun requestPutWidgetPvlistValue(
+    widgetId: String,
+    model: EpicsPvlistWidgetModel,
+    definitionKey: String,
+    input: String,
+  ) {
+    if (!monitoringActive) {
+      return
+    }
+    val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(model, defaultProtocol)
+    val definition = plan.definitions.firstOrNull { it.key == definitionKey } ?: return
+    ensureWidgetPvlistSession(widgetId, plan)
+    val activeCaContext = caContext ?: return
+    val activePvaClient = pvaClient ?: return
+    ApplicationManager.getApplication().executeOnPooledThread {
+      try {
+        RuntimeEditorSession.putValueNow(
+          caContext = activeCaContext,
+          pvaClient = activePvaClient,
+          protocol = definition.protocol,
+          pvName = definition.pvName,
+          input = input,
+        )
+      } catch (error: Exception) {
+        showRuntimePutError(project, "${definition.pvName}: ${error.message ?: error.javaClass.simpleName}")
+      }
+    }
+  }
+
+  internal fun releaseWidgetPvlistSession(widgetId: String) {
+    widgetPvlistSessions.remove(widgetId)?.close()
+  }
+
   private fun isRuntimeFile(fileName: String): Boolean = isMonitorFile(fileName) || isDatabaseFile(fileName)
 
-  private fun isMonitorFile(fileName: String): Boolean = fileName.substringAfterLast('.', "").lowercase() == "monitor"
+  private fun isMonitorFile(fileName: String): Boolean = fileName.substringAfterLast('.', "").lowercase() == "pvlist"
+
+  internal fun isProbeFileName(fileName: String): Boolean = fileName.substringAfterLast('.', "").lowercase() == "probe"
 
   private fun isDatabaseFile(fileName: String): Boolean {
     return fileName.substringAfterLast('.', "").lowercase() in DATABASE_FILE_EXTENSIONS
   }
 
-  private fun parseDatabaseTocStates(editor: Editor, text: String): List<RuntimeValueState> {
+  private fun ensureActiveProbeSession(context: ActiveProbeContext): EpicsProbeRuntimeSession? {
+    val existingSession = activeProbeSession
+    if (existingSession != null && existingSession.matches(context.sourceKey, context.analysis, defaultProtocol)) {
+      return existingSession
+    }
+
+    disposeActiveProbeSession()
+    val activeCaContext = caContext ?: return null
+    val activePvaClient = pvaClient ?: return null
+    return EpicsProbeRuntimeSession(
+      project = project,
+      caContext = activeCaContext,
+      pvaClient = activePvaClient,
+      protocol = defaultProtocol,
+      sourceKey = context.sourceKey,
+      analysis = context.analysis,
+    ).also { session ->
+      activeProbeSession = session
+      session.start()
+    }
+  }
+
+  private fun ensureWidgetProbeSession(widgetId: String, recordName: String): EpicsProbeRuntimeSession? {
+    val analysis = EpicsProbeDocumentAnalysis(
+      recordName = recordName,
+      overlayOffset = null,
+      issues = emptyList(),
+    )
+    val sourceKey = buildWidgetProbeSourceKey(widgetId, recordName)
+    val existingSession = widgetProbeSessions[widgetId]
+    if (existingSession != null && existingSession.matches(sourceKey, analysis, defaultProtocol)) {
+      return existingSession
+    }
+
+    existingSession?.close()
+    val activeCaContext = caContext ?: return null
+    val activePvaClient = pvaClient ?: return null
+    return EpicsProbeRuntimeSession(
+      project = project,
+      caContext = activeCaContext,
+      pvaClient = activePvaClient,
+      protocol = defaultProtocol,
+      sourceKey = sourceKey,
+      analysis = analysis,
+    ).also { session ->
+      widgetProbeSessions[widgetId] = session
+      session.start()
+    }
+  }
+
+  private fun disposeActiveProbeSession() {
+    activeProbeSession?.close()
+    activeProbeSession = null
+  }
+
+  private fun disposeAllWidgetProbeSessions() {
+    widgetProbeSessions.values.forEach(EpicsProbeRuntimeSession::close)
+    widgetProbeSessions.clear()
+  }
+
+  private fun ensureWidgetPvlistSession(
+    widgetId: String,
+    plan: EpicsPvlistWidgetPlan,
+  ): EpicsPvlistWidgetSession? {
+    val existingSession = widgetPvlistSessions[widgetId]
+    if (existingSession != null) {
+      existingSession.updatePlan(plan)
+      return existingSession
+    }
+
+    val activeCaContext = caContext ?: return null
+    val activePvaClient = pvaClient ?: return null
+    val createdSession = EpicsPvlistWidgetSession(project, activeCaContext, activePvaClient)
+    val previousSession = widgetPvlistSessions.putIfAbsent(widgetId, createdSession)
+    val session = if (previousSession != null) {
+      createdSession.close()
+      previousSession
+    } else {
+      createdSession
+    }
+    session.updatePlan(plan)
+    return session
+  }
+
+  private fun disposeAllWidgetPvlistSessions() {
+    widgetPvlistSessions.values.forEach(EpicsPvlistWidgetSession::close)
+    widgetPvlistSessions.clear()
+  }
+
+  private fun buildWidgetProbeSourceKey(widgetId: String, recordName: String): String {
+    return "__widget__:$widgetId:$recordName:${defaultProtocol.name}"
+  }
+
+  private fun buildStoppedPvlistViewState(plan: EpicsPvlistWidgetPlan): EpicsPvlistWidgetViewState {
+    return EpicsPvlistWidgetViewState(
+      rows = plan.rows.map { row ->
+        EpicsPvlistWidgetRowViewState(
+          channelName = row.channelName,
+          value = row.unresolvedValue ?: "(stopped)",
+          definitionKey = row.definitionKey,
+        )
+      },
+      message = "Start Monitoring to view PV list runtime values.",
+    )
+  }
+
+  private fun requestProcessRecord(recordName: String) {
+    val activeCaContext = caContext ?: return
+    val activePvaClient = pvaClient ?: return
+    val protocol = defaultProtocol
+    ApplicationManager.getApplication().executeOnPooledThread {
+      try {
+        RuntimeEditorSession.putValueNow(
+          caContext = activeCaContext,
+          pvaClient = activePvaClient,
+          protocol = protocol,
+          pvName = "$recordName.PROC",
+          input = "1",
+        )
+      } catch (error: Exception) {
+        showRuntimePutError(project, "$recordName.PROC: ${error.message ?: error.javaClass.simpleName}")
+      }
+    }
+  }
+
+  private fun parseDatabaseTocStates(
+    editor: Editor,
+    text: String,
+    defaultProtocol: MonitorProtocol,
+  ): List<RuntimeValueState> {
     val tocEntries = EpicsDatabaseToc.extractRuntimeEntries(text)
     if (tocEntries.isEmpty()) {
       return emptyList()
@@ -272,7 +744,7 @@ class EpicsMonitorRuntimeService(
       )
       DatabaseTocLineState(
         editor = editor,
-        protocol = MonitorProtocol.CA,
+        protocol = defaultProtocol,
         pvName = pvName,
         valueStartOffset = tocEntry.valueStart,
         valueEndOffset = tocEntry.valueEnd,
@@ -291,10 +763,11 @@ class EpicsMonitorRuntimeService(
 
   private companion object {
     val SESSION_KEY = Key.create<Disposable>("org.epics.workbench.runtime.monitorSession")
+    val PROBE_OVERLAY_KEY = Key.create<ProbeEditorOverlay>("org.epics.workbench.runtime.probeOverlay")
   }
 }
 
-private class RuntimeEditorSession(
+internal class RuntimeEditorSession(
   private val project: Project,
   private val caContext: Context,
   private val pvaClient: PVAClient,
@@ -319,6 +792,13 @@ private class RuntimeEditorSession(
     return true
   }
 
+  fun requestPutValue(state: RuntimeValueState) {
+    if (!states.contains(state)) {
+      return
+    }
+    promptForPutValue(state)
+  }
+
   private fun connectAndMonitor(state: RuntimeValueState) {
     if (disposed.get() || project.isDisposed) {
       return
@@ -340,6 +820,7 @@ private class RuntimeEditorSession(
       val fieldType = channel.fieldType
       val labels = if (fieldType == DBRType.ENUM) fetchCaEnumLabels(channel) else emptyList()
       state.setEnumChoices(labels)
+      state.setAccess(if (channel.getWriteAccess()) "Read/Write" else "Read only", channel.getWriteAccess())
       channelHandles[state] = RuntimeChannelHandle.Ca(channel, fieldType)
 
       val monitorType = getCaMonitorType(fieldType)
@@ -428,6 +909,8 @@ private class RuntimeEditorSession(
       channel.connect().get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
       channelHandles[state] = RuntimeChannelHandle.Pva(channel)
       val initialValue = channel.read("").get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+      val (accessLabel, canPut) = determinePvaAccess(initialValue)
+      state.setAccess(accessLabel, canPut)
       handlePvaStructure(state, initialValue)
       subscription = channel.subscribe("", PvaMonitorListener { _: PVAChannel, _, _, structure: PVAStructure ->
         if (disposed.get()) {
@@ -546,11 +1029,7 @@ private class RuntimeEditorSession(
   }
 
   private fun showPutError(message: String) {
-    ApplicationManager.getApplication().invokeLater {
-      if (!project.isDisposed) {
-        Messages.showErrorDialog(project, message, "EPICS Put Runtime Value")
-      }
-    }
+    showRuntimePutError(project, message)
   }
 
   private fun getCaMonitorType(fieldType: DBRType): DBRType {
@@ -565,9 +1044,135 @@ private class RuntimeEditorSession(
       else -> fieldType
     }
   }
+
+  companion object {
+    fun putValueNow(
+      caContext: Context,
+      pvaClient: PVAClient,
+      protocol: MonitorProtocol,
+      pvName: String,
+      input: String,
+    ) {
+      when (protocol) {
+        MonitorProtocol.CA -> putCaValueNow(caContext, pvName, input)
+        MonitorProtocol.PVA -> putPvaValueNow(pvaClient, pvName, input)
+      }
+    }
+
+    private fun putCaValueNow(
+      caContext: Context,
+      pvName: String,
+      input: String,
+    ) {
+      caContext.attachCurrentThread()
+      val channel = connectCaChannelNow(caContext, pvName)
+      try {
+        if (!channel.getWriteAccess()) {
+          throw IllegalStateException("Channel is not writable.")
+        }
+        if (channel.elementCount > 1) {
+          throw IllegalStateException("Array values cannot be changed from runtime editing.")
+        }
+        val fieldType = channel.fieldType
+        val labels = if (fieldType == DBRType.ENUM) fetchCaEnumLabelsNow(caContext, channel) else emptyList()
+        when (fieldType) {
+          DBRType.STRING -> channel.put(input)
+          DBRType.ENUM -> channel.put(resolveEnumInput(input, labels))
+          DBRType.BYTE -> channel.put(parseIntegerInput(input).toByte())
+          DBRType.SHORT -> channel.put(parseIntegerInput(input).toShort())
+          DBRType.INT -> channel.put(parseIntegerInput(input))
+          DBRType.FLOAT -> channel.put(parseDecimalInput(input).toFloat())
+          DBRType.DOUBLE -> channel.put(parseDecimalInput(input))
+          else -> throw IllegalStateException("Unsupported CA field type: $fieldType.")
+        }
+        caContext.flushIO()
+      } finally {
+        runCatching { channel.destroy() }
+      }
+    }
+
+    private fun putPvaValueNow(
+      pvaClient: PVAClient,
+      pvName: String,
+      input: String,
+    ) {
+      val channel = pvaClient.getChannel(pvName)
+      try {
+        channel.connect().get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (!channel.isConnected) {
+          throw IllegalStateException("Channel is not connected.")
+        }
+        val structure = channel.read("").get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        val valueField = structure?.get<PVAData>("value")
+          ?: throw IllegalStateException("PV has data, but no value field.")
+
+        when {
+          valueField is PVAStructure -> {
+            val pvaEnum = runCatching { PVAEnum.fromStructure(valueField) }.getOrNull()
+              ?: throw IllegalStateException("Unsupported structured PVA value.")
+            val choices = pvaEnum.get<PVAStringArray>("choices")?.get()?.map { it ?: "" }.orEmpty()
+            channel.write("value.index", resolveEnumInput(input, choices))
+              .get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          }
+          valueField is PVAArray -> throw IllegalStateException("Array values cannot be changed from runtime editing.")
+          valueField is PVAString -> channel.write("value", input).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          valueField is PVAByte -> channel.write("value", parseIntegerInput(input).toByte()).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          valueField is PVAShort -> channel.write("value", parseIntegerInput(input).toShort()).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          valueField is PVAInt -> channel.write("value", parseIntegerInput(input)).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          valueField is PVALong -> channel.write("value", parseLongInput(input)).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          valueField is PVAFloat -> channel.write("value", parseDecimalInput(input).toFloat()).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          valueField is PVADouble -> channel.write("value", parseDecimalInput(input)).get(PVA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          else -> throw IllegalStateException("Unsupported PVA value type.")
+        }
+      } finally {
+        runCatching { channel.close() }
+      }
+    }
+
+    private fun connectCaChannelNow(caContext: Context, pvName: String): Channel {
+      val latch = CountDownLatch(1)
+      var connected = false
+      val channel = caContext.createChannel(
+        pvName,
+        ConnectionListener { event: ConnectionEvent ->
+          if (event.isConnected) {
+            connected = true
+            latch.countDown()
+          }
+        },
+      )
+      caContext.flushIO()
+      if (!latch.await(CA_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS) || !connected) {
+        runCatching { channel.destroy() }
+        throw TimeoutException("Timed out connecting to $pvName")
+      }
+      return channel
+    }
+
+    private fun fetchCaEnumLabelsNow(caContext: Context, channel: Channel): List<String> {
+      return try {
+        caContext.attachCurrentThread()
+        val labelsDbr = channel.get(DBRType.LABELS_ENUM, channel.elementCount.coerceAtLeast(1))
+        when (labelsDbr) {
+          is LABELS -> labelsDbr.labels?.map { it ?: "" }.orEmpty()
+          else -> emptyList()
+        }
+      } catch (_: Exception) {
+        emptyList()
+      }
+    }
+  }
 }
 
-private interface RuntimeValueState : Disposable {
+private fun showRuntimePutError(project: Project, message: String) {
+  ApplicationManager.getApplication().invokeLater {
+    if (!project.isDisposed) {
+      Messages.showErrorDialog(project, message, "EPICS Put Runtime Value")
+    }
+  }
+}
+
+internal interface RuntimeValueState : Disposable {
   val protocol: MonitorProtocol
   val pvName: String
 
@@ -578,6 +1183,7 @@ private interface RuntimeValueState : Disposable {
   fun getPutInitialValue(): String
   fun setValue(value: String)
   fun setConnecting()
+  fun setAccess(accessLabel: String, canPut: Boolean) = Unit
 }
 
 private class MonitorLineState(
@@ -833,12 +1439,15 @@ private data class MonitorEntry(
   val lineStartOffset: Int,
 )
 
-private enum class MonitorProtocol {
+internal enum class MonitorProtocol {
   CA,
   PVA,
 }
 
-private fun parseMonitorDocument(text: String): MonitorDocumentDefinition {
+private fun parseMonitorDocument(
+  text: String,
+  defaultProtocol: MonitorProtocol,
+): MonitorDocumentDefinition {
   val entries = mutableListOf<MonitorEntry>()
   val macroDefinitions = linkedMapOf<String, String>()
   var maxDisplayWidth = 0
@@ -859,7 +1468,7 @@ private fun parseMonitorDocument(text: String): MonitorDocumentDefinition {
       !trimmed.contains(' ') && !trimmed.contains('\t') -> {
         val expanded = expandMonitorValue(trimmed, macroDefinitions, linkedSetOf()) ?: ""
         if (expanded.isNotBlank() && !expanded.any(Char::isWhitespace)) {
-          val (protocol, pvName) = splitMonitorProtocol(expanded)
+          val (protocol, pvName) = splitMonitorProtocol(expanded, defaultProtocol)
           entries += MonitorEntry(
             protocol = protocol,
             pvName = pvName,
@@ -925,11 +1534,21 @@ private fun resolveMonitorMacro(
   return expandMonitorValue(value, macroDefinitions, nextStack)
 }
 
-private fun splitMonitorProtocol(value: String): Pair<MonitorProtocol, String> {
+private fun splitMonitorProtocol(
+  value: String,
+  defaultProtocol: MonitorProtocol,
+): Pair<MonitorProtocol, String> {
   return when {
     value.startsWith("pva://", ignoreCase = true) -> MonitorProtocol.PVA to value.removePrefix("pva://").removePrefix("PVA://")
     value.startsWith("ca://", ignoreCase = true) -> MonitorProtocol.CA to value.removePrefix("ca://").removePrefix("CA://")
-    else -> MonitorProtocol.CA to value
+    else -> defaultProtocol to value
+  }
+}
+
+private fun EpicsRuntimeProtocol.toMonitorProtocol(): MonitorProtocol {
+  return when (this) {
+    EpicsRuntimeProtocol.CA -> MonitorProtocol.CA
+    EpicsRuntimeProtocol.PVA -> MonitorProtocol.PVA
   }
 }
 
@@ -1003,6 +1622,30 @@ private fun formatPvaStructure(structure: PVAStructure, state: RuntimeValueState
   }
 
   return valueField.toString()
+}
+
+private fun determinePvaAccess(structure: PVAStructure?): Pair<String, Boolean> {
+  val valueField = structure?.get<PVAData>("value") ?: return "Read only" to false
+  return when (valueField) {
+    is PVAStructure -> {
+      val pvaEnum = runCatching { PVAEnum.fromStructure(valueField) }.getOrNull()
+      if (pvaEnum != null) {
+        "Read/Write" to true
+      } else {
+        "Read only" to false
+      }
+    }
+    is PVAArray -> "Read only" to false
+    is PVAString,
+    is PVAByte,
+    is PVAShort,
+    is PVAInt,
+    is PVALong,
+    is PVAFloat,
+    is PVADouble,
+    -> "Read/Write" to true
+    else -> "Read only" to false
+  }
 }
 
 private fun createDatabaseMonitorMacroDefinitions(
