@@ -16,7 +16,17 @@ const {
   getSequencerReferenceLocations,
   getSequencerSymbolHover,
 } = require("./sequencer");
-const { registerRuntimeMonitor } = require("./runtimeMonitor");
+const {
+  registerRuntimeMonitor,
+  getDefaultProjectRuntimeConfiguration,
+  loadProjectRuntimeConfiguration,
+  createRuntimeEnvironmentFromProjectConfiguration,
+  normalizeRuntimeProtocol,
+  safeRequireRuntimeLibrary,
+  formatRuntimeValue,
+  getCaRuntimeDisplayValue,
+  getPvaRuntimeDisplayValue,
+} = require("./runtimeMonitor");
 
 const LANGUAGE_IDS = {
   database: "database",
@@ -71,12 +81,15 @@ const OPEN_EXCEL_IMPORT_PREVIEW_COMMAND = "vscode-epics.openExcelImportPreview";
 const OPEN_IN_PROBE_COMMAND = "vscode-epics.openInProbe";
 const OPEN_IN_PVLIST_COMMAND = "vscode-epics.openInPvList";
 const OPEN_IN_MONITOR_COMMAND = "vscode-epics.openInMonitor";
+const OPEN_IN_CHANNEL_GRAPH_COMMAND = "vscode-epics.openInChannelGraph";
 const OPEN_PROBE_WIDGET_COMMAND = "vscode-epics.openProbeWidget";
 const OPEN_PVLIST_WIDGET_COMMAND = "vscode-epics.openPvlistWidget";
 const OPEN_MONITOR_WIDGET_COMMAND = "vscode-epics.openMonitorWidget";
+const CHANNEL_GRAPH_VIEW_TYPE = "epicsWorkbench.channelGraph";
 const UPDATE_MENU_FIELD_VALUE_COMMAND = "vscode-epics.updateMenuFieldValue";
 const EXCEL_IMPORT_PREVIEW_VIEW_TYPE = "vscode-epics.excelImportPreview";
 const STREAM_PROTOCOL_PATH_VARIABLE = "STREAM_PROTOCOL_PATH";
+const PROJECT_RUNTIME_CONFIG_FILE_NAME = ".epics-workbench-config.json";
 const DBD_DEVICE_LINK_TYPES = ["INST_IO"];
 const TRIGGER_SUGGEST_COMMAND = "editor.action.triggerSuggest";
 const RECORD_PREVIEW_MAX_LINES = 100;
@@ -589,6 +602,11 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand(OPEN_IN_MONITOR_COMMAND, async () => {
       await openInMonitorFromActiveEditor(workspaceIndex);
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_IN_CHANNEL_GRAPH_COMMAND, async () => {
+      await openInChannelGraphFromActiveEditor(workspaceIndex);
     }),
   );
   context.subscriptions.push(
@@ -6836,6 +6854,903 @@ async function openInMonitorFromActiveEditor(workspaceIndex) {
   });
 }
 
+async function openInChannelGraphFromActiveEditor(workspaceIndex) {
+  const source = await resolveChannelGraphSourceAtActiveEditor(workspaceIndex);
+  const seedRecordName =
+    source?.seedRecordName || await resolveMonitorTargetAtActiveEditor(workspaceIndex);
+
+  const graphSession = {
+    originNodeIds: seedRecordName ? [seedRecordName] : [],
+    sources: source ? [source] : [],
+    mode: source ? "static" : "dynamic",
+    runtimeSession: undefined,
+    disposed: false,
+  };
+  const panel = vscode.window.createWebviewPanel(
+    CHANNEL_GRAPH_VIEW_TYPE,
+    getChannelGraphPanelTitle(seedRecordName || source?.sourceLabel),
+    vscode.ViewColumn.Active,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    },
+  );
+  let renderTimer = undefined;
+  let htmlInitialized = false;
+
+  const disposeRuntimeSession = async () => {
+    if (!graphSession.runtimeSession) {
+      return;
+    }
+    const activeSession = graphSession.runtimeSession;
+    graphSession.runtimeSession = undefined;
+    await activeSession.dispose();
+  };
+
+  const ensureRuntimeSession = () => {
+    if (graphSession.runtimeSession) {
+      return graphSession.runtimeSession;
+    }
+
+    graphSession.runtimeSession = new ChannelGraphRuntimeSession({
+      initialOriginNodeIds: graphSession.originNodeIds,
+      sourceEntries: graphSession.sources,
+      onStateChange: () => {
+        scheduleRender();
+      },
+    });
+    void graphSession.runtimeSession.start();
+    return graphSession.runtimeSession;
+  };
+
+  const buildCurrentGraphState = () => {
+    if (graphSession.mode === "dynamic") {
+      return ensureRuntimeSession().buildState();
+    }
+
+    return buildChannelGraphState(
+      graphSession.sources.map((entry) => entry.sourceText).join("\n\n"),
+      buildChannelGraphSourceLabel(graphSession.sources),
+      graphSession.originNodeIds[0],
+      graphSession.mode,
+      graphSession.originNodeIds,
+    );
+  };
+
+  const renderPanel = (forceHtml = false) => {
+    const graphState = buildCurrentGraphState();
+    panel.title = getChannelGraphPanelTitle(
+      graphSession.originNodeIds[0] || graphSession.sources[0]?.sourceLabel || graphState.sourceLabel,
+    );
+    if (!htmlInitialized || forceHtml) {
+      htmlInitialized = true;
+      panel.webview.html = buildChannelGraphWebviewHtml(panel.webview, graphState);
+      return;
+    }
+    void panel.webview.postMessage({
+      type: "setChannelGraphState",
+      state: graphState,
+    });
+  };
+
+  const scheduleRender = () => {
+    if (graphSession.disposed || renderTimer) {
+      return;
+    }
+    renderTimer = setTimeout(() => {
+      renderTimer = undefined;
+      if (!graphSession.disposed) {
+        renderPanel();
+      }
+    }, 50);
+  };
+
+  renderPanel(true);
+  panel.onDidDispose(() => {
+    graphSession.disposed = true;
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = undefined;
+    }
+    void disposeRuntimeSession();
+  });
+  panel.webview.onDidReceiveMessage(async (message) => {
+    if (message?.type === "pickChannelGraphDatabaseFiles") {
+      if (graphSession.mode !== "static") {
+        return;
+      }
+
+      const selectedUris = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectMany: true,
+        filters: {
+          "EPICS Database": ["db", "vdb", "template"],
+        },
+        openLabel: "Add Database Files",
+      });
+      if (!selectedUris?.length) {
+        return;
+      }
+
+      const existingKeys = new Set(graphSession.sources.map(getChannelGraphSourceKey));
+      for (const uri of selectedUris) {
+        let sourceText;
+        try {
+          sourceText = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+        } catch (error) {
+          vscode.window.showErrorMessage(
+            `Failed to read ${path.basename(uri.fsPath || uri.path)}: ${getErrorMessage(error)}`,
+          );
+          continue;
+        }
+
+        const sourceEntry = {
+          sourceLabel: path.basename(uri.fsPath || uri.path),
+          sourceText,
+          seedRecordName: graphSession.originNodeIds[0],
+          sourcePath: uri.fsPath || uri.path,
+        };
+        const key = getChannelGraphSourceKey(sourceEntry);
+        if (existingKeys.has(key)) {
+          continue;
+        }
+        existingKeys.add(key);
+        graphSession.sources.push(sourceEntry);
+      }
+
+      renderPanel();
+      return;
+    }
+
+    if (message?.type === "setChannelGraphMode") {
+      const nextMode = message.mode === "dynamic" ? "dynamic" : "static";
+      if (nextMode === graphSession.mode) {
+        return;
+      }
+      graphSession.mode = nextMode;
+      if (nextMode === "dynamic") {
+        const runtimeSession = ensureRuntimeSession();
+        for (const originNodeId of graphSession.originNodeIds) {
+          await runtimeSession.addOriginNode(originNodeId);
+        }
+      } else {
+        await disposeRuntimeSession();
+      }
+      renderPanel();
+      return;
+    }
+
+    if (message?.type === "addChannelGraphOrigin") {
+      const nodeId = String(message.nodeId || "").trim();
+      if (!nodeId) {
+        return;
+      }
+      if (!graphSession.originNodeIds.includes(nodeId)) {
+        graphSession.originNodeIds.push(nodeId);
+      }
+      if (graphSession.mode === "dynamic") {
+        const runtimeSession = ensureRuntimeSession();
+        await runtimeSession.addOriginNode(nodeId);
+      }
+      renderPanel();
+      return;
+    }
+
+    if (message?.type === "clearChannelGraph") {
+      graphSession.originNodeIds = [];
+      if (graphSession.mode === "dynamic") {
+        const runtimeSession = ensureRuntimeSession();
+        await runtimeSession.clearGraph();
+      }
+      renderPanel();
+      return;
+    }
+
+    if (message?.type === "expandChannelGraphNode") {
+      if (graphSession.mode !== "dynamic" || !message.nodeId) {
+        return;
+      }
+      const runtimeSession = ensureRuntimeSession();
+      await runtimeSession.expandNode(String(message.nodeId));
+      renderPanel();
+    }
+  });
+}
+
+async function resolveChannelGraphSourceAtActiveEditor(workspaceIndex) {
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  const position = editor?.selection?.active;
+  if (!document) {
+    return undefined;
+  }
+
+  if (isDatabaseDocument(document)) {
+    const text = document.getText();
+    const offset = position ? document.offsetAt(position) : -1;
+    const tocTarget = position
+      ? extractDatabaseTocEntries(text).find(
+        (entry) => offset >= entry.nameStart && offset <= entry.nameEnd,
+      )
+      : undefined;
+    const declarationTarget = position
+      ? extractRecordDeclarations(text).find(
+        (declaration) => offset >= declaration.nameStart && offset <= declaration.nameEnd,
+      )
+      : undefined;
+    if (position) {
+      const probeTarget = await resolveProbeTargetAtActiveEditor(workspaceIndex);
+      if (
+        probeTarget?.recordName &&
+        !declarationTarget &&
+        !tocTarget &&
+        probeTarget.recordName !== resolveProbeTargetFromDatabaseToc(document, position)?.recordName
+      ) {
+        const externalSource = await resolveChannelGraphSourceForRecordName(
+          workspaceIndex,
+          document,
+          probeTarget.recordName,
+        );
+        if (externalSource) {
+          return externalSource;
+        }
+      }
+    }
+    return {
+      sourceLabel: getDocumentDisplayLabel(document),
+      sourceText: text,
+      seedRecordName: tocTarget?.recordName || declarationTarget?.name,
+      sourcePath: document.uri.scheme === "file" ? document.uri.fsPath : undefined,
+    };
+  }
+
+  const seedRecordName = await resolveMonitorTargetAtActiveEditor(workspaceIndex);
+  if (!seedRecordName) {
+    return undefined;
+  }
+
+  return resolveChannelGraphSourceForRecordName(workspaceIndex, document, seedRecordName);
+}
+
+async function resolveChannelGraphSourceForRecordName(
+  workspaceIndex,
+  document,
+  recordName,
+) {
+  if (!recordName) {
+    return undefined;
+  }
+
+  const snapshot = await workspaceIndex.getSnapshot();
+  const definition = getRecordDefinitionsForName(snapshot, document, recordName)[0];
+  if (!definition?.absolutePath) {
+    return undefined;
+  }
+
+  const sourceText = readTextFile(definition.absolutePath);
+  if (sourceText === undefined) {
+    return undefined;
+  }
+
+  return {
+    sourceLabel: path.basename(definition.absolutePath),
+    sourceText,
+    seedRecordName: recordName,
+    sourcePath: definition.absolutePath,
+  };
+}
+
+function buildChannelGraphSourceLabel(sources) {
+  const labels = (sources || [])
+    .map((entry) => String(entry?.sourceLabel || "").trim())
+    .filter(Boolean);
+  if (!labels.length) {
+    return "EPICS Channel Graph";
+  }
+  if (labels.length === 1) {
+    return labels[0];
+  }
+  return `${labels[0]} + ${labels.length - 1} more`;
+}
+
+function getChannelGraphSourceKey(source) {
+  return String(source?.sourcePath || `${source?.sourceLabel || ""}\u0000${source?.sourceText || ""}`);
+}
+
+function getChannelGraphPanelTitle(label) {
+  const normalized = String(label || "").trim();
+  return normalized ? `Channel Graph: ${normalized}` : "EPICS Channel Graph";
+}
+
+function resolveChannelGraphRuntimeWorkspaceFolder(sourceEntries) {
+  for (const sourceEntry of sourceEntries || []) {
+    if (!sourceEntry?.sourcePath) {
+      continue;
+    }
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(
+      vscode.Uri.file(sourceEntry.sourcePath),
+    );
+    if (workspaceFolder) {
+      return workspaceFolder;
+    }
+  }
+
+  const activeDocument = vscode.window.activeTextEditor?.document;
+  if (activeDocument?.uri) {
+    return vscode.workspace.getWorkspaceFolder(activeDocument.uri);
+  }
+
+  return vscode.workspace.workspaceFolders?.[0];
+}
+
+function getChannelGraphCaReadOptions(channel) {
+  if (String(channel?.getDbrTypeStr?.() || "") !== "DBR_ENUM") {
+    return undefined;
+  }
+
+  const dbrType = Number(channel?.getDbrType_GR?.());
+  const valueCount = Number(channel?.getValueCount?.() || 0);
+  if (!Number.isFinite(dbrType) || dbrType < 0) {
+    return undefined;
+  }
+
+  return {
+    dbrType,
+    valueCount: valueCount > 0 ? valueCount : 1,
+  };
+}
+
+function updateChannelGraphCaEnumChoicesCache(entry, dbrData) {
+  if (!entry || !Array.isArray(dbrData?.strings)) {
+    return;
+  }
+  const validCount = Number(dbrData?.number_of_string_used);
+  entry.caEnumChoices = Number.isFinite(validCount) && validCount > 0
+    ? dbrData.strings.slice(0, validCount).map((choice) => String(choice ?? ""))
+    : dbrData.strings.map((choice) => String(choice ?? ""));
+}
+
+function updateChannelGraphPvaEnumChoicesCache(entry, pvaData) {
+  const value = pvaData?.value;
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Array.isArray(value.choices)
+  ) {
+    entry.pvaEnumChoices = value.choices.map((choice) => String(choice ?? ""));
+  }
+}
+
+class ChannelGraphRuntimeSession {
+  constructor({ initialOriginNodeIds = [], sourceEntries, onStateChange }) {
+    this.originNodeIds = new Set(
+      (Array.isArray(initialOriginNodeIds) ? initialOriginNodeIds : [])
+        .map((nodeId) => String(nodeId || "").trim())
+        .filter(Boolean),
+    );
+    this.sourceEntries = Array.isArray(sourceEntries) ? sourceEntries : [];
+    this.onStateChange = typeof onStateChange === "function" ? onStateChange : () => {};
+    this.runtimeLibrary = safeRequireRuntimeLibrary();
+    this.protocol = "ca";
+    this.status = "idle";
+    this.errorMessage = "";
+    this.context = undefined;
+    this.initializationPromise = undefined;
+    this.nodeConnectPromises = new Map();
+    this.nodeSessions = new Map();
+    this.nodesById = new Map();
+    this.edges = [];
+    this.seenEdges = new Set();
+    this.resolvedNodeIds = new Set();
+    this.disposed = false;
+    this.stateChangeScheduled = false;
+  }
+
+  buildState() {
+    const adjacency = Object.create(null);
+    for (const edge of this.edges) {
+      adjacency[edge.fromId] = adjacency[edge.fromId] || [];
+      adjacency[edge.toId] = adjacency[edge.toId] || [];
+      if (!adjacency[edge.fromId].includes(edge.toId)) {
+        adjacency[edge.fromId].push(edge.toId);
+      }
+      if (!adjacency[edge.toId].includes(edge.fromId)) {
+        adjacency[edge.toId].push(edge.fromId);
+      }
+    }
+
+    let message = this.errorMessage;
+    if (!message) {
+      if (this.originNodeIds.size === 0) {
+        message = "Enter a channel name to start the Channel Graph.";
+      } else if (this.status === "connecting") {
+        const firstOriginNodeId = [...this.originNodeIds][0];
+        message = `Connecting to EPICS runtime and expanding "${firstOriginNodeId}"...`;
+      } else if (this.status === "connected" && this.edges.length === 0) {
+        const firstOriginNodeId = [...this.originNodeIds][0];
+        message = `No runtime link relationships were found for "${firstOriginNodeId}".`;
+      }
+    }
+
+    return {
+      mode: "dynamic",
+      sourceLabel: this.originNodeIds.size > 0
+        ? `Runtime (${this.protocol.toUpperCase()}): ${[...this.originNodeIds][0]}`
+        : `Runtime (${this.protocol.toUpperCase()})`,
+      seedRecordName: [...this.originNodeIds][0],
+      originNodeIds: [...this.originNodeIds],
+      message,
+      allowAddDatabaseFiles: false,
+      nodes: [...this.nodesById.values()],
+      edges: [...this.edges],
+      adjacency,
+    };
+  }
+
+  scheduleStateChange() {
+    if (this.disposed || this.stateChangeScheduled) {
+      return;
+    }
+    this.stateChangeScheduled = true;
+    setTimeout(() => {
+      this.stateChangeScheduled = false;
+      if (!this.disposed) {
+        this.onStateChange();
+      }
+    }, 0);
+  }
+
+  ensureNode(nodeId, overrides = {}) {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (!normalizedNodeId) {
+      return undefined;
+    }
+    const existingNode = this.nodesById.get(normalizedNodeId);
+    if (existingNode) {
+      Object.assign(existingNode, overrides);
+      return existingNode;
+    }
+    const node = {
+      id: normalizedNodeId,
+      name: normalizedNodeId.startsWith("__value__:") ? "" : normalizedNodeId,
+      recordType: "",
+      scanValue: "",
+      valueText: "",
+      external: true,
+      ...overrides,
+    };
+    this.nodesById.set(normalizedNodeId, node);
+    return node;
+  }
+
+  addEdge(edge) {
+    const edgeKey = `${edge.fromId}\u0000${edge.toId}\u0000${edge.label}`;
+    if (this.seenEdges.has(edgeKey)) {
+      return;
+    }
+    this.seenEdges.add(edgeKey);
+    this.edges.push(edge);
+  }
+
+  async start() {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    this.status = "connecting";
+    this.scheduleStateChange();
+    this.initializationPromise = (async () => {
+      if (!this.runtimeLibrary?.Context) {
+        this.status = "error";
+        this.errorMessage = "epics-tca is not available for dynamic Channel Graph.";
+        this.scheduleStateChange();
+        return;
+      }
+
+      const workspaceFolder = resolveChannelGraphRuntimeWorkspaceFolder(this.sourceEntries);
+      const loadedConfig = workspaceFolder
+        ? loadProjectRuntimeConfiguration(
+          path.join(workspaceFolder.uri.fsPath, PROJECT_RUNTIME_CONFIG_FILE_NAME),
+        )
+        : {
+          exists: false,
+          config: getDefaultProjectRuntimeConfiguration(),
+        };
+      this.protocol = normalizeRuntimeProtocol(loadedConfig.config.protocol);
+      const context = new this.runtimeLibrary.Context(
+        createRuntimeEnvironmentFromProjectConfiguration(loadedConfig.config),
+        "warning",
+      );
+      await context.initialize();
+      if (this.disposed) {
+        try {
+          context.destroyHard?.();
+        } catch (error) {
+          // Ignore cleanup failures after disposal.
+        }
+        return;
+      }
+      this.context = context;
+      this.status = "connected";
+      for (const originNodeId of this.originNodeIds) {
+        this.ensureNode(originNodeId, {
+          name: originNodeId,
+          external: false,
+        });
+      }
+      for (const originNodeId of this.originNodeIds) {
+        await this.ensureNodeSession(originNodeId);
+        await this.populateRuntimeNodeMetadata(originNodeId);
+        await this.expandNode(originNodeId);
+      }
+      this.scheduleStateChange();
+    })().catch((error) => {
+      this.status = "error";
+      this.errorMessage = `Dynamic resolution failed: ${getErrorMessage(error)}`;
+      this.scheduleStateChange();
+    });
+
+    return this.initializationPromise;
+  }
+
+  async addOriginNode(nodeId) {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (!normalizedNodeId) {
+      return;
+    }
+
+    this.originNodeIds.add(normalizedNodeId);
+    this.ensureNode(normalizedNodeId, {
+      name: normalizedNodeId,
+      external: false,
+    });
+    this.errorMessage = "";
+    await this.start();
+    if (!this.context || this.disposed) {
+      this.scheduleStateChange();
+      return;
+    }
+    await this.ensureNodeSession(normalizedNodeId);
+    await this.populateRuntimeNodeMetadata(normalizedNodeId);
+    await this.expandNode(normalizedNodeId);
+    this.scheduleStateChange();
+  }
+
+  async clearGraph() {
+    this.originNodeIds.clear();
+    this.resolvedNodeIds.clear();
+    this.edges = [];
+    this.seenEdges.clear();
+    this.nodesById.clear();
+    this.errorMessage = "";
+    await Promise.all(
+      [...this.nodeSessions.values()].map((session) => this.cleanupNodeSession(session)),
+    );
+    this.nodeSessions.clear();
+    this.nodeConnectPromises.clear();
+    this.scheduleStateChange();
+  }
+
+  async expandNode(nodeId) {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (
+      !normalizedNodeId ||
+      normalizedNodeId.startsWith("__value__:") ||
+      this.resolvedNodeIds.has(normalizedNodeId)
+    ) {
+      return;
+    }
+
+    await this.start();
+    if (!this.context || this.disposed) {
+      return;
+    }
+
+    this.resolvedNodeIds.add(normalizedNodeId);
+    await this.ensureNodeSession(normalizedNodeId);
+    await this.populateRuntimeNodeMetadata(normalizedNodeId);
+    const node = this.nodesById.get(normalizedNodeId);
+    const recordType = String(node?.recordType || "").trim();
+    if (!recordType) {
+      this.scheduleStateChange();
+      return;
+    }
+
+    const linkFieldNames = getRuntimeProbeFieldNamesForRecordType(recordType).filter((fieldName) => {
+      const dbfType = getRuntimeProbeFieldTypeForRecordType(recordType, fieldName);
+      return LINK_DBF_TYPES.has(dbfType) || isLinkField(fieldName);
+    });
+
+    for (const fieldName of linkFieldNames) {
+      const fieldValue = await this.readRuntimeFieldValue(normalizedNodeId, fieldName);
+      const rawValue = String(fieldValue?.rawValue || "").trim();
+      if (!rawValue) {
+        continue;
+      }
+
+      const target = parseChannelGraphLinkTarget(rawValue);
+      if (!target) {
+        continue;
+      }
+
+      const targetNodeId = target.recordName
+        ? target.recordName
+        : `__value__:${normalizedNodeId}:${fieldName}:${target.rawValue}`;
+      const targetNodeName = target.recordName || target.rawValue;
+      if (!targetNodeName) {
+        continue;
+      }
+
+      this.ensureNode(targetNodeId, {
+        name: targetNodeName,
+        external: !target.recordName,
+      });
+
+      const label = target.targetField
+        ? `${fieldName}:${target.targetField}`
+        : fieldName;
+      const dbfType = getRuntimeProbeFieldTypeForRecordType(recordType, fieldName);
+      this.addEdge(
+        dbfType === "DBF_INLINK" || isChannelGraphInputField(fieldName)
+          ? { fromId: targetNodeId, toId: normalizedNodeId, label }
+          : { fromId: normalizedNodeId, toId: targetNodeId, label },
+      );
+
+      if (target.recordName) {
+        void this.ensureNodeSession(targetNodeId).then(() =>
+          this.populateRuntimeNodeMetadata(targetNodeId),
+        );
+      }
+    }
+
+    this.scheduleStateChange();
+  }
+
+  async ensureNodeSession(nodeId) {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (!normalizedNodeId || normalizedNodeId.startsWith("__value__:")) {
+      return false;
+    }
+    if (this.nodeSessions.has(normalizedNodeId)) {
+      return true;
+    }
+    if (this.nodeConnectPromises.has(normalizedNodeId)) {
+      return this.nodeConnectPromises.get(normalizedNodeId);
+    }
+
+    const connectPromise = (async () => {
+      if (!this.context) {
+        return false;
+      }
+
+      let channel;
+      let session;
+      try {
+        channel = await this.context.createChannel(normalizedNodeId, this.protocol, 1.5);
+        if (!channel) {
+          return false;
+        }
+        session = {
+          nodeId: normalizedNodeId,
+          channel,
+          monitor: undefined,
+          protocol: this.protocol,
+          caEnumChoices: undefined,
+          pvaEnumChoices: undefined,
+        };
+        const node = this.ensureNode(normalizedNodeId, {
+          name: normalizedNodeId,
+          external: false,
+        });
+
+        channel.setDestroySoftCallback?.(() => {
+          if (this.disposed) {
+            return;
+          }
+          const activeNode = this.nodesById.get(normalizedNodeId);
+          if (activeNode) {
+            activeNode.valueText = "";
+          }
+          this.scheduleStateChange();
+        });
+        channel.setDestroyHardCallback?.(() => {
+          if (this.disposed) {
+            return;
+          }
+          this.nodeSessions.delete(normalizedNodeId);
+          const activeNode = this.nodesById.get(normalizedNodeId);
+          if (activeNode) {
+            activeNode.valueText = "";
+          }
+          this.scheduleStateChange();
+        });
+
+        const monitorPromise = this.protocol === "pva"
+          ? channel.createMonitorPva(1.5, "", (activeMonitor) => {
+            this.handleNodeMonitorUpdate(normalizedNodeId, session, activeMonitor);
+          })
+          : (() => {
+            const caReadOptions = getChannelGraphCaReadOptions(channel);
+            if (caReadOptions) {
+              return channel.createMonitor(
+                1.5,
+                (activeMonitor) => {
+                  this.handleNodeMonitorUpdate(normalizedNodeId, session, activeMonitor);
+                },
+                caReadOptions.dbrType,
+                caReadOptions.valueCount,
+              );
+            }
+            return channel.createMonitor(1.5, (activeMonitor) => {
+              this.handleNodeMonitorUpdate(normalizedNodeId, session, activeMonitor);
+            });
+          })();
+
+        session.monitor = await monitorPromise;
+        if (this.disposed) {
+          await this.cleanupNodeSession(session);
+          return false;
+        }
+        this.nodeSessions.set(normalizedNodeId, session);
+        if (node) {
+          node.external = false;
+        }
+        this.scheduleStateChange();
+        return true;
+      } catch (error) {
+        const node = this.nodesById.get(normalizedNodeId);
+        if (node && !this.resolvedNodeIds.has(normalizedNodeId)) {
+          node.external = true;
+        }
+        await this.cleanupNodeSession(session || { channel });
+        this.scheduleStateChange();
+        return false;
+      } finally {
+        this.nodeConnectPromises.delete(normalizedNodeId);
+      }
+    })();
+
+    this.nodeConnectPromises.set(normalizedNodeId, connectPromise);
+    return connectPromise;
+  }
+
+  handleNodeMonitorUpdate(nodeId, session, monitor) {
+    if (this.disposed) {
+      return;
+    }
+    const node = this.nodesById.get(nodeId);
+    if (!node) {
+      return;
+    }
+
+    if (session.protocol === "pva") {
+      const pvaData = monitor?.getPvaData?.();
+      updateChannelGraphPvaEnumChoicesCache(session, pvaData);
+      node.valueText = formatRuntimeValue(
+        getPvaRuntimeDisplayValue(pvaData, session.pvaEnumChoices),
+      );
+    } else {
+      const dbrData = monitor?.getChannel?.().getDbrData?.();
+      updateChannelGraphCaEnumChoicesCache(session, dbrData);
+      node.valueText = formatRuntimeValue(
+        getCaRuntimeDisplayValue(session, dbrData),
+      );
+    }
+
+    this.scheduleStateChange();
+  }
+
+  async populateRuntimeNodeMetadata(nodeId) {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (!normalizedNodeId || normalizedNodeId.startsWith("__value__:")) {
+      return;
+    }
+
+    const node = this.ensureNode(normalizedNodeId, {
+      name: normalizedNodeId,
+    });
+    const [recordType, scanValue] = await Promise.all([
+      this.readRuntimeFieldValue(normalizedNodeId, "RTYP"),
+      this.readRuntimeFieldValue(normalizedNodeId, "SCAN"),
+    ]);
+    if (node) {
+      if (recordType?.displayValue) {
+        node.recordType = recordType.displayValue;
+      }
+      if (scanValue?.displayValue) {
+        node.scanValue = scanValue.displayValue;
+      }
+    }
+    this.scheduleStateChange();
+  }
+
+  async readRuntimeFieldValue(recordName, fieldName) {
+    if (!this.context || this.disposed) {
+      return undefined;
+    }
+
+    let channel;
+    try {
+      channel = await this.context.createChannel(
+        `${recordName}.${fieldName}`,
+        this.protocol,
+        1.5,
+      );
+      if (!channel) {
+        return undefined;
+      }
+
+      if (this.protocol === "pva") {
+        const pvaData = await channel.getPva(1.5, "");
+        const displayValue = formatRuntimeValue(
+          getPvaRuntimeDisplayValue(pvaData, undefined),
+        );
+        return {
+          rawValue: displayValue,
+          displayValue,
+        };
+      }
+
+      const readOptions = getChannelGraphCaReadOptions(channel);
+      const dbrData = await channel.get(
+        1.5,
+        readOptions?.dbrType,
+        readOptions?.valueCount,
+      );
+      const entry = {
+        channel,
+        caEnumChoices: undefined,
+      };
+      updateChannelGraphCaEnumChoicesCache(entry, dbrData);
+      const displayValue = formatRuntimeValue(
+        getCaRuntimeDisplayValue(entry, dbrData),
+      );
+      return {
+        rawValue: displayValue,
+        displayValue,
+      };
+    } catch (error) {
+      return undefined;
+    } finally {
+      try {
+        await channel?.destroyHard?.();
+      } catch (error) {
+        // Ignore best-effort field read cleanup failures.
+      }
+    }
+  }
+
+  async cleanupNodeSession(session) {
+    if (!session) {
+      return;
+    }
+    try {
+      await session.monitor?.destroySoft?.();
+    } catch (error) {
+      // Ignore.
+    }
+    try {
+      await session.channel?.destroyHard?.();
+    } catch (error) {
+      // Ignore.
+    }
+  }
+
+  async dispose() {
+    this.disposed = true;
+    this.onStateChange = () => {};
+    await Promise.all([...this.nodeSessions.values()].map((session) => this.cleanupNodeSession(session)));
+    this.nodeSessions.clear();
+    this.nodeConnectPromises.clear();
+    try {
+      await this.context?.destroyHard?.();
+    } catch (error) {
+      // Ignore runtime context cleanup failures.
+    }
+  }
+}
+
 async function resolveMonitorTargetAtActiveEditor(workspaceIndex) {
   const editor = vscode.window.activeTextEditor;
   const document = editor?.document;
@@ -6988,6 +7903,876 @@ function expandProbeRecordNameFromToc(recordName, macroAssignments) {
       return defaultValue !== undefined ? defaultValue : match;
     },
   );
+}
+
+function buildChannelGraphState(
+  sourceText,
+  sourceLabel,
+  seedRecordName,
+  mode = "static",
+  originNodeIds = seedRecordName ? [seedRecordName] : [],
+) {
+  if (!sourceText) {
+    return {
+      mode,
+      sourceLabel: sourceLabel || "EPICS Channel Graph",
+      seedRecordName,
+      originNodeIds,
+      message: "No database source is available for Channel Graph.",
+      allowAddDatabaseFiles: mode === "static",
+      nodes: [],
+      edges: [],
+      adjacency: {},
+    };
+  }
+
+  const declarations = extractRecordDeclarations(sourceText);
+  if (!declarations.length) {
+    return {
+      mode,
+      sourceLabel: sourceLabel || "EPICS Channel Graph",
+      seedRecordName,
+      originNodeIds,
+      message: `No record declarations were found in ${sourceLabel || "the source file"}.`,
+      allowAddDatabaseFiles: mode === "static",
+      nodes: [],
+      edges: [],
+      adjacency: {},
+    };
+  }
+
+  const nodesById = new Map();
+  const edges = [];
+  const seenEdges = new Set();
+
+  for (const declaration of declarations) {
+    const fieldDeclarations = extractFieldDeclarationsInRecord(sourceText, declaration);
+    const scanValue = fieldDeclarations.find((field) => field.fieldName === "SCAN")?.value || "";
+    nodesById.set(declaration.name, {
+      id: declaration.name,
+      name: declaration.name,
+      recordType: declaration.recordType,
+      scanValue,
+      external: false,
+    });
+  }
+
+  for (const declaration of declarations) {
+    const fieldDeclarations = extractFieldDeclarationsInRecord(sourceText, declaration);
+    for (const fieldDeclaration of fieldDeclarations) {
+      const dbfType = getRuntimeProbeFieldTypeForRecordType(
+        declaration.recordType,
+        fieldDeclaration.fieldName,
+      );
+      if (!LINK_DBF_TYPES.has(dbfType) && !isLinkField(fieldDeclaration.fieldName)) {
+        continue;
+      }
+
+      const target = parseChannelGraphLinkTarget(fieldDeclaration.value);
+      if (!target) {
+        continue;
+      }
+
+      const targetNodeId = target.recordName
+        ? target.recordName
+        : `__value__:${declaration.name}:${fieldDeclaration.fieldName}:${target.rawValue}`;
+      const targetNodeName = target.recordName || target.rawValue;
+      if (!targetNodeName) {
+        continue;
+      }
+
+      if (!nodesById.has(targetNodeId)) {
+        nodesById.set(targetNodeId, {
+          id: targetNodeId,
+          name: targetNodeName,
+          recordType: "",
+          scanValue: "",
+          external: true,
+        });
+      }
+
+      const label = target.targetField
+        ? `${fieldDeclaration.fieldName}:${target.targetField}`
+        : fieldDeclaration.fieldName;
+      const edge = dbfType === "DBF_INLINK" || isChannelGraphInputField(fieldDeclaration.fieldName)
+        ? {
+          fromId: targetNodeId,
+          toId: declaration.name,
+          label,
+        }
+        : {
+          fromId: declaration.name,
+          toId: targetNodeId,
+          label,
+        };
+      const edgeKey = `${edge.fromId}\u0000${edge.toId}\u0000${edge.label}`;
+      if (seenEdges.has(edgeKey)) {
+        continue;
+      }
+      seenEdges.add(edgeKey);
+      edges.push(edge);
+    }
+  }
+
+  const adjacency = Object.create(null);
+  for (const edge of edges) {
+    adjacency[edge.fromId] = adjacency[edge.fromId] || [];
+    adjacency[edge.toId] = adjacency[edge.toId] || [];
+    if (!adjacency[edge.fromId].includes(edge.toId)) {
+      adjacency[edge.fromId].push(edge.toId);
+    }
+    if (!adjacency[edge.toId].includes(edge.fromId)) {
+      adjacency[edge.toId].push(edge.fromId);
+    }
+  }
+
+  const nodeIds = [...nodesById.keys()];
+  return {
+    mode,
+    sourceLabel: sourceLabel || "EPICS Channel Graph",
+    seedRecordName,
+    originNodeIds,
+    message:
+      seedRecordName && !nodesById.has(seedRecordName)
+        ? `Seed record "${seedRecordName}" was not found in ${sourceLabel || "the source file"}. Showing the full graph.`
+        : edges.length === 0
+          ? `No link relationships were found in ${sourceLabel || "the source file"}.`
+          : "",
+    allowAddDatabaseFiles: mode === "static",
+    nodes: nodeIds.map((id) => nodesById.get(id)),
+    edges,
+    adjacency,
+  };
+}
+
+function parseChannelGraphLinkTarget(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.startsWith("@")) {
+    return {
+      rawValue: stripOptionalWrappingQuotes(trimmed),
+      targetField: "",
+    };
+  }
+
+  const token = trimmed
+    .split(/[\s,]+/)
+    .map((part) => String(part || "").trim())
+    .find(Boolean);
+  if (!token) {
+    return undefined;
+  }
+
+  const unwrapped = stripOptionalWrappingQuotes(token);
+  if (unwrapped === "0" || unwrapped === "1") {
+    return {
+      rawValue: unwrapped,
+      targetField: "",
+    };
+  }
+  const recordName = unwrapped.split(".")[0] || "";
+  if (!recordName) {
+    return {
+      rawValue: stripOptionalWrappingQuotes(trimmed),
+      targetField: "",
+    };
+  }
+
+  return {
+    recordName,
+    targetField: unwrapped.includes(".") ? unwrapped.split(".").slice(1).join(".") : "",
+  };
+}
+
+function stripOptionalWrappingQuotes(value) {
+  const text = String(value || "");
+  if (text.length >= 2) {
+    const first = text[0];
+    const last = text[text.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return text.slice(1, -1);
+    }
+  }
+  return text;
+}
+
+function isChannelGraphInputField(fieldName) {
+  return (
+    fieldName === "INP" ||
+    /^INP[A-U]$/.test(fieldName) ||
+    /^DOL[0-9A-F]$/.test(fieldName)
+  );
+}
+
+function buildChannelGraphWebviewHtml(webview, graphState) {
+  const nonce = String(Date.now());
+  const initialState = JSON.stringify(graphState || {}).replace(/</g, "\\u003c");
+  const escapedSourceLabel = escapeChannelGraphHtml(
+    String(graphState?.sourceLabel || "EPICS Channel Graph"),
+  );
+  const escapedMessage = graphState?.message
+    ? escapeChannelGraphHtml(String(graphState.message))
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS Channel Graph</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        background: var(--vscode-editor-background);
+      }
+      .toolbar-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+      }
+      .toolbar-meta {
+        margin-top: 6px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .toolbar-actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .toolbar-origin {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .toolbar-button {
+        border: 1px solid var(--vscode-button-border, transparent);
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border-radius: 6px;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+      .toolbar-button:hover {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .toolbar-button[disabled] {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .mode-toggle {
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+        padding: 4px 10px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 999px;
+      }
+      .mode-toggle label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+      }
+      .origin-input {
+        min-width: 240px;
+        max-width: 380px;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 6px;
+        padding: 6px 10px;
+        outline: none;
+      }
+      .message {
+        margin-top: 6px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .viewport {
+        position: relative;
+        flex: 1;
+        overflow: auto;
+        background:
+          radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--vscode-panel-border) 55%, transparent) 1px, transparent 0);
+        background-size: 28px 28px;
+      }
+      .stage {
+        position: relative;
+        min-width: 1400px;
+        min-height: 900px;
+      }
+      .edges {
+        position: absolute;
+        inset: 0;
+        overflow: visible;
+      }
+      .node-layer {
+        position: absolute;
+        inset: 0;
+      }
+      .graph-node {
+        position: absolute;
+        min-width: 140px;
+        max-width: 220px;
+        padding: 10px 14px;
+        border-radius: 18px;
+        border: 2px solid #f000ff;
+        background: color-mix(in srgb, var(--vscode-editor-background) 35%, #8bc7ff 65%);
+        color: #000;
+        text-align: center;
+        user-select: none;
+        cursor: grab;
+        box-shadow: 0 10px 24px color-mix(in srgb, #000 12%, transparent);
+      }
+      .graph-node.external {
+        border-color: #7ab7ff;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 30%, #9fcfff 70%);
+      }
+      .graph-node.collapsed {
+        border-radius: 999px;
+      }
+      .graph-node:active {
+        cursor: grabbing;
+      }
+      .node-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        line-height: 1.2;
+      }
+      .node-subtitle {
+        margin-top: 2px;
+        font-size: 0.95rem;
+        line-height: 1.2;
+      }
+      .node-value {
+        margin-top: 4px;
+        font-size: 1rem;
+        line-height: 1.15;
+      }
+      .edge-label {
+        font-size: 0.85rem;
+        fill: var(--vscode-foreground);
+      }
+      .edge-label-bg {
+        fill: color-mix(in srgb, var(--vscode-editor-background) 82%, #ffffff 18%);
+        stroke: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <div class="toolbar-title">EPICS Channel Graph</div>
+      <div id="channelGraphSourceLabel" class="toolbar-meta">Source: ${escapedSourceLabel}</div>
+      <div id="channelGraphHelpText" class="toolbar-meta">Drag nodes to reposition. The graph starts with direct relationships only; double-click a node to expand one more hop.</div>
+      <div class="toolbar-actions">
+        <div class="mode-toggle" role="radiogroup" aria-label="Channel Graph Resolution">
+          <label><input id="channelGraphModeStatic" type="radio" name="channelGraphMode" value="static" ${graphState?.mode === "dynamic" ? "" : "checked"} /> Static</label>
+          <label><input id="channelGraphModeDynamic" type="radio" name="channelGraphMode" value="dynamic" ${graphState?.mode === "dynamic" ? "checked" : ""} /> Dynamic</label>
+        </div>
+        <button id="addDatabaseFilesButton" class="toolbar-button" type="button" ${graphState?.allowAddDatabaseFiles === false ? "disabled" : ""}>Add Database Files</button>
+        <button id="clearChannelGraphButton" class="toolbar-button" type="button">Clear Graph</button>
+      </div>
+      <div class="toolbar-origin">
+        <input id="channelGraphOriginInput" class="origin-input" type="text" placeholder="Enter channel name" />
+        <button id="addChannelGraphOriginButton" class="toolbar-button" type="button">Add Channel</button>
+      </div>
+      <div id="channelGraphMessage" class="message" ${graphState?.message ? "" : 'style="display:none"'}>${escapedMessage}</div>
+    </div>
+    <div id="viewport" class="viewport">
+      <div id="stage" class="stage">
+        <svg id="edges" class="edges">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L8,3 z" fill="#3b6cff"></path>
+            </marker>
+          </defs>
+        </svg>
+        <div id="nodeLayer" class="node-layer"></div>
+      </div>
+    </div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      let state = ${initialState};
+      const viewport = document.getElementById("viewport");
+      const stage = document.getElementById("stage");
+      const edgeLayer = document.getElementById("edges");
+      const nodeLayer = document.getElementById("nodeLayer");
+      const sourceLabelNode = document.getElementById("channelGraphSourceLabel");
+      const helpTextNode = document.getElementById("channelGraphHelpText");
+      const messageNode = document.getElementById("channelGraphMessage");
+      const addDatabaseFilesButton = document.getElementById("addDatabaseFilesButton");
+      const clearChannelGraphButton = document.getElementById("clearChannelGraphButton");
+      const originInput = document.getElementById("channelGraphOriginInput");
+      const addOriginButton = document.getElementById("addChannelGraphOriginButton");
+      const modeStaticRadio = document.getElementById("channelGraphModeStatic");
+      const modeDynamicRadio = document.getElementById("channelGraphModeDynamic");
+      let nodeById = new Map((state.nodes || []).map((node) => [node.id, node]));
+      function getInitialVisibleNodeIds() {
+        const originIds = Array.isArray(state.originNodeIds)
+          ? state.originNodeIds.filter((nodeId) => nodeById.has(nodeId))
+          : [];
+        if (!originIds.length) {
+          return [];
+        }
+        const visibleIds = new Set();
+        for (const originNodeId of originIds) {
+          visibleIds.add(originNodeId);
+          for (const neighborId of state.adjacency?.[originNodeId] || []) {
+            visibleIds.add(neighborId);
+          }
+        }
+        return [...visibleIds];
+      }
+
+      let visibleNodeIds = new Set(getInitialVisibleNodeIds());
+      let expandedNodeIds = new Set(
+        state.seedRecordName && nodeById.has(state.seedRecordName)
+          ? [state.seedRecordName]
+          : (state.nodes || []).map((node) => node.id),
+      );
+      const positions = Object.create(null);
+      let dragState = undefined;
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function isExpandedNode(nodeId) {
+        return expandedNodeIds.has(nodeId);
+      }
+
+      function buildNodeLines(node, expanded) {
+        if (node.external || !expanded) {
+          return [escapeHtml(node.name)];
+        }
+        const subtitle = node.scanValue
+          ? "(" + escapeHtml(node.recordType || "?") + ") (" + escapeHtml(node.scanValue) + ")"
+          : "(" + escapeHtml(node.recordType || "?") + ")";
+        const lines = [
+          '<div class="node-title">' + escapeHtml(node.name) + '</div>',
+          '<div class="node-subtitle">' + subtitle + '</div>',
+        ];
+        if (String(node.valueText || "").trim()) {
+          lines.push('<div class="node-value">' + escapeHtml(node.valueText) + '</div>');
+        }
+        return lines;
+      }
+
+      function ensureInitialPositions() {
+        if (state.seedRecordName && nodeById.has(state.seedRecordName)) {
+          const levels = new Map([[state.seedRecordName, 0]]);
+          const queue = [state.seedRecordName];
+          while (queue.length) {
+            const current = queue.shift();
+            const nextLevel = (levels.get(current) || 0) + 1;
+            for (const neighborId of [...(state.adjacency?.[current] || [])].sort()) {
+              if (!visibleNodeIds.has(neighborId) || levels.has(neighborId)) {
+                continue;
+              }
+              levels.set(neighborId, nextLevel);
+              queue.push(neighborId);
+            }
+          }
+
+          const nodeIdsByLevel = new Map();
+          for (const [nodeId, level] of levels.entries()) {
+            const levelNodeIds = nodeIdsByLevel.get(level) || [];
+            levelNodeIds.push(nodeId);
+            nodeIdsByLevel.set(level, levelNodeIds);
+          }
+
+          [...nodeIdsByLevel.keys()].sort((left, right) => left - right).forEach((level) => {
+            const levelNodeIds = (nodeIdsByLevel.get(level) || []).sort();
+            levelNodeIds.forEach((nodeId, index) => {
+              positions[nodeId] = positions[nodeId] || {
+                x: 140 + level * 280,
+                y: 120 + index * 180,
+              };
+            });
+          });
+          return;
+        }
+        (state.nodes || []).forEach((node, index) => {
+          if (positions[node.id]) {
+            return;
+          }
+          const column = index % 4;
+          const row = Math.floor(index / 4);
+          positions[node.id] = { x: 140 + column * 260, y: 120 + row * 180 };
+        });
+      }
+
+      function getNodeSize(node) {
+        const expanded = isExpandedNode(node.id);
+        const titleLength = String(node.name || "").length;
+        const subtitleLength = node.external || !expanded
+          ? 0
+          : String(node.recordType || "").length + String(node.scanValue || "").length + 6;
+        const valueLength = node.external || !expanded
+          ? 0
+          : String(node.valueText || "").length;
+        return {
+          width: Math.max((Math.max(titleLength, subtitleLength, valueLength) * 9) + 40, (node.external || !expanded) ? 120 : 170),
+          height: (node.external || !expanded) ? 54 : (String(node.valueText || "").trim() ? 106 : 84),
+        };
+      }
+
+      function getVisibleEdges() {
+        return (state.edges || []).filter(
+          (edge) => visibleNodeIds.has(edge.fromId) && visibleNodeIds.has(edge.toId),
+        );
+      }
+
+      function getVisibleBounds() {
+        const visibleNodes = (state.nodes || []).filter((node) => visibleNodeIds.has(node.id));
+        if (!visibleNodes.length) {
+          return { width: 1400, height: 900 };
+        }
+        let maxX = 0;
+        let maxY = 0;
+        for (const node of visibleNodes) {
+          const position = positions[node.id] || { x: 120, y: 120 };
+          const size = getNodeSize(node);
+          maxX = Math.max(maxX, position.x + size.width + 120);
+          maxY = Math.max(maxY, position.y + size.height + 120);
+        }
+        return {
+          width: Math.max(maxX, 1400),
+          height: Math.max(maxY, 900),
+        };
+      }
+
+      function connectionPoint(position, size, angle, invert) {
+        const radius = Math.min(size.width, size.height) / 2;
+        const factor = invert ? -1 : 1;
+        return {
+          x: position.x + size.width / 2 + Math.cos(angle) * radius * factor,
+          y: position.y + size.height / 2 + Math.sin(angle) * radius * factor,
+        };
+      }
+
+      function expandNode(nodeId) {
+        const neighbors = (state.adjacency?.[nodeId] || []).filter((id) => !visibleNodeIds.has(id));
+        expandedNodeIds.add(nodeId);
+        if (!neighbors.length) {
+          render();
+          return;
+        }
+        const base = positions[nodeId] || { x: 620, y: 260 };
+        const radius = 220;
+        neighbors.forEach((neighborId, index) => {
+          const angle = (Math.PI * 2 * index) / Math.max(neighbors.length, 1);
+          if (!positions[neighborId]) {
+            positions[neighborId] = {
+              x: Math.round(base.x + Math.cos(angle) * radius),
+              y: Math.round(base.y + Math.sin(angle) * radius),
+            };
+          }
+          visibleNodeIds.add(neighborId);
+        });
+        render();
+      }
+
+      function revealExpandedNodeNeighbors(targetVisibleNodeIds) {
+        for (const expandedNodeId of expandedNodeIds) {
+          if (!nodeById.has(expandedNodeId)) {
+            continue;
+          }
+          targetVisibleNodeIds.add(expandedNodeId);
+          for (const neighborId of state.adjacency?.[expandedNodeId] || []) {
+            if (nodeById.has(neighborId)) {
+              targetVisibleNodeIds.add(neighborId);
+            }
+          }
+        }
+      }
+
+      function applyGraphState(nextState) {
+        state = nextState || {};
+        nodeById = new Map((state.nodes || []).map((node) => [node.id, node]));
+
+        const nextVisibleNodeIds = new Set();
+        for (const nodeId of visibleNodeIds) {
+          if (nodeById.has(nodeId)) {
+            nextVisibleNodeIds.add(nodeId);
+          }
+        }
+        for (const nodeId of getInitialVisibleNodeIds()) {
+          nextVisibleNodeIds.add(nodeId);
+        }
+        revealExpandedNodeNeighbors(nextVisibleNodeIds);
+        visibleNodeIds = nextVisibleNodeIds;
+
+        const nextExpandedNodeIds = new Set();
+        for (const nodeId of expandedNodeIds) {
+          if (nodeById.has(nodeId)) {
+            nextExpandedNodeIds.add(nodeId);
+          }
+        }
+        if (state.seedRecordName && nodeById.has(state.seedRecordName)) {
+          nextExpandedNodeIds.add(state.seedRecordName);
+        }
+        expandedNodeIds = nextExpandedNodeIds;
+
+        for (const nodeId of Object.keys(positions)) {
+          if (!nodeById.has(nodeId)) {
+            delete positions[nodeId];
+          }
+        }
+
+        if (sourceLabelNode) {
+          sourceLabelNode.textContent = "Source: " + String(state.sourceLabel || "EPICS Channel Graph");
+        }
+        if (helpTextNode) {
+          helpTextNode.textContent =
+            state.mode === "dynamic"
+              ? "Dynamic resolution reads IOC link-type field values at runtime. Double-click a node to expand one more runtime hop."
+              : "Drag nodes to reposition. The graph starts with direct relationships only; double-click a node to expand one more hop.";
+        }
+        if (messageNode) {
+          const nextMessage = String(state.message || "");
+          messageNode.textContent = nextMessage;
+          messageNode.style.display = nextMessage ? "block" : "none";
+        }
+        if (addDatabaseFilesButton) {
+          addDatabaseFilesButton.disabled = state.allowAddDatabaseFiles === false;
+        }
+        if (modeStaticRadio) {
+          modeStaticRadio.checked = state.mode !== "dynamic";
+        }
+        if (modeDynamicRadio) {
+          modeDynamicRadio.checked = state.mode === "dynamic";
+        }
+        if (originInput && document.activeElement !== originInput) {
+          originInput.value = "";
+        }
+        render();
+      }
+
+      function render() {
+        ensureInitialPositions();
+        const bounds = getVisibleBounds();
+        stage.style.width = bounds.width + "px";
+        stage.style.height = bounds.height + "px";
+        edgeLayer.setAttribute("viewBox", "0 0 " + bounds.width + " " + bounds.height);
+        edgeLayer.setAttribute("width", String(bounds.width));
+        edgeLayer.setAttribute("height", String(bounds.height));
+
+        const visibleNodes = (state.nodes || []).filter((node) => visibleNodeIds.has(node.id));
+        nodeLayer.innerHTML = visibleNodes.map((node) => {
+          const position = positions[node.id] || { x: 120, y: 120 };
+          const size = getNodeSize(node);
+          const expanded = isExpandedNode(node.id);
+          const classes = ["graph-node"];
+          if (node.external) {
+            classes.push("external");
+          } else if (!expanded) {
+            classes.push("collapsed");
+          }
+          return '<div class="' + classes.join(" ") + '" data-node-id="' + escapeHtml(node.id) + '" ' +
+            'style="left:' + position.x + 'px;top:' + position.y + 'px;width:' + size.width + 'px;min-height:' + size.height + 'px">' +
+            buildNodeLines(node, expanded).join("") +
+            '</div>';
+        }).join("");
+
+        edgeLayer.innerHTML = '<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L8,3 z" fill="#3b6cff"></path></marker></defs>' +
+          getVisibleEdges().map((edge) => {
+            const fromNode = nodeById.get(edge.fromId);
+            const toNode = nodeById.get(edge.toId);
+            if (!fromNode || !toNode) {
+              return "";
+            }
+            const fromPos = positions[edge.fromId] || { x: 120, y: 120 };
+            const toPos = positions[edge.toId] || { x: 120, y: 120 };
+            const fromSize = getNodeSize(fromNode);
+            const toSize = getNodeSize(toNode);
+            if (edge.fromId === edge.toId) {
+              const labelWidth = Math.max(String(edge.label || "").length * 8, 24);
+              const startX = fromPos.x + fromSize.width * 0.62;
+              const startY = fromPos.y + 10;
+              const endX = fromPos.x + fromSize.width * 0.38;
+              const endY = fromPos.y + 10;
+              const controlY = fromPos.y - Math.max(fromSize.height, 56) * 0.7;
+              const labelX = fromPos.x + fromSize.width / 2;
+              const labelY = controlY - 8;
+              return '<path d="M ' + startX + ' ' + startY +
+                ' C ' + (fromPos.x + fromSize.width + 36) + ' ' + controlY +
+                ', ' + (fromPos.x - 36) + ' ' + controlY +
+                ', ' + endX + ' ' + endY +
+                '" stroke="#3b6cff" stroke-width="2" fill="none"></path>' +
+                '<line x1="' + (endX + 10) + '" y1="' + (endY - 12) + '" x2="' + endX + '" y2="' + endY + '" stroke="#3b6cff" stroke-width="2" marker-end="url(#arrow)"></line>' +
+                '<rect class="edge-label-bg" x="' + (labelX - labelWidth / 2 - 6) + '" y="' + (labelY - 14) + '" width="' + (labelWidth + 12) + '" height="20" rx="8" ry="8"></rect>' +
+                '<text class="edge-label" x="' + labelX + '" y="' + labelY + '" text-anchor="middle">' + escapeHtml(edge.label) + '</text>';
+            }
+            const angle = Math.atan2(
+              (toPos.y + toSize.height / 2) - (fromPos.y + fromSize.height / 2),
+              (toPos.x + toSize.width / 2) - (fromPos.x + fromSize.width / 2),
+            );
+            const start = connectionPoint(fromPos, fromSize, angle, false);
+            const end = connectionPoint(toPos, toSize, angle, true);
+            const labelX = (start.x + end.x) / 2;
+            const labelY = (start.y + end.y) / 2 - 4;
+            const labelWidth = Math.max(String(edge.label || "").length * 8, 24);
+            return '<line x1="' + start.x + '" y1="' + start.y + '" x2="' + end.x + '" y2="' + end.y + '" stroke="#3b6cff" stroke-width="2" marker-end="url(#arrow)"></line>' +
+              '<rect class="edge-label-bg" x="' + (labelX - labelWidth / 2 - 6) + '" y="' + (labelY - 14) + '" width="' + (labelWidth + 12) + '" height="20" rx="8" ry="8"></rect>' +
+              '<text class="edge-label" x="' + labelX + '" y="' + labelY + '" text-anchor="middle">' + escapeHtml(edge.label) + '</text>';
+          }).join("");
+      }
+
+      nodeLayer.addEventListener("mousedown", (event) => {
+        const target = event.target instanceof Element ? event.target.closest("[data-node-id]") : undefined;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const nodeId = target.dataset.nodeId;
+        if (!nodeId) {
+          return;
+        }
+        const position = positions[nodeId] || { x: 120, y: 120 };
+        const rect = stage.getBoundingClientRect();
+        const localX = event.clientX - rect.left + viewport.scrollLeft;
+        const localY = event.clientY - rect.top + viewport.scrollTop;
+        dragState = {
+          nodeId,
+          offsetX: localX - position.x,
+          offsetY: localY - position.y,
+        };
+      });
+
+      nodeLayer.addEventListener("dblclick", (event) => {
+        const target = event.target instanceof Element ? event.target.closest("[data-node-id]") : undefined;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const nodeId = target.dataset.nodeId;
+        if (nodeId) {
+          if (state.mode === "dynamic") {
+            expandedNodeIds.add(nodeId);
+            render();
+            vscode.postMessage({
+              type: "expandChannelGraphNode",
+              nodeId,
+            });
+            return;
+          }
+          expandNode(nodeId);
+        }
+      });
+
+      addDatabaseFilesButton?.addEventListener("click", () => {
+        if (state.allowAddDatabaseFiles === false) {
+          return;
+        }
+        vscode.postMessage({ type: "pickChannelGraphDatabaseFiles" });
+      });
+      clearChannelGraphButton?.addEventListener("click", () => {
+        vscode.postMessage({ type: "clearChannelGraph" });
+      });
+      function submitOriginInput() {
+        const nodeId = String(originInput?.value || "").trim();
+        if (!nodeId) {
+          return;
+        }
+        vscode.postMessage({
+          type: "addChannelGraphOrigin",
+          nodeId,
+        });
+        if (originInput) {
+          originInput.value = "";
+        }
+      }
+      addOriginButton?.addEventListener("click", submitOriginInput);
+      originInput?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submitOriginInput();
+        }
+      });
+      modeStaticRadio?.addEventListener("change", () => {
+        if (modeStaticRadio.checked) {
+          vscode.postMessage({
+            type: "setChannelGraphMode",
+            mode: "static",
+          });
+        }
+      });
+      modeDynamicRadio?.addEventListener("change", () => {
+        if (modeDynamicRadio.checked) {
+          vscode.postMessage({
+            type: "setChannelGraphMode",
+            mode: "dynamic",
+          });
+        }
+      });
+      window.addEventListener("message", (event) => {
+        if (event.data?.type === "setChannelGraphState") {
+          applyGraphState(event.data.state);
+        }
+      });
+
+      window.addEventListener("mousemove", (event) => {
+        if (!dragState) {
+          return;
+        }
+        const rect = stage.getBoundingClientRect();
+        const localX = event.clientX - rect.left + viewport.scrollLeft;
+        const localY = event.clientY - rect.top + viewport.scrollTop;
+        positions[dragState.nodeId] = {
+          x: Math.max(20, Math.round(localX - dragState.offsetX)),
+          y: Math.max(20, Math.round(localY - dragState.offsetY)),
+        };
+        render();
+      });
+
+      window.addEventListener("mouseup", () => {
+        dragState = undefined;
+      });
+
+      applyGraphState(state);
+    </script>
+  </body>
+</html>`;
+}
+
+function escapeChannelGraphHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function buildExcelImportPreviewWebviewHtml(webview) {

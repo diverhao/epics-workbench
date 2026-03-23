@@ -7926,4 +7926,12 @@ function escapeMarkdownText(value) {
 
 module.exports = {
   registerRuntimeMonitor,
+  getDefaultProjectRuntimeConfiguration,
+  loadProjectRuntimeConfiguration,
+  createRuntimeEnvironmentFromProjectConfiguration,
+  normalizeRuntimeProtocol,
+  safeRequireRuntimeLibrary,
+  formatRuntimeValue,
+  getCaRuntimeDisplayValue,
+  getPvaRuntimeDisplayValue,
 };

@@ -65,34 +65,54 @@
                     "command": "vscode-epics.openInMonitor"
                 },
                 {
-                    "when": "editorLangId == substitutions",
+                    "when": "editorLangId == database",
                     "group": "navigation@28",
+                    "command": "vscode-epics.openInChannelGraph"
+                },
+                {
+                    "when": "editorLangId == substitutions",
+                    "group": "navigation@29",
                     "command": "vscode-epics.copyAsExpandedDb"
                 },
                 {
                     "when": "editorLangId == startup",
-                    "group": "navigation@29",
+                    "group": "navigation@30",
                     "command": "vscode-epics.openInProbe"
                 },
                 {
                     "when": "editorLangId == startup",
-                    "group": "navigation@30",
+                    "group": "navigation@31",
                     "command": "vscode-epics.openInMonitor"
                 },
                 {
+                    "when": "editorLangId == startup",
+                    "group": "navigation@32",
+                    "command": "vscode-epics.openInChannelGraph"
+                },
+                {
                     "when": "editorLangId == pvlist",
-                    "group": "navigation@31",
+                    "group": "navigation@33",
                     "command": "vscode-epics.openInPvList"
                 },
                 {
                     "when": "editorLangId == pvlist",
-                    "group": "navigation@32",
+                    "group": "navigation@34",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == pvlist",
+                    "group": "navigation@35",
+                    "command": "vscode-epics.openInChannelGraph"
+                },
+                {
+                    "when": "editorLangId == probe",
+                    "group": "navigation@36",
                     "command": "vscode-epics.openInMonitor"
                 },
                 {
                     "when": "editorLangId == probe",
-                    "group": "navigation@33",
-                    "command": "vscode-epics.openInMonitor"
+                    "group": "navigation@37",
+                    "command": "vscode-epics.openInChannelGraph"
                 }
             ],
             "commandPalette": [
@@ -127,6 +147,10 @@
                 {
                     "when": "editorLangId == database || editorLangId == startup || editorLangId == pvlist || editorLangId == probe",
                     "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == database || editorLangId == startup || editorLangId == pvlist || editorLangId == probe",
+                    "command": "vscode-epics.openInChannelGraph"
                 },
                 {
                     "when": "editorLangId == substitutions",
@@ -441,6 +465,11 @@
                 "category": "EPICS"
             },
             {
+                "title": "Channel Graph",
+                "command": "vscode-epics.openInChannelGraph",
+                "category": "EPICS"
+            },
+            {
                 "title": "Add Runtime Monitor",
                 "command": "vscode-epics.addRuntimeMonitor",
                 "category": "EPICS"
@@ -506,6 +535,7 @@
         "onCommand:vscode-epics.copyAsExpandedDb",
         "onCommand:vscode-epics.exportDatabaseToExcel",
         "onCommand:vscode-epics.openInProbe",
+        "onCommand:vscode-epics.openInChannelGraph",
         "onCommand:vscode-epics.openInMonitor",
         "onCommand:vscode-epics.addRuntimeMonitor",
         "onCommand:vscode-epics.removeRuntimeMonitor",

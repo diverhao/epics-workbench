@@ -221,6 +221,7 @@
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsWidgetFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsPvlistWidgetFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsMonitorWidgetFileEditorProvider" />
+    <fileEditorProvider implementation="org.epics.workbench.widget.EpicsChannelGraphFileEditorProvider" />
   </extensions>
 
   <actions>
@@ -306,6 +307,15 @@
       class="org.epics.workbench.monitor.OpenInMonitorAction"
       text="Monitor"
       description="Open the current EPICS channel target in a file-less Monitor widget"
+    >
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
+    </action>
+    <action
+      id="org.epics.workbench.OpenInChannelGraphAction"
+      class="org.epics.workbench.graph.OpenInChannelGraphAction"
+      text="Channel Graph"
+      description="Open the current EPICS record target in a file-less Channel Graph widget"
     >
       <add-to-group group-id="EditorPopupMenu" anchor="last" />
       <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
