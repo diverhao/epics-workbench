@@ -6866,6 +6866,10 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
     runtimeSession: undefined,
     disposed: false,
   };
+  if (source) {
+    graphSession.originNodeIds = [];
+  }
+  const getGraphMode = () => (graphSession.sources.length > 0 ? "static" : "dynamic");
   const panel = vscode.window.createWebviewPanel(
     CHANNEL_GRAPH_VIEW_TYPE,
     getChannelGraphPanelTitle(seedRecordName || source?.sourceLabel),
@@ -6904,17 +6908,28 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
   };
 
   const buildCurrentGraphState = () => {
+    graphSession.mode = getGraphMode();
+    const sourceFiles = graphSession.sources.map((entry) => ({
+      key: getChannelGraphSourceKey(entry),
+      path: String(entry.sourcePath || entry.sourceLabel || ""),
+    }));
     if (graphSession.mode === "dynamic") {
-      return ensureRuntimeSession().buildState();
+      return {
+        ...ensureRuntimeSession().buildState(),
+        sourceFiles,
+      };
     }
 
-    return buildChannelGraphState(
+    return {
+      ...buildChannelGraphState(
       graphSession.sources.map((entry) => entry.sourceText).join("\n\n"),
       buildChannelGraphSourceLabel(graphSession.sources),
       graphSession.originNodeIds[0],
       graphSession.mode,
       graphSession.originNodeIds,
-    );
+      ),
+      sourceFiles,
+    };
   };
 
   const renderPanel = (forceHtml = false) => {
@@ -6956,10 +6971,6 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
   });
   panel.webview.onDidReceiveMessage(async (message) => {
     if (message?.type === "pickChannelGraphDatabaseFiles") {
-      if (graphSession.mode !== "static") {
-        return;
-      }
-
       const selectedUris = await vscode.window.showOpenDialog({
         canSelectFiles: true,
         canSelectMany: true,
@@ -6998,23 +7009,27 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
         graphSession.sources.push(sourceEntry);
       }
 
+      if (getGraphMode() === "static") {
+        await disposeRuntimeSession();
+      }
       renderPanel();
       return;
     }
 
-    if (message?.type === "setChannelGraphMode") {
-      const nextMode = message.mode === "dynamic" ? "dynamic" : "static";
-      if (nextMode === graphSession.mode) {
+    if (message?.type === "removeChannelGraphDatabaseFile") {
+      const key = String(message.key || "");
+      if (!key) {
         return;
       }
-      graphSession.mode = nextMode;
-      if (nextMode === "dynamic") {
+      const previousMode = getGraphMode();
+      graphSession.sources = graphSession.sources.filter(
+        (entry) => getChannelGraphSourceKey(entry) !== key,
+      );
+      if (previousMode !== getGraphMode()) {
         const runtimeSession = ensureRuntimeSession();
         for (const originNodeId of graphSession.originNodeIds) {
           await runtimeSession.addOriginNode(originNodeId);
         }
-      } else {
-        await disposeRuntimeSession();
       }
       renderPanel();
       return;
@@ -7028,7 +7043,7 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
       if (!graphSession.originNodeIds.includes(nodeId)) {
         graphSession.originNodeIds.push(nodeId);
       }
-      if (graphSession.mode === "dynamic") {
+      if (getGraphMode() === "dynamic") {
         const runtimeSession = ensureRuntimeSession();
         await runtimeSession.addOriginNode(nodeId);
       }
@@ -7038,7 +7053,7 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
 
     if (message?.type === "clearChannelGraph") {
       graphSession.originNodeIds = [];
-      if (graphSession.mode === "dynamic") {
+      if (getGraphMode() === "dynamic") {
         const runtimeSession = ensureRuntimeSession();
         await runtimeSession.clearGraph();
       }
@@ -7047,7 +7062,7 @@ async function openInChannelGraphFromActiveEditor(workspaceIndex) {
     }
 
     if (message?.type === "expandChannelGraphNode") {
-      if (graphSession.mode !== "dynamic" || !message.nodeId) {
+      if (getGraphMode() !== "dynamic" || !message.nodeId) {
         return;
       }
       const runtimeSession = ensureRuntimeSession();
@@ -7281,7 +7296,7 @@ class ChannelGraphRuntimeSession {
       seedRecordName: [...this.originNodeIds][0],
       originNodeIds: [...this.originNodeIds],
       message,
-      allowAddDatabaseFiles: false,
+      allowAddDatabaseFiles: true,
       nodes: [...this.nodesById.values()],
       edges: [...this.edges],
       adjacency,
@@ -7919,7 +7934,7 @@ function buildChannelGraphState(
       seedRecordName,
       originNodeIds,
       message: "No database source is available for Channel Graph.",
-      allowAddDatabaseFiles: mode === "static",
+      allowAddDatabaseFiles: true,
       nodes: [],
       edges: [],
       adjacency: {},
@@ -7934,7 +7949,7 @@ function buildChannelGraphState(
       seedRecordName,
       originNodeIds,
       message: `No record declarations were found in ${sourceLabel || "the source file"}.`,
-      allowAddDatabaseFiles: mode === "static",
+      allowAddDatabaseFiles: true,
       nodes: [],
       edges: [],
       adjacency: {},
@@ -8027,18 +8042,24 @@ function buildChannelGraphState(
   }
 
   const nodeIds = [...nodesById.keys()];
+  let message = "";
+  if (mode === "static" && (!originNodeIds || originNodeIds.length === 0)) {
+    message = "Enter a channel name to start the Channel Graph.";
+  } else {
+    message =
+      seedRecordName && !nodesById.has(seedRecordName)
+        ? `Seed record "${seedRecordName}" was not found in ${sourceLabel || "the source file"}. Showing the full graph.`
+        : edges.length === 0
+          ? `No link relationships were found in ${sourceLabel || "the source file"}.`
+          : "";
+  }
   return {
     mode,
     sourceLabel: sourceLabel || "EPICS Channel Graph",
     seedRecordName,
     originNodeIds,
-    message:
-      seedRecordName && !nodesById.has(seedRecordName)
-        ? `Seed record "${seedRecordName}" was not found in ${sourceLabel || "the source file"}. Showing the full graph.`
-        : edges.length === 0
-          ? `No link relationships were found in ${sourceLabel || "the source file"}.`
-          : "",
-    allowAddDatabaseFiles: mode === "static",
+    message,
+    allowAddDatabaseFiles: true,
     nodes: nodeIds.map((id) => nodesById.get(id)),
     edges,
     adjacency,
@@ -8171,6 +8192,38 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
         align-items: center;
         flex-wrap: wrap;
       }
+      .source-files {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .source-file-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+      }
+      .source-file-path {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+        font-size: 0.9rem;
+        color: var(--vscode-descriptionForeground);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .source-file-remove {
+        border: 1px solid var(--vscode-panel-border);
+        background: transparent;
+        color: var(--vscode-foreground);
+        border-radius: 999px;
+        width: 22px;
+        height: 22px;
+        line-height: 18px;
+        cursor: pointer;
+        padding: 0;
+        flex: 0 0 auto;
+      }
       .toolbar-button {
         border: 1px solid var(--vscode-button-border, transparent);
         background: var(--vscode-button-background);
@@ -8185,20 +8238,6 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
       .toolbar-button[disabled] {
         opacity: 0.55;
         cursor: default;
-      }
-      .mode-toggle {
-        display: inline-flex;
-        gap: 10px;
-        align-items: center;
-        padding: 4px 10px;
-        border: 1px solid var(--vscode-panel-border);
-        border-radius: 999px;
-      }
-      .mode-toggle label {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        cursor: pointer;
       }
       .origin-input {
         min-width: 240px;
@@ -8290,12 +8329,8 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
     <div class="toolbar">
       <div class="toolbar-title">EPICS Channel Graph</div>
       <div id="channelGraphSourceLabel" class="toolbar-meta">Source: ${escapedSourceLabel}</div>
-      <div id="channelGraphHelpText" class="toolbar-meta">Drag nodes to reposition. The graph starts with direct relationships only; double-click a node to expand one more hop.</div>
+      <div id="channelGraphHelpText" class="toolbar-meta">Drag nodes to reposition. Double-click a node to expand one more hop.</div>
       <div class="toolbar-actions">
-        <div class="mode-toggle" role="radiogroup" aria-label="Channel Graph Resolution">
-          <label><input id="channelGraphModeStatic" type="radio" name="channelGraphMode" value="static" ${graphState?.mode === "dynamic" ? "" : "checked"} /> Static</label>
-          <label><input id="channelGraphModeDynamic" type="radio" name="channelGraphMode" value="dynamic" ${graphState?.mode === "dynamic" ? "checked" : ""} /> Dynamic</label>
-        </div>
         <button id="addDatabaseFilesButton" class="toolbar-button" type="button" ${graphState?.allowAddDatabaseFiles === false ? "disabled" : ""}>Add Database Files</button>
         <button id="clearChannelGraphButton" class="toolbar-button" type="button">Clear Graph</button>
       </div>
@@ -8303,6 +8338,7 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
         <input id="channelGraphOriginInput" class="origin-input" type="text" placeholder="Enter channel name" />
         <button id="addChannelGraphOriginButton" class="toolbar-button" type="button">Add Channel</button>
       </div>
+      <div id="channelGraphSourceFiles" class="source-files"></div>
       <div id="channelGraphMessage" class="message" ${graphState?.message ? "" : 'style="display:none"'}>${escapedMessage}</div>
     </div>
     <div id="viewport" class="viewport">
@@ -8327,17 +8363,19 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
       const sourceLabelNode = document.getElementById("channelGraphSourceLabel");
       const helpTextNode = document.getElementById("channelGraphHelpText");
       const messageNode = document.getElementById("channelGraphMessage");
+      const sourceFilesNode = document.getElementById("channelGraphSourceFiles");
       const addDatabaseFilesButton = document.getElementById("addDatabaseFilesButton");
       const clearChannelGraphButton = document.getElementById("clearChannelGraphButton");
       const originInput = document.getElementById("channelGraphOriginInput");
       const addOriginButton = document.getElementById("addChannelGraphOriginButton");
-      const modeStaticRadio = document.getElementById("channelGraphModeStatic");
-      const modeDynamicRadio = document.getElementById("channelGraphModeDynamic");
       let nodeById = new Map((state.nodes || []).map((node) => [node.id, node]));
-      function getInitialVisibleNodeIds() {
-        const originIds = Array.isArray(state.originNodeIds)
+      function getOriginNodeIds() {
+        return Array.isArray(state.originNodeIds)
           ? state.originNodeIds.filter((nodeId) => nodeById.has(nodeId))
           : [];
+      }
+      function getInitialVisibleNodeIds() {
+        const originIds = getOriginNodeIds();
         if (!originIds.length) {
           return [];
         }
@@ -8352,11 +8390,7 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
       }
 
       let visibleNodeIds = new Set(getInitialVisibleNodeIds());
-      let expandedNodeIds = new Set(
-        state.seedRecordName && nodeById.has(state.seedRecordName)
-          ? [state.seedRecordName]
-          : (state.nodes || []).map((node) => node.id),
-      );
+      let expandedNodeIds = new Set(getOriginNodeIds());
       const positions = Object.create(null);
       let dragState = undefined;
 
@@ -8371,6 +8405,20 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
 
       function isExpandedNode(nodeId) {
         return expandedNodeIds.has(nodeId);
+      }
+
+      function renderSourceFiles() {
+        if (!sourceFilesNode) {
+          return;
+        }
+        const sourceFiles = Array.isArray(state.sourceFiles) ? state.sourceFiles : [];
+        sourceFilesNode.innerHTML = sourceFiles.map((entry) =>
+          '<div class="source-file-row">' +
+            '<button class="source-file-remove" data-source-key="' + escapeHtml(entry.key) + '" type="button" title="Remove database file">×</button>' +
+            '<div class="source-file-path" title="' + escapeHtml(entry.path) + '">' + escapeHtml(entry.path) + '</div>' +
+          '</div>'
+        ).join("");
+        sourceFilesNode.style.display = sourceFiles.length ? "flex" : "none";
       }
 
       function buildNodeLines(node, expanded) {
@@ -8522,27 +8570,33 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
       function applyGraphState(nextState) {
         state = nextState || {};
         nodeById = new Map((state.nodes || []).map((node) => [node.id, node]));
+        const nextOriginNodeIds = getOriginNodeIds();
+        const showEmptyStaticView = state.mode !== "dynamic" && nextOriginNodeIds.length === 0;
 
         const nextVisibleNodeIds = new Set();
-        for (const nodeId of visibleNodeIds) {
-          if (nodeById.has(nodeId)) {
+        if (!showEmptyStaticView) {
+          for (const nodeId of visibleNodeIds) {
+            if (nodeById.has(nodeId)) {
+              nextVisibleNodeIds.add(nodeId);
+            }
+          }
+          for (const nodeId of getInitialVisibleNodeIds()) {
             nextVisibleNodeIds.add(nodeId);
           }
+          revealExpandedNodeNeighbors(nextVisibleNodeIds);
         }
-        for (const nodeId of getInitialVisibleNodeIds()) {
-          nextVisibleNodeIds.add(nodeId);
-        }
-        revealExpandedNodeNeighbors(nextVisibleNodeIds);
         visibleNodeIds = nextVisibleNodeIds;
 
         const nextExpandedNodeIds = new Set();
-        for (const nodeId of expandedNodeIds) {
-          if (nodeById.has(nodeId)) {
-            nextExpandedNodeIds.add(nodeId);
+        if (!showEmptyStaticView && nextOriginNodeIds.length > 0) {
+          for (const nodeId of expandedNodeIds) {
+            if (nodeById.has(nodeId)) {
+              nextExpandedNodeIds.add(nodeId);
+            }
           }
-        }
-        if (state.seedRecordName && nodeById.has(state.seedRecordName)) {
-          nextExpandedNodeIds.add(state.seedRecordName);
+          for (const originNodeId of nextOriginNodeIds) {
+            nextExpandedNodeIds.add(originNodeId);
+          }
         }
         expandedNodeIds = nextExpandedNodeIds;
 
@@ -8557,9 +8611,7 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
         }
         if (helpTextNode) {
           helpTextNode.textContent =
-            state.mode === "dynamic"
-              ? "Dynamic resolution reads IOC link-type field values at runtime. Double-click a node to expand one more runtime hop."
-              : "Drag nodes to reposition. The graph starts with direct relationships only; double-click a node to expand one more hop.";
+            "Drag nodes to reposition. Double-click a node to expand one more hop.";
         }
         if (messageNode) {
           const nextMessage = String(state.message || "");
@@ -8569,15 +8621,10 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
         if (addDatabaseFilesButton) {
           addDatabaseFilesButton.disabled = state.allowAddDatabaseFiles === false;
         }
-        if (modeStaticRadio) {
-          modeStaticRadio.checked = state.mode !== "dynamic";
-        }
-        if (modeDynamicRadio) {
-          modeDynamicRadio.checked = state.mode === "dynamic";
-        }
         if (originInput && document.activeElement !== originInput) {
           originInput.value = "";
         }
+        renderSourceFiles();
         render();
       }
 
@@ -8697,6 +8744,20 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
         }
         vscode.postMessage({ type: "pickChannelGraphDatabaseFiles" });
       });
+      sourceFilesNode?.addEventListener("click", (event) => {
+        const target = event.target instanceof Element ? event.target.closest("[data-source-key]") : undefined;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const key = String(target.dataset.sourceKey || "").trim();
+        if (!key) {
+          return;
+        }
+        vscode.postMessage({
+          type: "removeChannelGraphDatabaseFile",
+          key,
+        });
+      });
       clearChannelGraphButton?.addEventListener("click", () => {
         vscode.postMessage({ type: "clearChannelGraph" });
       });
@@ -8718,22 +8779,6 @@ function buildChannelGraphWebviewHtml(webview, graphState) {
         if (event.key === "Enter") {
           event.preventDefault();
           submitOriginInput();
-        }
-      });
-      modeStaticRadio?.addEventListener("change", () => {
-        if (modeStaticRadio.checked) {
-          vscode.postMessage({
-            type: "setChannelGraphMode",
-            mode: "static",
-          });
-        }
-      });
-      modeDynamicRadio?.addEventListener("change", () => {
-        if (modeDynamicRadio.checked) {
-          vscode.postMessage({
-            type: "setChannelGraphMode",
-            mode: "dynamic",
-          });
         }
       });
       window.addEventListener("message", (event) => {
