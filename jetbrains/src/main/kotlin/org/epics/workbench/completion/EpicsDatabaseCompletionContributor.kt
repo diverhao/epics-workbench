@@ -11,7 +11,10 @@ import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.util.TextRange
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import org.epics.workbench.navigation.EpicsPathCompletionCandidate
@@ -20,6 +23,8 @@ import org.epics.workbench.navigation.EpicsPathResolver
 import org.epics.workbench.navigation.EpicsRecordResolver
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.io.path.extension
 
 class EpicsDatabaseCompletionContributor : CompletionContributor() {
   override fun invokeAutoPopup(position: PsiElement, typeChar: Char): Boolean {
@@ -27,13 +32,14 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
     return when {
       isDatabaseFile(fileName) -> typeChar == '(' || typeChar == '"'
       isStartupFile(fileName) -> typeChar == '"' || typeChar.isLetterOrDigit() || typeChar == '_'
+      isDbdFile(fileName) -> typeChar == '"' || typeChar == '(' || typeChar == ',' || typeChar.isLetterOrDigit() || typeChar == '_'
       else -> false
     }
   }
 
   override fun fillCompletionVariants(parameters: CompletionParameters, result: CompletionResultSet) {
     val file = parameters.originalFile
-    if (!isDatabaseFile(file.name) && !isStartupFile(file.name)) {
+    if (!isDatabaseFile(file.name) && !isStartupFile(file.name) && !isDbdFile(file.name)) {
       return
     }
 
@@ -41,6 +47,11 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
     val document = editor.document
     val offset = editor.caretModel.offset
     val linePrefix = getLinePrefix(document, offset)
+
+    if (isDbdFile(file.name)) {
+      fillDbdCompletionVariants(file.project, file.virtualFile ?: file.viewProvider.virtualFile, document, offset, linePrefix, result)
+      return
+    }
 
     if (isStartupFile(file.name)) {
       getStartupCommandContext(offset, linePrefix)?.let { context ->
@@ -243,7 +254,7 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       project: com.intellij.openapi.project.Project,
       charTyped: Char,
     ) {
-      if (!isDatabaseFile(file.name) && !isStartupFile(file.name)) {
+      if (!isDatabaseFile(file.name) && !isStartupFile(file.name) && !isDbdFile(file.name)) {
         return
       }
 
@@ -251,13 +262,32 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       val linePrefix = getLinePrefix(editor.document, offset)
       val shouldPopup = when (charTyped) {
         '(' -> getRecordTypeContext(offset, linePrefix) != null ||
-          getFieldNameContext(offset, linePrefix) != null
+          getFieldNameContext(offset, linePrefix) != null ||
+          isDbdFile(file.name) && (
+            getDbdDeviceRecordTypeContext(offset, linePrefix) != null ||
+              getDbdKeywordContext(offset, linePrefix) != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "driver") != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "registrar") != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "function") != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "variable") != null
+            )
         '"' -> getRecordNameContext(offset, linePrefix) != null ||
           shouldPopupForMenuFieldValue(editor.document, offset, linePrefix) ||
           getStartupLoadPathContext(offset, linePrefix) != null ||
           getStartupLoadedRecordNameContext(offset, linePrefix) != null ||
-          getStartupLoadMacroTailContext(offset, linePrefix) != null
+          getStartupLoadMacroTailContext(offset, linePrefix) != null ||
+          isDbdFile(file.name) && getDbdDeviceChoiceContext(offset, linePrefix) != null
         in 'A'..'Z', in 'a'..'z', in '0'..'9', '_' -> getStartupCommandContext(offset, linePrefix) != null
+          || isDbdFile(file.name) && (
+            getDbdKeywordContext(offset, linePrefix) != null ||
+              getDbdDeviceRecordTypeContext(offset, linePrefix) != null ||
+              getDbdDeviceLinkTypeContext(offset, linePrefix) != null ||
+              getDbdDeviceSupportNameContext(offset, linePrefix) != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "driver") != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "registrar") != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "function") != null ||
+              getDbdSimpleNameContext(offset, linePrefix, "variable") != null
+            )
         else -> false
       }
 
@@ -634,6 +664,267 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       )
     }
 
+    private fun fillDbdCompletionVariants(
+      project: Project,
+      hostFile: VirtualFile,
+      document: Document,
+      offset: Int,
+      linePrefix: String,
+      result: CompletionResultSet,
+    ) {
+      getDbdDeviceRecordTypeContext(offset, linePrefix)?.let { context ->
+        val resultSet = result.withPrefixMatcher(context.partial)
+        for (recordType in EpicsRecordCompletionSupport.getRecordTypes(project, hostFile)) {
+          if (!matchesCompletionQuery(recordType, context.partial)) {
+            continue
+          }
+          resultSet.addElement(
+            LookupElementBuilder.create(recordType)
+              .withTypeText("EPICS record type", true)
+              .withInsertHandler(buildSimpleReplacementAndPopupInsertHandler("$recordType, ", context.startOffset)),
+          )
+        }
+        result.stopHere()
+        return
+      }
+
+      getDbdDeviceLinkTypeContext(offset, linePrefix)?.let { context ->
+        val resultSet = result.withPrefixMatcher(context.partial)
+        for (linkType in DBD_DEVICE_LINK_TYPES) {
+          if (!matchesCompletionQuery(linkType, context.partial)) {
+            continue
+          }
+          resultSet.addElement(
+            LookupElementBuilder.create(linkType)
+              .withTypeText("Device link type", true)
+              .withInsertHandler(buildSimpleReplacementAndPopupInsertHandler("$linkType, ", context.startOffset)),
+          )
+        }
+        result.stopHere()
+        return
+      }
+
+      getDbdDeviceSupportNameContext(offset, linePrefix)?.let { context ->
+        val resultSet = result.withPrefixMatcher(context.partial)
+        val definitionsByName = getDbdSourceIndex(project).deviceSupportDefinitionsByName
+        for ((supportName, definitions) in definitionsByName.entries.sortedBy { it.key.lowercase() }) {
+          if (!matchesCompletionQuery(supportName, context.partial)) {
+            continue
+          }
+          val definition = definitions.firstOrNull()
+          resultSet.addElement(
+            LookupElementBuilder.create(supportName)
+              .withTypeText(
+                definition?.let { "epicsExportAddress(${it.exportType}, $supportName) @ ${it.relativePath}:${it.line}" }
+                  ?: "Exported device support structure",
+                true,
+              )
+              .withInsertHandler(buildSimpleReplacementAndPopupInsertHandler("$supportName, \"", context.startOffset)),
+          )
+        }
+        result.stopHere()
+        return
+      }
+
+      getDbdDeviceChoiceContext(offset, linePrefix)?.let { context ->
+        val suggestions = linkedSetOf<String>()
+        inferDeviceChoiceName(context.supportName)?.let(suggestions::add)
+        suggestions += "device_name"
+        val resultSet = result.withPrefixMatcher(context.partial)
+        for (choice in suggestions) {
+          if (!matchesCompletionQuery(choice, context.partial)) {
+            continue
+          }
+          resultSet.addElement(
+            LookupElementBuilder.create(choice)
+              .withTypeText("DTYP choice name", true)
+              .withInsertHandler(buildSimpleReplacementInsertHandler("$choice\"", context.startOffset)),
+          )
+        }
+        result.stopHere()
+        return
+      }
+
+      getDbdSimpleNameContext(offset, linePrefix, "driver")?.let { context ->
+        addDbdNamedDefinitionCompletions(
+          result = result,
+          context = context,
+          definitionsByName = getDbdSourceIndex(project).driverDefinitionsByName,
+          typeText = { definition -> "epicsExportAddress(${definition.exportType}, ${definition.name}) @ ${definition.relativePath}:${definition.line}" },
+          insertValue = { definition -> definition.name },
+          hostFile = hostFile,
+        )
+        return
+      }
+
+      getDbdSimpleNameContext(offset, linePrefix, "registrar")?.let { context ->
+        addDbdNamedDefinitionCompletions(
+          result = result,
+          context = context,
+          definitionsByName = getDbdSourceIndex(project).registrarDefinitionsByName,
+          typeText = { definition -> "epicsExportRegistrar(${definition.name}) @ ${definition.relativePath}:${definition.line}" },
+          insertValue = { definition -> definition.name },
+          hostFile = hostFile,
+        )
+        return
+      }
+
+      getDbdSimpleNameContext(offset, linePrefix, "function")?.let { context ->
+        addDbdNamedDefinitionCompletions(
+          result = result,
+          context = context,
+          definitionsByName = getDbdSourceIndex(project).functionDefinitionsByName,
+          typeText = { definition -> "epicsRegisterFunction(${definition.name}) @ ${definition.relativePath}:${definition.line}" },
+          insertValue = { definition -> definition.name },
+          hostFile = hostFile,
+        )
+        return
+      }
+
+      getDbdSimpleNameContext(offset, linePrefix, "variable")?.let { context ->
+        addDbdNamedDefinitionCompletions(
+          result = result,
+          context = context,
+          definitionsByName = getDbdSourceIndex(project).variableDefinitionsByName,
+          typeText = { definition -> "epicsExportAddress(${definition.exportType}, ${definition.name}) @ ${definition.relativePath}:${definition.line}" },
+          insertValue = { definition -> "${definition.name}, ${definition.exportType}" },
+          hostFile = hostFile,
+        )
+        return
+      }
+
+      getDbdKeywordContext(offset, linePrefix)?.let { context ->
+        val resultSet = result.withPrefixMatcher(context.partial)
+        for (keyword in DBD_COMPLETION_KEYWORDS) {
+          if (!matchesCompletionQuery(keyword, context.partial)) {
+            continue
+          }
+          resultSet.addElement(
+            LookupElementBuilder.create(keyword)
+              .withTypeText("EPICS database definition keyword", true)
+              .withInsertHandler(buildDbdKeywordInsertHandler(keyword, context.startOffset)),
+          )
+        }
+        result.stopHere()
+      }
+    }
+
+    private fun addDbdNamedDefinitionCompletions(
+      result: CompletionResultSet,
+      context: CompletionContext,
+      definitionsByName: Map<String, List<DbdExportDefinition>>,
+      typeText: (DbdExportDefinition) -> String,
+      insertValue: (DbdExportDefinition) -> String,
+      hostFile: VirtualFile,
+    ) {
+      val resultSet = result.withPrefixMatcher(context.partial)
+      val hostDirectory = hostFile.parent?.toNioPath()?.normalize()
+      for ((name, definitions) in definitionsByName.entries.sortedBy { it.key.lowercase() }) {
+        if (!matchesCompletionQuery(name, context.partial)) {
+          continue
+        }
+        val preferredDefinition = selectPreferredDbdDefinition(definitions, hostDirectory) ?: continue
+        resultSet.addElement(
+          LookupElementBuilder.create(name)
+            .withTypeText(typeText(preferredDefinition), true)
+            .withInsertHandler(buildSimpleReplacementInsertHandler(insertValue(preferredDefinition), context.startOffset)),
+        )
+      }
+      result.stopHere()
+    }
+
+    private fun buildDbdKeywordInsertHandler(
+      keyword: String,
+      replacementStartOffset: Int,
+    ): InsertHandler<LookupElement> = InsertHandler { context, _ ->
+      context.setAddCompletionChar(false)
+      val document = context.document
+      document.replaceString(replacementStartOffset, context.tailOffset, keyword)
+      val tailStart = replacementStartOffset + keyword.length
+      val tailEnd = getIdentifierTailInsertionEnd(document, tailStart)
+      document.replaceString(tailStart, tailEnd, "(")
+      context.commitDocument()
+      context.editor.caretModel.moveToOffset(tailStart + 1)
+      context.editor.selectionModel.removeSelection()
+      requestCompletionPopup(context.project, context.editor)
+    }
+
+    private fun buildSimpleReplacementAndPopupInsertHandler(
+      value: String,
+      replacementStartOffset: Int,
+    ): InsertHandler<LookupElement> = InsertHandler { context, _ ->
+      context.setAddCompletionChar(false)
+      context.document.replaceString(replacementStartOffset, context.tailOffset, value)
+      context.commitDocument()
+      context.editor.caretModel.moveToOffset(replacementStartOffset + value.length)
+      context.editor.selectionModel.removeSelection()
+      requestCompletionPopup(context.project, context.editor)
+    }
+
+    private fun getDbdKeywordContext(offset: Int, linePrefix: String): CompletionContext? {
+      if ('#' in linePrefix) {
+        return null
+      }
+      val match = DBD_KEYWORD_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val partial = match.groups[1]?.value.orEmpty()
+      return CompletionContext(
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
+    private fun getDbdDeviceRecordTypeContext(offset: Int, linePrefix: String): CompletionContext? {
+      val match = DBD_DEVICE_RECORD_TYPE_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val partial = match.groups[1]?.value.orEmpty()
+      return CompletionContext(
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
+    private fun getDbdDeviceLinkTypeContext(offset: Int, linePrefix: String): CompletionContext? {
+      val match = DBD_DEVICE_LINK_TYPE_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val partial = match.groups[1]?.value.orEmpty()
+      return CompletionContext(
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
+    private fun getDbdDeviceSupportNameContext(offset: Int, linePrefix: String): CompletionContext? {
+      val match = DBD_DEVICE_SUPPORT_NAME_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val partial = match.groups[1]?.value.orEmpty()
+      return CompletionContext(
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
+    private fun getDbdDeviceChoiceContext(offset: Int, linePrefix: String): DbdDeviceChoiceCompletionContext? {
+      val match = DBD_DEVICE_CHOICE_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val supportName = match.groups[1]?.value.orEmpty()
+      val partial = match.groups[2]?.value.orEmpty()
+      return DbdDeviceChoiceCompletionContext(
+        supportName = supportName,
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
+    private fun getDbdSimpleNameContext(
+      offset: Int,
+      linePrefix: String,
+      keyword: String,
+    ): CompletionContext? {
+      val regex = Regex("""^\s*${Regex.escape(keyword)}\(\s*([A-Za-z0-9_]*)$""")
+      val match = regex.find(linePrefix) ?: return null
+      val partial = match.groups[1]?.value.orEmpty()
+      return CompletionContext(
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
     private fun shouldPopupForMenuFieldValue(
       document: Document,
       offset: Int,
@@ -680,6 +971,221 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       return label.startsWith(partial, ignoreCase = true)
     }
 
+    private fun getDbdSourceIndex(project: Project): DbdSourceIndex {
+      val roots = ProjectRootManager.getInstance(project).contentRoots
+        .filter { it.isDirectory }
+        .map { it.toNioPath().normalize() }
+        .sortedBy { it.toString().lowercase() }
+      val cacheKey = roots.joinToString("|") { it.toString() }
+      return dbdSourceIndexCache.computeIfAbsent(cacheKey) {
+        scanDbdSourceIndex(roots)
+      }
+    }
+
+    private fun scanDbdSourceIndex(roots: List<Path>): DbdSourceIndex {
+      val deviceSupportDefinitions = mutableListOf<DbdExportDefinition>()
+      val driverDefinitions = mutableListOf<DbdExportDefinition>()
+      val registrarDefinitions = mutableListOf<DbdExportDefinition>()
+      val functionDefinitions = mutableListOf<DbdExportDefinition>()
+      val variableDefinitions = mutableListOf<DbdExportDefinition>()
+
+      for (root in roots) {
+        try {
+          Files.walk(root).use { stream ->
+            stream
+              .filter { Files.isRegularFile(it) }
+              .filter { it.extension.lowercase() in DBD_SOURCE_EXTENSIONS }
+              .forEach { path ->
+                val text = runCatching { Files.readString(path) }.getOrNull() ?: return@forEach
+                deviceSupportDefinitions += extractDeviceSupportDefinitions(path, root, text)
+                driverDefinitions += extractDriverDefinitions(path, root, text)
+                registrarDefinitions += extractRegistrarDefinitions(path, root, text)
+                functionDefinitions += extractFunctionDefinitions(path, root, text)
+                variableDefinitions += extractVariableDefinitions(path, root, text)
+              }
+          }
+        } catch (_: Exception) {
+          continue
+        }
+      }
+
+      return DbdSourceIndex(
+        deviceSupportDefinitionsByName = groupDefinitionsByName(deviceSupportDefinitions),
+        driverDefinitionsByName = groupDefinitionsByName(driverDefinitions),
+        registrarDefinitionsByName = groupDefinitionsByName(registrarDefinitions),
+        functionDefinitionsByName = groupDefinitionsByName(functionDefinitions),
+        variableDefinitionsByName = groupDefinitionsByName(variableDefinitions),
+      )
+    }
+
+    private fun groupDefinitionsByName(
+      definitions: List<DbdExportDefinition>,
+    ): Map<String, List<DbdExportDefinition>> {
+      return definitions
+        .groupBy { it.name }
+        .mapValues { (_, entries) -> entries.sortedBy { it.relativePath.lowercase() } }
+    }
+
+    private fun extractDeviceSupportDefinitions(
+      path: Path,
+      root: Path,
+      text: String,
+    ): List<DbdExportDefinition> {
+      val definitions = mutableListOf<DbdExportDefinition>()
+      EPICS_EXPORT_ADDRESS_REGEX.findAll(text).forEach { match ->
+        val exportType = match.groups[1]?.value.orEmpty()
+        if (!DEVICE_SUPPORT_EXPORT_TYPE_REGEX.matches(exportType)) {
+          return@forEach
+        }
+        val name = match.groups[2]?.value.orEmpty()
+        if (name.isBlank()) {
+          return@forEach
+        }
+        definitions += DbdExportDefinition(
+          name = name,
+          exportType = exportType,
+          absolutePath = path.normalize(),
+          relativePath = buildDefinitionRelativePath(root, path),
+          line = lineNumberAt(text, match.range.first),
+        )
+      }
+      return definitions
+    }
+
+    private fun extractDriverDefinitions(
+      path: Path,
+      root: Path,
+      text: String,
+    ): List<DbdExportDefinition> {
+      val definitions = mutableListOf<DbdExportDefinition>()
+      EPICS_EXPORT_ADDRESS_REGEX.findAll(text).forEach { match ->
+        val exportType = match.groups[1]?.value.orEmpty()
+        if (!exportType.equals("drvet", ignoreCase = true)) {
+          return@forEach
+        }
+        val name = match.groups[2]?.value.orEmpty()
+        if (name.isBlank()) {
+          return@forEach
+        }
+        definitions += DbdExportDefinition(
+          name = name,
+          exportType = exportType,
+          absolutePath = path.normalize(),
+          relativePath = buildDefinitionRelativePath(root, path),
+          line = lineNumberAt(text, match.range.first),
+        )
+      }
+      return definitions
+    }
+
+    private fun extractRegistrarDefinitions(
+      path: Path,
+      root: Path,
+      text: String,
+    ): List<DbdExportDefinition> {
+      val definitions = mutableListOf<DbdExportDefinition>()
+      EPICS_EXPORT_REGISTRAR_REGEX.findAll(text).forEach { match ->
+        val name = match.groups[1]?.value.orEmpty()
+        if (name.isBlank()) {
+          return@forEach
+        }
+        definitions += DbdExportDefinition(
+          name = name,
+          exportType = null,
+          absolutePath = path.normalize(),
+          relativePath = buildDefinitionRelativePath(root, path),
+          line = lineNumberAt(text, match.range.first),
+        )
+      }
+      return definitions
+    }
+
+    private fun extractFunctionDefinitions(
+      path: Path,
+      root: Path,
+      text: String,
+    ): List<DbdExportDefinition> {
+      val definitions = mutableListOf<DbdExportDefinition>()
+      EPICS_REGISTER_FUNCTION_REGEX.findAll(text).forEach { match ->
+        val name = match.groups[1]?.value.orEmpty()
+        if (name.isBlank()) {
+          return@forEach
+        }
+        definitions += DbdExportDefinition(
+          name = name,
+          exportType = null,
+          absolutePath = path.normalize(),
+          relativePath = buildDefinitionRelativePath(root, path),
+          line = lineNumberAt(text, match.range.first),
+        )
+      }
+      return definitions
+    }
+
+    private fun extractVariableDefinitions(
+      path: Path,
+      root: Path,
+      text: String,
+    ): List<DbdExportDefinition> {
+      val definitions = mutableListOf<DbdExportDefinition>()
+      EPICS_EXPORT_ADDRESS_REGEX.findAll(text).forEach { match ->
+        val exportType = match.groups[1]?.value.orEmpty()
+        if (DEVICE_SUPPORT_EXPORT_TYPE_REGEX.matches(exportType) || exportType.equals("drvet", ignoreCase = true)) {
+          return@forEach
+        }
+        val name = match.groups[2]?.value.orEmpty()
+        if (name.isBlank()) {
+          return@forEach
+        }
+        definitions += DbdExportDefinition(
+          name = name,
+          exportType = exportType,
+          absolutePath = path.normalize(),
+          relativePath = buildDefinitionRelativePath(root, path),
+          line = lineNumberAt(text, match.range.first),
+        )
+      }
+      return definitions
+    }
+
+    private fun selectPreferredDbdDefinition(
+      definitions: List<DbdExportDefinition>,
+      hostDirectory: Path?,
+    ): DbdExportDefinition? {
+      if (definitions.isEmpty()) {
+        return null
+      }
+      if (hostDirectory == null) {
+        return definitions.first()
+      }
+      return definitions.firstOrNull { definition ->
+        definition.absolutePath.startsWith(hostDirectory)
+      } ?: definitions.first()
+    }
+
+    private fun buildDefinitionRelativePath(root: Path, path: Path): String {
+      return runCatching { root.relativize(path).toString() }
+        .getOrElse { path.toString() }
+        .replace('\\', '/')
+    }
+
+    private fun lineNumberAt(text: String, offset: Int): Int {
+      return text.take(offset.coerceIn(0, text.length)).count { it == '\n' } + 1
+    }
+
+    private fun inferDeviceChoiceName(supportName: String): String? {
+      val text = supportName.trim()
+      if (text.isBlank()) {
+        return null
+      }
+      val stripped = text
+        .removePrefix("dev")
+        .removePrefix("Dev")
+        .removePrefix("DSET_")
+        .trimStart('_')
+      return stripped.ifBlank { text }
+    }
+
     private fun isDatabaseFile(fileName: String): Boolean {
       val extension = fileName.substringAfterLast('.', "").lowercase()
       return extension in setOf("db", "vdb", "template")
@@ -688,6 +1194,10 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
     private fun isStartupFile(fileName: String): Boolean {
       val extension = fileName.substringAfterLast('.', "").lowercase()
       return extension in setOf("cmd", "iocsh") || fileName == "st.cmd"
+    }
+
+    private fun isDbdFile(fileName: String): Boolean {
+      return fileName.substringAfterLast('.', "").lowercase() == "dbd"
     }
 
     private fun extractMacroNamesFromDatabaseFile(path: Path): List<String> {
@@ -799,6 +1309,28 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       val startOffset: Int,
     )
 
+    private data class DbdDeviceChoiceCompletionContext(
+      val supportName: String,
+      val partial: String,
+      val startOffset: Int,
+    )
+
+    private data class DbdExportDefinition(
+      val name: String,
+      val exportType: String?,
+      val absolutePath: Path,
+      val relativePath: String,
+      val line: Int,
+    )
+
+    private data class DbdSourceIndex(
+      val deviceSupportDefinitionsByName: Map<String, List<DbdExportDefinition>>,
+      val driverDefinitionsByName: Map<String, List<DbdExportDefinition>>,
+      val registrarDefinitionsByName: Map<String, List<DbdExportDefinition>>,
+      val functionDefinitionsByName: Map<String, List<DbdExportDefinition>>,
+      val variableDefinitionsByName: Map<String, List<DbdExportDefinition>>,
+    )
+
     private val RECORD_TYPE_CONTEXT_REGEX = Regex("""record\(\s*([A-Za-z0-9_]*)$""")
     private val RECORD_NAME_CONTEXT_REGEX = Regex("""record\(\s*[A-Za-z0-9_]+\s*,\s*"([^"\n]*)$""")
     private val FIELD_NAME_CONTEXT_REGEX = Regex("""field\(\s*(?:"?([A-Za-z0-9_]*))$""")
@@ -809,8 +1341,37 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
     private val DB_LOAD_RECORDS_PATH_CONTEXT_REGEX = Regex("""dbLoadRecords\(\s*"([^"\n]*)$""")
     private val DB_LOAD_RECORDS_MACRO_TAIL_CONTEXT_REGEX = Regex("""dbLoadRecords\(\s*"([^"\n]+)"\s*$""")
     private val DB_LOAD_TEMPLATE_PATH_CONTEXT_REGEX = Regex("""dbLoadTemplate\(\s*"([^"\n]*)$""")
+    private val DBD_KEYWORD_CONTEXT_REGEX = Regex("""^\s*([A-Za-z0-9_]*)$""")
+    private val DBD_DEVICE_RECORD_TYPE_CONTEXT_REGEX = Regex("""^\s*device\(\s*([A-Za-z0-9_]*)$""")
+    private val DBD_DEVICE_LINK_TYPE_CONTEXT_REGEX = Regex("""^\s*device\(\s*[A-Za-z0-9_]+\s*,\s*([A-Za-z0-9_]*)$""")
+    private val DBD_DEVICE_SUPPORT_NAME_CONTEXT_REGEX =
+      Regex("""^\s*device\(\s*[A-Za-z0-9_]+\s*,\s*[A-Za-z0-9_]+\s*,\s*([A-Za-z0-9_]*)$""")
+    private val DBD_DEVICE_CHOICE_CONTEXT_REGEX =
+      Regex("""^\s*device\(\s*[A-Za-z0-9_]+\s*,\s*[A-Za-z0-9_]+\s*,\s*([A-Za-z0-9_]+)\s*,\s*"([^"\n]*)$""")
     private val EPICS_MACRO_REFERENCE_REGEX =
       Regex("""\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}""")
+    private val EPICS_EXPORT_ADDRESS_REGEX =
+      Regex("""epicsExportAddress\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)""")
+    private val EPICS_EXPORT_REGISTRAR_REGEX =
+      Regex("""epicsExportRegistrar\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)""")
+    private val EPICS_REGISTER_FUNCTION_REGEX =
+      Regex("""epicsRegisterFunction\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)""")
+    private val DEVICE_SUPPORT_EXPORT_TYPE_REGEX = Regex("""(?:^|_)dset$""", RegexOption.IGNORE_CASE)
     private val STARTUP_COMMANDS = listOf("dbLoadRecords", "dbLoadTemplate")
+    private val DBD_COMPLETION_KEYWORDS = listOf(
+      "device",
+      "driver",
+      "registrar",
+      "function",
+      "variable",
+      "recordtype",
+      "menu",
+      "field",
+      "choice",
+      "breaktable",
+    )
+    private val DBD_DEVICE_LINK_TYPES = listOf("INST_IO")
+    private val DBD_SOURCE_EXTENSIONS = setOf("c", "cc", "cpp", "cxx", "h", "hh", "hpp")
+    private val dbdSourceIndexCache = ConcurrentHashMap<String, DbdSourceIndex>()
   }
 }

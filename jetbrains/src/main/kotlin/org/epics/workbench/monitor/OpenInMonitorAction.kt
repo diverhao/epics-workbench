@@ -3,6 +3,7 @@ package org.epics.workbench.monitor
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
@@ -11,7 +12,7 @@ import org.epics.workbench.navigation.EpicsRecordResolver
 import org.epics.workbench.probe.EpicsProbeSupport
 import org.epics.workbench.substitutions.EpicsSubstitutionsExpansionSupport
 import org.epics.workbench.toc.EpicsDatabaseToc
-import org.epics.workbench.widget.openEpicsMonitorWidget
+import org.epics.workbench.widget.EpicsMonitorWidgetVirtualFile
 
 class OpenInMonitorAction : DumbAwareAction() {
   override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
@@ -42,7 +43,11 @@ class OpenInMonitorAction : DumbAwareAction() {
       }
       channelName?.let(::listOf).orEmpty()
     }
-    openEpicsMonitorWidget(project, initialChannels)
+    FileEditorManager.getInstance(project).openFile(
+      EpicsMonitorWidgetVirtualFile(initialChannels),
+      true,
+      true,
+    )
   }
 
   private fun getTargetFile(event: AnActionEvent): VirtualFile? {
@@ -53,6 +58,8 @@ class OpenInMonitorAction : DumbAwareAction() {
   private fun isSupportedFile(file: VirtualFile): Boolean {
     return isDatabaseFile(file) ||
       isStartupFile(file) ||
+      isDbdFile(file) ||
+      isProtocolFile(file) ||
       isPvlistFile(file) ||
       isProbeFile(file) ||
       EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
@@ -67,6 +74,8 @@ class OpenInMonitorAction : DumbAwareAction() {
     return when {
       isDatabaseFile(file) -> resolveDatabaseTarget(project, file, text, offset)
       isStartupFile(file) -> EpicsRecordResolver.resolveRecordDefinition(project, file, offset)?.recordName
+      isDbdFile(file) -> null
+      isProtocolFile(file) -> null
       isPvlistFile(file) -> resolvePvlistTarget(text, offset)
       isProbeFile(file) -> EpicsProbeSupport.analyzeText(text).recordName
       else -> null
@@ -190,6 +199,14 @@ class OpenInMonitorAction : DumbAwareAction() {
 
   private fun isPvlistFile(file: VirtualFile): Boolean {
     return file.extension?.lowercase() == "pvlist"
+  }
+
+  private fun isDbdFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "dbd"
+  }
+
+  private fun isProtocolFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "proto"
   }
 
   private fun isProbeFile(file: VirtualFile): Boolean {

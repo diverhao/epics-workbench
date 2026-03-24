@@ -37,6 +37,10 @@ class EpicsFormattingService : AbstractDocumentFormattingService() {
         document.text,
         getIndentUnit(file),
       )
+      FormatKind.PROTOCOL -> EpicsTextFormatter.formatProtocolText(
+        document.text,
+        getIndentUnit(file),
+      )
       FormatKind.MONITOR -> EpicsTextFormatter.formatMonitorText(document.text)
       FormatKind.SEQUENCER -> EpicsTextFormatter.formatSequencerText(document.text)
       else -> return
@@ -54,10 +58,12 @@ class EpicsFormattingService : AbstractDocumentFormattingService() {
     return when {
       extension in DATABASE_EXTENSIONS -> FormatKind.DATABASE
       extension in SUBSTITUTIONS_EXTENSIONS -> FormatKind.SUBSTITUTIONS
+      extension == PROTOCOL_EXTENSION -> FormatKind.PROTOCOL
       extension == MONITOR_EXTENSION -> FormatKind.MONITOR
       extension == SEQUENCER_EXTENSION -> FormatKind.SEQUENCER
       file.fileType.name == DATABASE_FILE_TYPE || file.language.id == DATABASE_LANGUAGE_ID -> FormatKind.DATABASE
       file.fileType.name == SUBSTITUTIONS_FILE_TYPE || file.language.id == SUBSTITUTIONS_LANGUAGE_ID -> FormatKind.SUBSTITUTIONS
+      file.fileType.name == PROTOCOL_FILE_TYPE || file.language.id == PROTOCOL_LANGUAGE_ID -> FormatKind.PROTOCOL
       file.fileType.name == MONITOR_FILE_TYPE || file.language.id == MONITOR_LANGUAGE_ID -> FormatKind.MONITOR
       file.fileType.name == SEQUENCER_FILE_TYPE || file.language.id == SEQUENCER_LANGUAGE_ID -> FormatKind.SEQUENCER
       else -> null
@@ -76,15 +82,18 @@ class EpicsFormattingService : AbstractDocumentFormattingService() {
   companion object {
     private const val DATABASE_LANGUAGE_ID = "EPICS Database"
     private const val SUBSTITUTIONS_LANGUAGE_ID = "EPICS Substitutions"
+    private const val PROTOCOL_LANGUAGE_ID = "EPICS Protocol"
     private const val SEQUENCER_LANGUAGE_ID = "EPICS Sequencer"
     private const val MONITOR_LANGUAGE_ID = "EPICS PV List"
     private const val DATABASE_FILE_TYPE = "EPICS Database"
     private const val SUBSTITUTIONS_FILE_TYPE = "EPICS Substitutions"
+    private const val PROTOCOL_FILE_TYPE = "EPICS Protocol"
     private const val SEQUENCER_FILE_TYPE = "EPICS Sequencer"
     private const val MONITOR_FILE_TYPE = "EPICS PV List"
     private const val DEFAULT_INDENT_SIZE = 4
     private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")
     private val SUBSTITUTIONS_EXTENSIONS = setOf("substitutions", "sub", "subs")
+    private const val PROTOCOL_EXTENSION = "proto"
     private const val SEQUENCER_EXTENSION = "st"
     private const val MONITOR_EXTENSION = "pvlist"
   }
@@ -92,6 +101,7 @@ class EpicsFormattingService : AbstractDocumentFormattingService() {
   private enum class FormatKind {
     DATABASE,
     SUBSTITUTIONS,
+    PROTOCOL,
     MONITOR,
     SEQUENCER,
   }

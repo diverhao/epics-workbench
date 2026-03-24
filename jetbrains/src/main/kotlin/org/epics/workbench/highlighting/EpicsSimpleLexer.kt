@@ -6,6 +6,9 @@ import com.intellij.psi.tree.IElementType
 
 internal data class EpicsLexingProfile(
   val keywords: Set<String>,
+  val allowSingleQuotedStrings: Boolean = false,
+  val extraIdentifierChars: Set<Char> = emptySet(),
+  val caseInsensitiveKeywords: Boolean = false,
 )
 
 internal class EpicsSimpleLexer(
@@ -69,8 +72,8 @@ internal class EpicsSimpleLexer(
       return
     }
 
-    if (current == '"') {
-      tokenEnd = scanString(offset)
+    if (current == '"' || (profile.allowSingleQuotedStrings && current == '\'')) {
+      tokenEnd = scanString(offset, current)
       tokenType = EpicsTokenTypes.STRING
       return
     }
@@ -90,7 +93,7 @@ internal class EpicsSimpleLexer(
     if (isIdentifierStart(current)) {
       tokenEnd = scanWhile(offset + 1) { isIdentifierPart(it) }
       val text = buffer.subSequence(offset, tokenEnd).toString()
-      tokenType = if (profile.keywords.contains(text)) EpicsTokenTypes.KEYWORD else EpicsTokenTypes.IDENTIFIER
+      tokenType = if (matchesKeyword(text)) EpicsTokenTypes.KEYWORD else EpicsTokenTypes.IDENTIFIER
       return
     }
 
@@ -113,14 +116,14 @@ internal class EpicsSimpleLexer(
     return index
   }
 
-  private fun scanString(offset: Int): Int {
+  private fun scanString(offset: Int, terminator: Char): Int {
     var index = offset + 1
     while (index < endOffset) {
       when (buffer[index]) {
         '\\' -> {
           index += 2
         }
-        '"' -> {
+        terminator -> {
           return index + 1
         }
         else -> {
@@ -203,7 +206,17 @@ internal class EpicsSimpleLexer(
 
   private fun isIdentifierStart(value: Char): Boolean = value == '_' || value.isLetter()
 
-  private fun isIdentifierPart(value: Char): Boolean = value == '_' || value.isLetterOrDigit()
+  private fun isIdentifierPart(value: Char): Boolean {
+    return value == '_' || value.isLetterOrDigit() || value in profile.extraIdentifierChars
+  }
+
+  private fun matchesKeyword(text: String): Boolean {
+    return if (profile.caseInsensitiveKeywords) {
+      profile.keywords.contains(text.lowercase())
+    } else {
+      profile.keywords.contains(text)
+    }
+  }
 
   private fun Char.isHexDigit(): Boolean = isDigit() || lowercaseChar() in 'a'..'f'
 }

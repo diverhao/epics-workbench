@@ -18,13 +18,14 @@ class ImportDatabaseFromExcelAction : DumbAwareAction() {
   override fun update(event: AnActionEvent) {
     val project = event.project
     val file = getTargetFile(event)
+    val isProtocolFile = file?.extension.equals("proto", ignoreCase = true)
     event.presentation.isEnabledAndVisible =
-      project != null && (
+      project != null && !isProtocolFile && (
         isExcelFile(file) ||
           isEpicsFile(file) ||
           isEpicsProject(project)
       )
-    event.presentation.text = if (file?.extension?.lowercase() == "pvlist") {
+    event.presentation.text = if (file?.extension?.lowercase() in setOf("pvlist", "dbd")) {
       "Import Excel"
     } else {
       "Import Excel as EPICS DB"
@@ -106,6 +107,7 @@ class ImportDatabaseFromExcelAction : DumbAwareAction() {
       "subs",
       "cmd",
       "iocsh",
+      "dbd",
       "probe",
       "pvlist",
       "st",

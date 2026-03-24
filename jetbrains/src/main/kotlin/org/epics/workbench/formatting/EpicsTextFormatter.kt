@@ -132,6 +132,51 @@ internal object EpicsTextFormatter {
     return formattedLines.joinToString("\n").let { if (hadTrailingNewline) "$it\n" else it }
   }
 
+  fun formatProtocolText(text: String, indentUnit: String): String {
+    val normalizedText = text.replace("\r\n", "\n")
+    val hadTrailingNewline = normalizedText.endsWith("\n")
+    val contentText = if (hadTrailingNewline) normalizedText.dropLast(1) else normalizedText
+    val lines = if (contentText.isEmpty()) emptyList() else contentText.split('\n')
+    val formattedLines = mutableListOf<String>()
+    var indentLevel = 0
+
+    for (line in lines) {
+      val trimmedLine = line.trim()
+      if (trimmedLine.isEmpty()) {
+        formattedLines += ""
+        continue
+      }
+
+      val lineParts = splitProtocolLineComment(trimmedLine)
+      val trimmedCode = lineParts.code.trim()
+      val trimmedComment = lineParts.comment.trim()
+      val effectiveIndentLevel = if (trimmedCode.startsWith("}")) {
+        maxOf(indentLevel - 1, 0)
+      } else {
+        indentLevel
+      }
+      val indentation = indentUnit.repeat(effectiveIndentLevel)
+
+      if (trimmedCode.isEmpty()) {
+        formattedLines += indentation + trimmedComment
+        continue
+      }
+
+      val formattedCode = formatProtocolLine(trimmedCode)
+      formattedLines += buildString {
+        append(indentation)
+        append(formattedCode)
+        if (trimmedComment.isNotEmpty()) {
+          append(' ')
+          append(trimmedComment)
+        }
+      }
+      indentLevel = maxOf(0, indentLevel + getBraceDeltaOutsideProtocolStrings(trimmedCode))
+    }
+
+    return formattedLines.joinToString("\n").let { if (hadTrailingNewline) "$it\n" else it }
+  }
+
   fun formatSequencerText(text: String): String {
     val normalizedText = text.replace("\r\n", "\n")
     val hadTrailingNewline = normalizedText.endsWith("\n")
@@ -295,6 +340,17 @@ internal object EpicsTextFormatter {
     return trimmedLine
   }
 
+  private fun formatProtocolLine(trimmedLine: String): String {
+    if (trimmedLine.startsWith("#")) {
+      return trimmedLine
+    }
+
+    normalizeProtocolBlockLine(trimmedLine)?.let { return it }
+    normalizeProtocolAssignmentLine(trimmedLine)?.let { return it }
+    normalizeClosingBraceLine(trimmedLine)?.let { return it }
+    return trimmedLine
+  }
+
   private fun isSubstitutionBlockLine(trimmedLine: String): Boolean {
     return Regex("""^(?:file\s+(?:"(?:[^"\\]|\\.)*"|[^\s{]+)|global)\s*\{\s*$""").matches(trimmedLine) ||
       Regex("""^global\s*\{\s*$""").matches(trimmedLine)
@@ -330,6 +386,11 @@ internal object EpicsTextFormatter {
       return "global {"
     }
     return null
+  }
+
+  private fun normalizeProtocolBlockLine(trimmedLine: String): String? {
+    val match = Regex("""^(@?[A-Za-z_][A-Za-z0-9_-]*)\s*\{\s*$""").matchEntire(trimmedLine) ?: return null
+    return "${match.groupValues[1]} {"
   }
 
   private fun normalizeDatabaseFieldLine(trimmedLine: String): String? {
@@ -377,9 +438,50 @@ internal object EpicsTextFormatter {
     return "{ " + values.joinToString(", ") { formatSubstitutionScalarValue(it) } + " }"
   }
 
+  private fun normalizeProtocolAssignmentLine(trimmedLine: String): String? {
+    val match = Regex("""^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.+?)\s*;\s*$""").matchEntire(trimmedLine) ?: return null
+    return "${match.groupValues[1]} = ${match.groupValues[2].trim()};"
+  }
+
   private fun normalizeClosingBraceLine(trimmedLine: String): String? {
     val match = Regex("""^\}(.*)$""").matchEntire(trimmedLine) ?: return null
     return if (match.groupValues[1].isEmpty()) "}" else "} ${match.groupValues[1].trim()}"
+  }
+
+  private fun getBraceDeltaOutsideProtocolStrings(text: String): Int {
+    var delta = 0
+    var inDoubleQuote = false
+    var inSingleQuote = false
+    var escaped = false
+
+    for (character in text) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (inDoubleQuote) {
+        when (character) {
+          '\\' -> escaped = true
+          '"' -> inDoubleQuote = false
+        }
+        continue
+      }
+      if (inSingleQuote) {
+        when (character) {
+          '\\' -> escaped = true
+          '\'' -> inSingleQuote = false
+        }
+        continue
+      }
+      when (character) {
+        '"' -> inDoubleQuote = true
+        '\'' -> inSingleQuote = true
+        '#' -> break
+        '{' -> delta += 1
+        '}' -> delta -= 1
+      }
+    }
+    return delta
   }
 
   private fun getBraceDeltaOutsideStrings(text: String): Int {
@@ -428,6 +530,44 @@ internal object EpicsTextFormatter {
       }
       when (character) {
         '"' -> inString = true
+        '#' -> return LineCommentParts(
+          code = text.substring(0, index).trimEnd(),
+          comment = text.substring(index),
+        )
+      }
+    }
+
+    return LineCommentParts(text, "")
+  }
+
+  private fun splitProtocolLineComment(text: String): LineCommentParts {
+    var inDoubleQuote = false
+    var inSingleQuote = false
+    var escaped = false
+
+    for (index in text.indices) {
+      val character = text[index]
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (inDoubleQuote) {
+        when (character) {
+          '\\' -> escaped = true
+          '"' -> inDoubleQuote = false
+        }
+        continue
+      }
+      if (inSingleQuote) {
+        when (character) {
+          '\\' -> escaped = true
+          '\'' -> inSingleQuote = false
+        }
+        continue
+      }
+      when (character) {
+        '"' -> inDoubleQuote = true
+        '\'' -> inSingleQuote = true
         '#' -> return LineCommentParts(
           code = text.substring(0, index).trimEnd(),
           comment = text.substring(index),

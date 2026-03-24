@@ -6,6 +6,7 @@ const { createDatabaseExcelTools } = require("./databaseExcel");
 const { createDatabaseExcelImportTools } = require("./databaseExcelImport");
 const {
   formatDatabaseText,
+  formatProtocolText,
   formatSubstitutionText,
   splitSubstitutionCommaSeparatedItems,
 } = require("./formatters");
@@ -33,6 +34,7 @@ const LANGUAGE_IDS = {
   startup: "startup",
   substitutions: "substitutions",
   dbd: "database definition",
+  proto: "proto",
   sequencer: "sequencer",
   pvlist: "pvlist",
   probe: "probe",
@@ -772,6 +774,12 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.languages.registerDocumentFormattingEditProvider(
+      { language: LANGUAGE_IDS.proto },
+      new EpicsProtocolFormattingProvider(),
+    ),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerDocumentFormattingEditProvider(
       { language: LANGUAGE_IDS.sequencer },
       new EpicsSequencerFormattingProvider(),
     ),
@@ -1097,6 +1105,21 @@ class EpicsDatabaseFormattingProvider {
 class EpicsSubstitutionsFormattingProvider {
   provideDocumentFormattingEdits(document, options) {
     const formattedText = formatSubstitutionText(document.getText(), options);
+    if (formattedText === document.getText()) {
+      return [];
+    }
+
+    const fullRange = new vscode.Range(
+      new vscode.Position(0, 0),
+      document.positionAt(document.getText().length),
+    );
+    return [vscode.TextEdit.replace(fullRange, formattedText)];
+  }
+}
+
+class EpicsProtocolFormattingProvider {
+  provideDocumentFormattingEdits(document, options) {
+    const formattedText = formatProtocolText(document.getText(), options);
     if (formattedText === document.getText()) {
       return [];
     }
@@ -7237,7 +7260,15 @@ async function formatDatabaseFileInActiveEditor() {
 async function formatActiveEpicsFileInActiveEditor() {
   const editor = vscode.window.activeTextEditor;
   const document = editor?.document;
-  if (!document || (!isDatabaseDocument(document) && !isSubstitutionsDocument(document))) {
+  if (
+    !document ||
+    (
+      !isDatabaseDocument(document) &&
+      !isSubstitutionsDocument(document) &&
+      !isProtocolDocument(document) &&
+      document.languageId !== LANGUAGE_IDS.dbd
+    )
+  ) {
     return;
   }
 
@@ -7566,6 +7597,26 @@ async function openInPvlistFromActiveEditor(workspaceIndex) {
   }
 
   if (isStartupDocument(document)) {
+    await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
+      sourceKind: "pvlist",
+      sourceLabel,
+      sourceDocumentUri: document.uri.toString(),
+      sourceText: "",
+    });
+    return;
+  }
+
+  if (isProtocolDocument(document)) {
+    await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
+      sourceKind: "pvlist",
+      sourceLabel,
+      sourceDocumentUri: document.uri.toString(),
+      sourceText: "",
+    });
+    return;
+  }
+
+  if (document.languageId === LANGUAGE_IDS.dbd) {
     await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
       sourceKind: "pvlist",
       sourceLabel,
@@ -13265,6 +13316,10 @@ function isStartupDocument(document) {
 
 function isSubstitutionsDocument(document) {
   return document && document.languageId === LANGUAGE_IDS.substitutions;
+}
+
+function isProtocolDocument(document) {
+  return document && document.languageId === LANGUAGE_IDS.proto;
 }
 
 function isPvlistDocument(document) {

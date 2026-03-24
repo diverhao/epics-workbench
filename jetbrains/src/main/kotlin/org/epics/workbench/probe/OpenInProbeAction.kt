@@ -22,8 +22,8 @@ class OpenInProbeAction : DumbAwareAction() {
     val enabled = project != null &&
       file != null &&
       (
-        (editor != null && (isDatabaseFile(file) || isStartupFile(file) || isPvlistFile(file))) ||
-          (editor == null && isPvlistFile(file)) ||
+        (editor != null && (isDatabaseFile(file) || isStartupFile(file) || isPvlistFile(file) || isDbdFile(file) || isProtocolFile(file))) ||
+          (editor == null && (isPvlistFile(file) || isDbdFile(file) || isProtocolFile(file))) ||
           EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
       )
     event.presentation.isEnabledAndVisible = enabled
@@ -66,6 +66,8 @@ class OpenInProbeAction : DumbAwareAction() {
         ProbeTarget(definition.recordName)
       }
       isPvlistFile(file) -> resolvePvlistProbeTarget(text, offset)
+      isProtocolFile(file) -> null
+      isDbdFile(file) -> null
       else -> null
     }
   }
@@ -183,6 +185,14 @@ class OpenInProbeAction : DumbAwareAction() {
 
   private fun isPvlistFile(file: VirtualFile): Boolean {
     return file.extension?.lowercase() == "pvlist"
+  }
+
+  private fun isDbdFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "dbd"
+  }
+
+  private fun isProtocolFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "proto"
   }
 
   private fun resolvePvlistProbeTarget(text: String, offset: Int): ProbeTarget? {

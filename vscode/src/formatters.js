@@ -154,6 +154,55 @@ function formatMonitorText(text) {
   return formattedText;
 }
 
+function formatProtocolText(text, options) {
+  const normalizedText = String(text || "").replace(/\r\n/g, "\n");
+  const hadTrailingNewline = normalizedText.endsWith("\n");
+  const contentText = hadTrailingNewline
+    ? normalizedText.slice(0, -1)
+    : normalizedText;
+  const lines = contentText ? contentText.split("\n") : [];
+  const formattedLines = [];
+  const indentUnit = getDatabaseIndentUnit(options);
+  let indentLevel = 0;
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      formattedLines.push("");
+      continue;
+    }
+
+    const { code, comment } = splitProtocolLineComment(trimmedLine);
+    const trimmedCode = code.trim();
+    const trimmedComment = comment ? comment.trim() : "";
+    const effectiveIndentLevel = trimmedCode.startsWith("}")
+      ? Math.max(indentLevel - 1, 0)
+      : indentLevel;
+    const indentation = indentUnit.repeat(effectiveIndentLevel);
+
+    if (!trimmedCode) {
+      formattedLines.push(`${indentation}${trimmedComment}`);
+      continue;
+    }
+
+    const formattedCode = formatProtocolLine(trimmedCode);
+    formattedLines.push(
+      `${indentation}${formattedCode}${trimmedComment ? ` ${trimmedComment}` : ""}`,
+    );
+    indentLevel = Math.max(
+      0,
+      indentLevel + getBraceDeltaOutsideProtocolStrings(trimmedCode),
+    );
+  }
+
+  let formattedText = formattedLines.join("\n");
+  if (hadTrailingNewline) {
+    formattedText += "\n";
+  }
+
+  return formattedText;
+}
+
 function formatAlignedSubstitutionPatternBlock(
   lines,
   startIndex,
@@ -331,6 +380,29 @@ function formatSubstitutionLine(trimmedLine, state) {
   return trimmedLine;
 }
 
+function formatProtocolLine(trimmedLine) {
+  if (trimmedLine.startsWith("#")) {
+    return trimmedLine;
+  }
+
+  const normalizedBlockLine = normalizeProtocolBlockLine(trimmedLine);
+  if (normalizedBlockLine) {
+    return normalizedBlockLine;
+  }
+
+  const normalizedAssignmentLine = normalizeProtocolAssignmentLine(trimmedLine);
+  if (normalizedAssignmentLine) {
+    return normalizedAssignmentLine;
+  }
+
+  const normalizedClosingBraceLine = normalizeClosingBraceLine(trimmedLine);
+  if (normalizedClosingBraceLine) {
+    return normalizedClosingBraceLine;
+  }
+
+  return trimmedLine;
+}
+
 function isSubstitutionBlockLine(trimmedLine) {
   return /^(?:file\s+(?:"(?:[^"\\]|\\.)*"|[^\s{]+)|global)\s*\{\s*$/.test(trimmedLine) ||
     /^global\s*\{\s*$/.test(trimmedLine);
@@ -360,6 +432,11 @@ function normalizeSubstitutionBlockLine(trimmedLine) {
   }
 
   return undefined;
+}
+
+function normalizeProtocolBlockLine(trimmedLine) {
+  const match = trimmedLine.match(/^(@?[A-Za-z_][A-Za-z0-9_-]*)\s*\{\s*$/);
+  return match ? `${match[1]} {` : undefined;
 }
 
 function normalizeDatabaseFieldLine(trimmedLine) {
@@ -405,6 +482,11 @@ function normalizeSubstitutionRowLine(trimmedLine, state) {
 
   const values = splitSubstitutionCommaSeparatedItems(innerText);
   return `{ ${values.map((value) => formatSubstitutionScalarValue(value)).join(", ")} }`;
+}
+
+function normalizeProtocolAssignmentLine(trimmedLine) {
+  const match = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.+?)\s*;\s*$/);
+  return match ? `${match[1]} = ${match[2].trim()};` : undefined;
 }
 
 function normalizeClosingBraceLine(trimmedLine) {
@@ -493,6 +575,115 @@ function splitSubstitutionLineComment(text) {
     code: text,
     comment: "",
   };
+}
+
+function splitProtocolLineComment(text) {
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (character === "\\") {
+        escaped = true;
+      } else if (character === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    if (character === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (character === "#") {
+      return {
+        code: text.slice(0, index).trimEnd(),
+        comment: text.slice(index),
+      };
+    }
+  }
+
+  return {
+    code: text,
+    comment: "",
+  };
+}
+
+function getBraceDeltaOutsideProtocolStrings(text) {
+  let delta = 0;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let escaped = false;
+
+  for (const character of text) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (character === "\\") {
+        escaped = true;
+      } else if (character === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    if (character === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (character === "#") {
+      break;
+    }
+
+    if (character === "{") {
+      delta += 1;
+    } else if (character === "}") {
+      delta -= 1;
+    }
+  }
+
+  return delta;
 }
 
 function splitSubstitutionCommaSeparatedItems(text) {
@@ -615,6 +806,7 @@ function escapeDoubleQuotedString(value) {
 module.exports = {
   formatDatabaseText,
   formatMonitorText,
+  formatProtocolText,
   formatSubstitutionText,
   splitSubstitutionCommaSeparatedItems,
 };

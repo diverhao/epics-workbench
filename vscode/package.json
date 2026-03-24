@@ -80,7 +80,7 @@
                     "command": "vscode-epics.exportDatabaseToExcel"
                 },
                 {
-                    "when": "editorLangId == database || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer || editorLangId == proto",
+                    "when": "editorLangId == database || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer",
                     "group": "0_epics-db-excel@2",
                     "command": "vscode-epics.importDatabaseFromExcel"
                 },
@@ -138,6 +138,51 @@
                     "when": "editorLangId == startup",
                     "group": "navigation@33",
                     "command": "vscode-epics.importDatabaseFromExcelShort"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "group": "navigation@29",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "group": "navigation@30",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "group": "navigation@31",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "group": "navigation@32",
+                    "command": "vscode-epics.formatActiveEpicsFile"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "group": "navigation@33",
+                    "command": "vscode-epics.importDatabaseFromExcelShort"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "group": "navigation@29",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "group": "navigation@30",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "group": "navigation@31",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "group": "navigation@32",
+                    "command": "vscode-epics.formatActiveEpicsFile"
                 },
                 {
                     "when": "editorLangId == pvlist",
@@ -201,8 +246,44 @@
                     "command": "vscode-epics.exportDatabaseToExcel"
                 },
                 {
-                    "when": "editorLangId == database || editorLangId == substitutions || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer || editorLangId == proto",
+                    "when": "editorLangId == database || editorLangId == substitutions || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer",
                     "command": "vscode-epics.importDatabaseFromExcel"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == proto",
+                    "command": "vscode-epics.formatActiveEpicsFile"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "command": "vscode-epics.openInProbe"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "command": "vscode-epics.openInPvList"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "command": "vscode-epics.formatActiveEpicsFile"
+                },
+                {
+                    "when": "editorLangId == dbd",
+                    "command": "vscode-epics.importDatabaseFromExcelShort"
                 },
                 {
                     "when": "editorLangId == database || editorLangId == startup || editorLangId == substitutions",
@@ -257,7 +338,7 @@
             ],
             "explorer/context": [
                 {
-                    "when": "resourceExtname == .xlsx || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .cmd || resourceExtname == .iocsh || resourceExtname == .sub || resourceExtname == .subs || resourceExtname == .substitutions || resourceExtname == .pvlist || resourceExtname == .probe || resourceExtname == .st || resourceExtname == .proto || (epicsWorkbench.isEpicsProject && !explorerResourceIsFolder)",
+                    "when": "resourceExtname == .xlsx || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .cmd || resourceExtname == .iocsh || resourceExtname == .sub || resourceExtname == .subs || resourceExtname == .substitutions || resourceExtname == .pvlist || resourceExtname == .probe || resourceExtname == .st || (epicsWorkbench.isEpicsProject && !explorerResourceIsFolder)",
                     "group": "navigation@30",
                     "command": "vscode-epics.importDatabaseFromExcel"
                 }
@@ -613,6 +694,7 @@
         "onLanguage:database",
         "onLanguage:startup",
         "onLanguage:substitutions",
+        "onLanguage:proto",
         "onLanguage:sequencer",
         "onLanguage:pvlist",
         "onLanguage:probe",

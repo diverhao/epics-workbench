@@ -41,6 +41,17 @@ class OpenInPvlistAction : DumbAwareAction() {
 
     val result = when {
       isPvlistFile(file) -> EpicsPvlistWidgetSupport.buildFromPvlistText(text, file.name, file.path)
+      isDbdFile(file) || isProtocolFile(file) -> EpicsPvlistWidgetBuildResult(
+        model = EpicsPvlistWidgetModel(
+          sourceLabel = file.name,
+          sourcePath = file.path,
+          sourceKind = EpicsPvlistWidgetSourceKind.PVLIST,
+          rawPvNames = mutableListOf(),
+          macroNames = mutableListOf(),
+          macroValues = linkedMapOf(),
+        ),
+        issues = emptyList(),
+      )
       EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) -> {
         val expandedResult = EpicsSubstitutionsExpansionSupport.expandToDatabaseText(project, file)
         val expandedText = expandedResult.expandedText
@@ -76,12 +87,22 @@ class OpenInPvlistAction : DumbAwareAction() {
 
   private fun isSupportedFile(file: VirtualFile): Boolean {
     return isPvlistFile(file) ||
+      isDbdFile(file) ||
+      isProtocolFile(file) ||
       file.extension?.lowercase() in DATABASE_EXTENSIONS ||
       EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
   }
 
   private fun isPvlistFile(file: VirtualFile): Boolean {
     return file.extension?.lowercase() == "pvlist"
+  }
+
+  private fun isDbdFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "dbd"
+  }
+
+  private fun isProtocolFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "proto"
   }
 
   private companion object {

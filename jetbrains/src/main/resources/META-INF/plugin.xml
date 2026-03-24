@@ -81,6 +81,14 @@
       implementationClass="org.epics.workbench.highlighting.EpicsStartupSyntaxHighlighterFactory"
     />
     <lang.syntaxHighlighterFactory
+      language="EPICS Database Definition"
+      implementationClass="org.epics.workbench.highlighting.EpicsDatabaseDefinitionSyntaxHighlighterFactory"
+    />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Protocol"
+      implementationClass="org.epics.workbench.highlighting.EpicsProtocolSyntaxHighlighterFactory"
+    />
+    <lang.syntaxHighlighterFactory
       language="EPICS PV List"
       implementationClass="org.epics.workbench.highlighting.EpicsMonitorSyntaxHighlighterFactory"
     />
