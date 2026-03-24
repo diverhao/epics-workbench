@@ -55,15 +55,7 @@ internal object EpicsPvlistWidgetSupport {
       }
     }
 
-    val macroNames = extractOrderedMacroNames(listOf(text))
-    val macroAssignments = LinkedHashMap<String, String>()
-    val tocAssignments = EpicsDatabaseToc.extractRuntimeMacroAssignments(text)
-    macroNames.forEach { macroName ->
-      macroAssignments[macroName] = tocAssignments[macroName]
-        ?.takeIf { it.hasAssignment }
-        ?.value
-        .orEmpty()
-    }
+    val (macroNames, macroAssignments) = buildDatabaseMacroState(text)
 
     return EpicsPvlistWidgetBuildResult(
       model = EpicsPvlistWidgetModel(
@@ -143,25 +135,25 @@ internal object EpicsPvlistWidgetSupport {
     }
   }
 
-  fun addChannels(model: EpicsPvlistWidgetModel, text: String): Boolean {
-    var changed = false
-    val seen = linkedSetOf<String>().apply {
-      addAll(model.rawPvNames.map(String::trim).filter(String::isNotBlank))
+  fun replaceChannels(model: EpicsPvlistWidgetModel, text: String): Boolean {
+    val nextRawPvNames = parseChannelLines(text)
+    val nextMacroNames = extractOrderedMacroNames(nextRawPvNames)
+    val channelsChanged = model.rawPvNames != nextRawPvNames
+    val macrosChanged = model.macroNames != nextMacroNames
+    if (!channelsChanged && !macrosChanged) {
+      return false
     }
-    parseAddedChannelLines(text).forEach { channelName ->
-      if (!seen.add(channelName)) {
-        return@forEach
-      }
-      model.rawPvNames.add(channelName)
-      changed = true
-      extractOrderedMacroNames(listOf(channelName)).forEach { macroName ->
-        if (macroName !in model.macroNames) {
-          model.macroNames.add(macroName)
-          model.macroValues.putIfAbsent(macroName, "")
-        }
-      }
+
+    val previousMacroValues = LinkedHashMap(model.macroValues)
+    model.rawPvNames.clear()
+    model.rawPvNames.addAll(nextRawPvNames)
+    model.macroNames.clear()
+    model.macroNames.addAll(nextMacroNames)
+    model.macroValues.clear()
+    nextMacroNames.forEach { macroName ->
+      model.macroValues[macroName] = previousMacroValues[macroName].orEmpty()
     }
-    return changed
+    return true
   }
 
   fun addMacros(model: EpicsPvlistWidgetModel, text: String): Boolean {
@@ -234,7 +226,7 @@ internal object EpicsPvlistWidgetSupport {
     )
   }
 
-  private fun parseAddedChannelLines(text: String): List<String> {
+  private fun parseChannelLines(text: String): List<String> {
     val results = mutableListOf<String>()
     val seen = linkedSetOf<String>()
     text.split(Regex("\\r?\\n")).forEach { rawLine ->
@@ -262,6 +254,30 @@ internal object EpicsPvlistWidgetSupport {
       }
     }
     return results
+  }
+
+  private fun buildDatabaseMacroState(text: String): Pair<List<String>, LinkedHashMap<String, String>> {
+    val macroNames = mutableListOf<String>()
+    val macroValues = linkedMapOf<String, String>()
+    val tocAssignments = EpicsDatabaseToc.extractRuntimeMacroAssignments(text)
+
+    tocAssignments.forEach { (macroName, assignment) ->
+      if (macroName.isBlank() || macroName in macroValues) {
+        return@forEach
+      }
+      macroNames += macroName
+      macroValues[macroName] = if (assignment.hasAssignment) assignment.value else ""
+    }
+
+    extractOrderedMacroNames(listOf(text)).forEach { macroName ->
+      if (macroName.isBlank() || macroName in macroValues) {
+        return@forEach
+      }
+      macroNames += macroName
+      macroValues[macroName] = ""
+    }
+
+    return macroNames to macroValues
   }
 
   private fun extractOrderedMacroNames(texts: List<String>): List<String> {

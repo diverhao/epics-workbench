@@ -73,10 +73,20 @@ const INSERT_DBLOAD_RECORDS_MACRO_TAIL_COMMAND = "vscode-epics.insertDbLoadRecor
 const COLLAPSE_ALL_RECORDS_COMMAND = "vscode-epics.collapseAllRecords";
 const EXPAND_ALL_RECORDS_COMMAND = "vscode-epics.expandAllRecords";
 const GENERATE_DATABASE_TOC_COMMAND = "vscode-epics.generateDatabaseToc";
+const FORMAT_DATABASE_FILE_COMMAND = "vscode-epics.formatDatabaseFile";
+const FORMAT_ACTIVE_EPICS_FILE_COMMAND = "vscode-epics.formatActiveEpicsFile";
+const COPY_ALL_RECORD_NAMES_COMMAND = "vscode-epics.copyAllRecordNames";
 const COPY_AS_MONITOR_FILE_COMMAND = "vscode-epics.copyAsMonitorFile";
 const COPY_AS_EXPANDED_DB_COMMAND = "vscode-epics.copyAsExpandedDb";
 const EXPORT_DATABASE_TO_EXCEL_COMMAND = "vscode-epics.exportDatabaseToExcel";
 const IMPORT_DATABASE_FROM_EXCEL_COMMAND = "vscode-epics.importDatabaseFromExcel";
+const IMPORT_DATABASE_FROM_EXCEL_SHORT_COMMAND =
+  "vscode-epics.importDatabaseFromExcelShort";
+const START_DATABASE_MONITOR_CHANNELS_COMMAND =
+  "vscode-epics.startDatabaseMonitorChannels";
+const STOP_DATABASE_MONITOR_CHANNELS_COMMAND =
+  "vscode-epics.stopDatabaseMonitorChannels";
+const EPICS_PROJECT_CONTEXT_KEY = "epicsWorkbench.isEpicsProject";
 const OPEN_EXCEL_IMPORT_PREVIEW_COMMAND = "vscode-epics.openExcelImportPreview";
 const OPEN_IN_PROBE_COMMAND = "vscode-epics.openInProbe";
 const OPEN_IN_PVLIST_COMMAND = "vscode-epics.openInPvList";
@@ -273,6 +283,23 @@ function activate(context) {
     fieldMenuChoicesByRecordType: staticData.fieldMenuChoicesByRecordType,
     fieldInitialValuesByRecordType: staticData.fieldInitialValuesByRecordType,
   };
+  void updateEpicsProjectContext();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void updateEpicsProjectContext();
+    }),
+  );
+  const epicsProjectWatcher = vscode.workspace.createFileSystemWatcher("**/configure/{RELEASE,RELEASE.local}");
+  epicsProjectWatcher.onDidCreate(() => {
+    void updateEpicsProjectContext();
+  });
+  epicsProjectWatcher.onDidDelete(() => {
+    void updateEpicsProjectContext();
+  });
+  epicsProjectWatcher.onDidChange(() => {
+    void updateEpicsProjectContext();
+  });
+  context.subscriptions.push(epicsProjectWatcher);
   const workspaceIndex = new WorkspaceIndex(staticData);
   const diagnostics = vscode.languages.createDiagnosticCollection("vscode-epics");
   const databaseSemanticTokensLegend = new vscode.SemanticTokensLegend(
@@ -404,6 +431,8 @@ function activate(context) {
             editor.selection.active.character,
           ),
         );
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await vscode.commands.executeCommand(TRIGGER_SUGGEST_COMMAND);
       },
     ),
   );
@@ -562,6 +591,21 @@ function activate(context) {
     }),
   );
   context.subscriptions.push(
+    vscode.commands.registerCommand(FORMAT_DATABASE_FILE_COMMAND, async () => {
+      await formatDatabaseFileInActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(FORMAT_ACTIVE_EPICS_FILE_COMMAND, async () => {
+      await formatActiveEpicsFileInActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COPY_ALL_RECORD_NAMES_COMMAND, async () => {
+      await copyAllRecordNamesInActiveEditor();
+    }),
+  );
+  context.subscriptions.push(
     vscode.commands.registerCommand(COPY_AS_MONITOR_FILE_COMMAND, async () => {
       await copyDatabaseAsMonitorFileInActiveEditor();
     }),
@@ -573,12 +617,20 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.commands.registerCommand(EXPORT_DATABASE_TO_EXCEL_COMMAND, async () => {
-      await exportDatabaseToExcelInActiveEditor();
+      await exportDatabaseToExcelInActiveEditor(workspaceIndex);
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand(
       IMPORT_DATABASE_FROM_EXCEL_COMMAND,
+      async (resourceUri) => {
+        await importDatabaseFromExcelResource(resourceUri);
+      },
+    ),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      IMPORT_DATABASE_FROM_EXCEL_SHORT_COMMAND,
       async (resourceUri) => {
         await importDatabaseFromExcelResource(resourceUri);
       },
@@ -596,7 +648,7 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.commands.registerCommand(OPEN_IN_PVLIST_COMMAND, async () => {
-      await openInPvlistFromActiveEditor();
+      await openInPvlistFromActiveEditor(workspaceIndex);
     }),
   );
   context.subscriptions.push(
@@ -681,6 +733,7 @@ function activate(context) {
         { language: LANGUAGE_IDS.database },
         { language: LANGUAGE_IDS.startup },
         { language: LANGUAGE_IDS.substitutions },
+        { language: LANGUAGE_IDS.pvlist },
         { language: LANGUAGE_IDS.sequencer },
         { language: "makefile" },
         { scheme: "file", pattern: "**/Makefile" },
@@ -902,6 +955,9 @@ class EpicsCompletionProvider {
 
       case "startupLoadedRecordName":
         return buildStartupLoadedRecordNameItems(snapshot, document, position, context);
+
+      case "startupLoadMacroTail":
+        return buildStartupLoadMacroTailItems(snapshot, document, position, context);
 
       case "startupLoadMacros":
         return buildStartupLoadMacroItems(snapshot, document, position, context);
@@ -1334,6 +1390,14 @@ function getCompletionContext(document, position) {
       return dbLoadRecordsContext;
     }
 
+    const dbLoadRecordsMacroTailContext = getStartupLoadMacroTailCompletionContext(
+      position,
+      linePrefix,
+    );
+    if (dbLoadRecordsMacroTailContext) {
+      return dbLoadRecordsMacroTailContext;
+    }
+
     const dbLoadRecordsMacroContext = getStartupLoadMacroCompletionContext(
       position,
       linePrefix,
@@ -1525,6 +1589,24 @@ function getStartupLoadMacroCompletionContext(position, linePrefix) {
     range: new vscode.Range(
       position.line,
       position.character - partial.length,
+      position.line,
+      position.character,
+    ),
+  };
+}
+
+function getStartupLoadMacroTailCompletionContext(position, linePrefix) {
+  const match = linePrefix.match(/dbLoadRecords\(\s*"([^"\n]+)"\s*$/);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    type: "startupLoadMacroTail",
+    path: match[1],
+    range: new vscode.Range(
+      position.line,
+      position.character,
       position.line,
       position.character,
     ),
@@ -2807,6 +2889,10 @@ function buildFilePathItems(snapshot, document, context) {
       : undefined;
   const startupBaseDirectory = startupState?.currentDirectory;
 
+  if (context.fileKind === "dbLoadRecords" && startupState?.currentDirectory) {
+    return getDbLoadRecordsFilesystemPathItems(startupState, context);
+  }
+
   for (const filesystemEntry of getFilesystemPathEntries(startupState, context)) {
     const item = new vscode.CompletionItem(
       filesystemEntry.insertPath,
@@ -2883,28 +2969,17 @@ function buildFilePathItems(snapshot, document, context) {
 }
 
 function buildStartupLoadMacroItems(snapshot, document, position, context) {
-  const state = createStartupExecutionState(
+  const resolvedMacroData = resolveStartupLoadMacroData(
     snapshot,
     document,
-    document.offsetAt(position),
+    position,
+    context.path,
   );
-  const resolution = resolveStartupPath(
-    snapshot,
-    document,
-    {
-      command: "dbLoadRecords",
-      path: context.path,
-    },
-    state,
-  );
-  const resolvedFile = resolution
-    ? getReadableStartupFileResolution(document, resolution)
-    : undefined;
-  if (!resolvedFile?.text) {
+  if (!resolvedMacroData) {
     return [];
   }
 
-  const macroNames = extractMacroNames(maskDatabaseComments(resolvedFile.text));
+  const { resolvedFile, macroNames } = resolvedMacroData;
   if (macroNames.length === 0) {
     return [];
   }
@@ -2975,6 +3050,69 @@ function buildStartupLoadMacroItems(snapshot, document, position, context) {
 
   items.sort((left, right) => compareLabels(left.label, right.label));
   return items;
+}
+
+function buildStartupLoadMacroTailItems(snapshot, document, position, context) {
+  const resolvedMacroData = resolveStartupLoadMacroData(
+    snapshot,
+    document,
+    position,
+    context.path,
+  );
+  if (!resolvedMacroData) {
+    return [];
+  }
+
+  const { resolvedFile, macroNames } = resolvedMacroData;
+  if (macroNames.length === 0) {
+    return [];
+  }
+
+  const assignmentLabel = buildDbLoadRecordsMacroAssignmentsLabel(macroNames);
+  const item = new vscode.CompletionItem(
+    assignmentLabel,
+    vscode.CompletionItemKind.Value,
+  );
+  item.range = getDbLoadRecordsTailInsertionRange(document, context.range.start);
+  item.insertText = new vscode.SnippetString(
+    buildDbLoadRecordsCompletionTailSnippet(macroNames),
+  );
+  item.detail = `Macros used by ${path.posix.basename(normalizePath(context.path))}`;
+  item.documentation = new vscode.MarkdownString(
+    `Loaded from \`${resolvedFile.absolutePath}\``,
+  );
+  item.filterText = buildFilterText(assignmentLabel);
+  item.sortText = `0-${assignmentLabel}`;
+  item.preselect = true;
+  return [item];
+}
+
+function resolveStartupLoadMacroData(snapshot, document, position, filePath) {
+  const state = createStartupExecutionState(
+    snapshot,
+    document,
+    document.offsetAt(position),
+  );
+  const resolution = resolveStartupPath(
+    snapshot,
+    document,
+    {
+      command: "dbLoadRecords",
+      path: filePath,
+    },
+    state,
+  );
+  const resolvedFile = resolution
+    ? getReadableStartupFileResolution(document, resolution)
+    : undefined;
+  if (!resolvedFile?.text) {
+    return undefined;
+  }
+
+  return {
+    resolvedFile,
+    macroNames: extractMacroNames(maskDatabaseComments(resolvedFile.text)),
+  };
 }
 
 function applyDbLoadRecordsPathCompletion(item, context, absolutePath) {
@@ -3154,6 +3292,13 @@ function getHover(snapshot, document, position) {
     );
     if (substitutionTemplateHover) {
       return substitutionTemplateHover;
+    }
+  }
+
+  if (isPvlistDocument(document)) {
+    const pvlistRecordHover = getPvlistRecordHover(snapshot, document, position);
+    if (pvlistRecordHover) {
+      return pvlistRecordHover;
     }
   }
 
@@ -3542,6 +3687,84 @@ function getLinkedRecordHover(snapshot, document, position) {
   );
 }
 
+function getPvlistRecordHover(snapshot, document, position) {
+  if (!isPvlistDocument(document)) {
+    return undefined;
+  }
+
+  const line = document.lineAt(position.line);
+  const trimmedLine = String(line.text || "").trim();
+  if (
+    !trimmedLine ||
+    trimmedLine.startsWith("#") ||
+    /^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(trimmedLine) ||
+    trimmedLine.includes("=") ||
+    /\s/.test(trimmedLine)
+  ) {
+    return undefined;
+  }
+
+  const trimmedStart = line.firstNonWhitespaceCharacterIndex;
+  const trimmedEnd = trimmedStart + trimmedLine.length;
+  if (position.character < trimmedStart || position.character > trimmedEnd) {
+    return undefined;
+  }
+
+  const expandedRecordName = resolvePvlistHoverRecordName(document.getText(), trimmedLine);
+  if (!expandedRecordName) {
+    return undefined;
+  }
+
+  const definitions = getRecordDefinitionsForName(snapshot, document, expandedRecordName);
+  if (definitions.length === 0) {
+    return undefined;
+  }
+
+  const markdown = new vscode.MarkdownString();
+  markdown.isTrusted = true;
+  markdown.appendMarkdown(`**Record:** \`${escapeInlineCode(expandedRecordName)}\``);
+  if (expandedRecordName !== trimmedLine) {
+    markdown.appendMarkdown(
+      `\n\nPV List entry: \`${escapeInlineCode(trimmedLine)}\``,
+    );
+  }
+
+  const displayedDefinitions = definitions.slice(0, 3);
+  for (const definition of displayedDefinitions) {
+    const location = `${definition.relativePath || definition.absolutePath}:${definition.line}`;
+    markdown.appendMarkdown("\n\n---\n\n");
+    markdown.appendMarkdown(
+      `Type: \`${escapeInlineCode(definition.recordType || "unknown")}\``,
+    );
+    if (definition.absolutePath) {
+      markdown.appendMarkdown(
+        `\n\nLocation: ${createRecordLocationLink(definition, location)}`,
+      );
+    } else {
+      markdown.appendMarkdown(`\n\nLocation: \`${escapeInlineCode(location)}\``);
+    }
+    markdown.appendMarkdown("\n\nPreview:");
+    markdown.appendCodeblock(
+      definition.preview || `record(${definition.recordType}, "${definition.name}")`,
+      "db",
+    );
+  }
+
+  if (definitions.length > displayedDefinitions.length) {
+    markdown.appendMarkdown(
+      `\n\n${definitions.length - displayedDefinitions.length} more matching record definitions omitted.`,
+    );
+  }
+
+  return new vscode.Hover(
+    markdown,
+    new vscode.Range(
+      new vscode.Position(position.line, trimmedStart),
+      new vscode.Position(position.line, trimmedEnd),
+    ),
+  );
+}
+
 function getStreamProtocolFileHover(snapshot, document, position) {
   const fieldDeclaration = getRecordScopedFieldDeclarationAtPosition(
     snapshot,
@@ -3664,16 +3887,16 @@ function getSubstitutionTemplateHover(snapshot, document, position) {
     return undefined;
   }
 
-  const absolutePath = resolveSubstitutionTemplateAbsolutePathForDocument(
+  const absolutePaths = resolveSubstitutionTemplateAbsolutePathsForDocument(
     snapshot,
     document,
     reference.templatePath,
   );
-  if (!absolutePath) {
+  if (absolutePaths.length === 0) {
     return undefined;
   }
 
-  return createSubstitutionTemplateHover(document, reference, absolutePath);
+  return createSubstitutionTemplateHover(document, reference, absolutePaths);
 }
 
 function getStartupDbpfArgumentAtPosition(document, position) {
@@ -3723,18 +3946,37 @@ function createStartupLoadFileHover(document, statement, resolvedFile) {
   );
 }
 
-function createSubstitutionTemplateHover(document, reference, absolutePath) {
-  const templateText = readTextFile(absolutePath);
+function createSubstitutionTemplateHover(document, reference, absolutePaths) {
   const markdown = new vscode.MarkdownString();
   markdown.isTrusted = true;
-  markdown.appendMarkdown("**EPICS database/template file**");
 
-  if (templateText === undefined) {
-    markdown.appendMarkdown(
-      `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
-    );
+  if (absolutePaths.length === 1) {
+    const absolutePath = absolutePaths[0];
+    const templateText = readTextFile(absolutePath);
+    markdown.appendMarkdown("**EPICS database/template file**");
+
+    if (templateText === undefined) {
+      markdown.appendMarkdown(
+        `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+      );
+    } else {
+      appendDatabaseFileHoverSummary(markdown, absolutePath, templateText);
+    }
   } else {
-    appendDatabaseFileHoverSummary(markdown, absolutePath, templateText);
+    markdown.appendMarkdown("**EPICS database/template file candidates**");
+    markdown.appendMarkdown(`\n\nMatches: \`${absolutePaths.length}\``);
+
+    for (const [index, absolutePath] of absolutePaths.entries()) {
+      const templateText = readTextFile(absolutePath);
+      markdown.appendMarkdown(`\n\n---\n\n**Candidate ${index + 1}**`);
+      if (templateText === undefined) {
+        markdown.appendMarkdown(
+          `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+        );
+      } else {
+        appendDatabaseFileHoverSummary(markdown, absolutePath, templateText);
+      }
+    }
   }
 
   return new vscode.Hover(
@@ -3894,37 +4136,66 @@ function getVariableHover(snapshot, document, position) {
     const statement = getStartupStatementAtPosition(document, position);
     const untilOffset = statement ? statement.start : document.offsetAt(position);
     const state = createStartupExecutionState(snapshot, document, untilOffset);
-    const rawValue =
+    const resolvedValue =
       state.envVariables.get(reference.variableName) ||
       process.env[reference.variableName];
-    if (!rawValue) {
+    if (!resolvedValue) {
       return undefined;
     }
-
-    const resolvedValue = expandStartupValue(rawValue, state.envVariables);
 
     const absolutePath = computeAbsoluteVariablePath(
       resolvedValue,
       state.currentDirectory || path.dirname(document.uri.fsPath),
     );
-    return createVariableHover(reference, resolvedValue, absolutePath);
+    return createVariableHover(
+      reference,
+      resolvedValue,
+      absolutePath,
+      state.envVariableSources?.get(reference.variableName),
+    );
   }
 
   return undefined;
 }
 
-function createVariableHover(reference, resolvedValue, absolutePath) {
-  const lines = [
-    `**${reference.variableName}**`,
-    "",
-    `Resolved value: \`${resolvedValue}\``,
-  ];
+function createVariableHover(reference, resolvedValue, absolutePath, sourceInfo) {
+  const markdown = new vscode.MarkdownString();
+  markdown.isTrusted = true;
+  markdown.appendMarkdown(`**${escapeInlineCode(reference.variableName)}**`);
+  markdown.appendMarkdown(`\n\nResolved value: \`${escapeInlineCode(resolvedValue)}\``);
 
   if (absolutePath && absolutePath !== resolvedValue) {
-    lines.push("", `Absolute path: \`${absolutePath}\``);
+    markdown.appendMarkdown(`\n\nAbsolute path: \`${escapeInlineCode(absolutePath)}\``);
   }
 
-  return new vscode.Hover(lines.join("\n"), reference.range);
+  if (sourceInfo?.sourcePath) {
+    const linkLabel = sourceInfo.line
+      ? `${sourceInfo.sourcePath}:${sourceInfo.line}`
+      : sourceInfo.sourcePath;
+    markdown.appendMarkdown(
+      `\n\nDefined in: ${
+        sourceInfo.line
+          ? createRecordLocationLink(
+            {
+              absolutePath: sourceInfo.sourcePath,
+              line: sourceInfo.line,
+            },
+            linkLabel,
+          )
+          : createProtocolFileLink(sourceInfo.sourcePath, linkLabel)
+      }`,
+    );
+    if (sourceInfo.sourceKind) {
+      markdown.appendMarkdown(`\n\nSource: \`${escapeInlineCode(sourceInfo.sourceKind)}\``);
+    }
+    if (sourceInfo.rawValue !== undefined) {
+      markdown.appendMarkdown(
+        `\n\nAssigned value: \`${escapeInlineCode(sourceInfo.rawValue)}\``,
+      );
+    }
+  }
+
+  return new vscode.Hover(markdown, reference.range);
 }
 
 function createLinkedRecordHover(
@@ -4291,6 +4562,103 @@ function normalizeLinkedRecordCandidate(candidate) {
     .replace(/[),;]+$/, "");
 }
 
+function resolvePvlistHoverRecordName(documentText, rawLine) {
+  const expandedLine = expandPvlistHoverValue(
+    rawLine,
+    extractPvlistHoverMacroDefinitions(documentText),
+    new Set(),
+  );
+  if (!expandedLine) {
+    return undefined;
+  }
+
+  const channelText = stripRuntimeProtocolPrefix(expandedLine.trim());
+  for (const candidate of extractLinkedRecordCandidates(channelText)) {
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function extractPvlistHoverMacroDefinitions(text) {
+  const macroDefinitions = new Map();
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const trimmedLine = String(rawLine || "").trim();
+    if (!trimmedLine || trimmedLine.startsWith("#")) {
+      continue;
+    }
+
+    const macroMatch = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!macroMatch) {
+      continue;
+    }
+
+    const macroName = macroMatch[1];
+    if (!macroDefinitions.has(macroName)) {
+      macroDefinitions.set(macroName, macroMatch[2] || "");
+    }
+  }
+  return macroDefinitions;
+}
+
+function expandPvlistHoverValue(text, macroDefinitions, stack) {
+  let unresolved = false;
+  const expanded = String(text || "").replace(
+    /\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}/g,
+    (match, parenName, defaultValue, braceName) => {
+      const macroName = parenName || braceName;
+      const resolved = resolvePvlistHoverMacroValue(
+        macroName,
+        defaultValue,
+        macroDefinitions,
+        stack,
+      );
+      if (resolved === undefined) {
+        unresolved = true;
+        return "";
+      }
+      return resolved;
+    },
+  );
+  return unresolved ? undefined : expanded;
+}
+
+function resolvePvlistHoverMacroValue(
+  macroName,
+  defaultValue,
+  macroDefinitions,
+  stack,
+) {
+  if (stack.has(macroName)) {
+    return undefined;
+  }
+
+  if (!macroDefinitions.has(macroName)) {
+    return defaultValue;
+  }
+
+  const nextStack = new Set(stack);
+  nextStack.add(macroName);
+  return expandPvlistHoverValue(
+    macroDefinitions.get(macroName),
+    macroDefinitions,
+    nextStack,
+  );
+}
+
+function stripRuntimeProtocolPrefix(value) {
+  const text = String(value || "");
+  if (/^pva:\/\//i.test(text)) {
+    return text.replace(/^pva:\/\//i, "");
+  }
+  if (/^ca:\/\//i.test(text)) {
+    return text.replace(/^ca:\/\//i, "");
+  }
+  return text;
+}
+
 function getRecordDefinitionsForName(snapshot, document, recordName) {
   if (!recordName) {
     return [];
@@ -4302,6 +4670,19 @@ function getRecordDefinitionsForName(snapshot, document, recordName) {
     document?.uri?.scheme === "file"
       ? normalizeFsPath(document.uri.fsPath)
       : undefined;
+  const addDefinition = (definition) => {
+    if (!definition?.absolutePath) {
+      return;
+    }
+    const key = `${definition.absolutePath}:${definition.line}:${definition.name}`;
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    definitions.push(definition);
+  };
+
   const currentDefinitions = createRecordDefinitions(
     document.uri,
     document.getText(),
@@ -4311,13 +4692,19 @@ function getRecordDefinitionsForName(snapshot, document, recordName) {
   );
 
   for (const definition of currentDefinitions) {
-    const key = `${definition.absolutePath}:${definition.line}:${definition.name}`;
-    if (seen.has(key)) {
+    addDefinition(definition);
+  }
+
+  for (const definition of collectRecordDefinitionsFromSearchPaths(
+    snapshot,
+    document,
+    recordName,
+  )) {
+    if (currentPath && definition.absolutePath === currentPath) {
       continue;
     }
 
-    seen.add(key);
-    definitions.push(definition);
+    addDefinition(definition);
   }
 
   for (const definition of snapshot.recordDefinitionsByName.get(recordName) || []) {
@@ -4325,16 +4712,120 @@ function getRecordDefinitionsForName(snapshot, document, recordName) {
       continue;
     }
 
-    const key = `${definition.absolutePath}:${definition.line}:${definition.name}`;
-    if (seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    definitions.push(definition);
+    addDefinition(definition);
   }
 
   return definitions;
+}
+
+function collectRecordDefinitionsFromSearchPaths(snapshot, document, recordName) {
+  if (!document?.uri || document.uri.scheme !== "file" || !recordName) {
+    return [];
+  }
+
+  const searchDirectories = [];
+  const seenDirectories = new Set();
+  const addDirectory = (directoryPath, recursive) => {
+    const normalizedPath = normalizeFsPath(directoryPath);
+    if (!normalizedPath || seenDirectories.has(`${normalizedPath}:${recursive ? 1 : 0}`)) {
+      return;
+    }
+    if (!fs.existsSync(normalizedPath)) {
+      return;
+    }
+
+    let stats;
+    try {
+      stats = fs.statSync(normalizedPath);
+    } catch (error) {
+      return;
+    }
+
+    if (!stats.isDirectory()) {
+      return;
+    }
+
+    seenDirectories.add(`${normalizedPath}:${recursive ? 1 : 0}`);
+    searchDirectories.push({ directoryPath: normalizedPath, recursive });
+  };
+
+  addDirectory(path.dirname(document.uri.fsPath), false);
+
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
+  if (project?.rootPath) {
+    addDirectory(path.join(project.rootPath, "db"), true);
+    addDirectory(path.join(project.rootPath, "Db"), true);
+
+    for (const releaseRoot of resolveReleaseModuleRoots(
+      project.rootPath,
+      project.releaseVariables,
+    )) {
+      addDirectory(path.join(releaseRoot.rootPath, "db"), true);
+      addDirectory(path.join(releaseRoot.rootPath, "Db"), true);
+    }
+  }
+
+  const definitions = [];
+  for (const searchDirectory of searchDirectories) {
+    for (const filePath of collectDatabaseFilePaths(searchDirectory.directoryPath, searchDirectory.recursive)) {
+      if (normalizeFsPath(filePath) === normalizeFsPath(document.uri.fsPath)) {
+        continue;
+      }
+
+      const text = readTextFile(filePath);
+      if (text === undefined) {
+        continue;
+      }
+
+      const matchingDeclarations = extractRecordDeclarations(text).filter(
+        (declaration) => declaration.name === recordName,
+      );
+      if (!matchingDeclarations.length) {
+        continue;
+      }
+
+      definitions.push(
+        ...createRecordDefinitions(vscode.Uri.file(filePath), text, matchingDeclarations),
+      );
+    }
+  }
+
+  return definitions;
+}
+
+function collectDatabaseFilePaths(directoryPath, recursive) {
+  const normalizedDirectory = normalizeFsPath(directoryPath);
+  if (!normalizedDirectory || !fs.existsSync(normalizedDirectory)) {
+    return [];
+  }
+
+  const results = [];
+  const visitDirectory = (currentDirectory) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDirectory, { withFileTypes: true });
+    } catch (error) {
+      return;
+    }
+
+    entries.sort((left, right) => compareLabels(left.name, right.name));
+    for (const entry of entries) {
+      const entryPath = normalizeFsPath(path.join(currentDirectory, entry.name));
+      if (entry.isDirectory()) {
+        if (recursive) {
+          visitDirectory(entryPath);
+        }
+        continue;
+      }
+
+      if (DATABASE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        results.push(entryPath);
+      }
+    }
+  };
+
+  visitDirectory(normalizedDirectory);
+  return results;
 }
 
 function getVariableReferenceAtPosition(document, position) {
@@ -4760,8 +5251,20 @@ function resolveSubstitutionTemplateAbsolutePathForDocument(
   document,
   templatePath,
 ) {
+  return resolveSubstitutionTemplateAbsolutePathsForDocument(
+    snapshot,
+    document,
+    templatePath,
+  )[0];
+}
+
+function resolveSubstitutionTemplateAbsolutePathsForDocument(
+  snapshot,
+  document,
+  templatePath,
+) {
   if (!document?.uri || document.uri.scheme !== "file" || !templatePath) {
-    return undefined;
+    return [];
   }
 
   const project = findProjectForUri(snapshot.projectModel, document.uri);
@@ -4771,14 +5274,45 @@ function resolveSubstitutionTemplateAbsolutePathForDocument(
     process.env,
   ]);
   if (!expandedTemplatePath) {
-    return undefined;
+    return [];
   }
 
-  const localPath = normalizeFsPath(
+  const absolutePaths = [];
+  const seen = new Set();
+  const addCandidatePath = (candidatePath) => {
+    if (!candidatePath) {
+      return;
+    }
+
+    const normalizedPath = normalizeFsPath(candidatePath);
+    if (seen.has(normalizedPath)) {
+      return;
+    }
+
+    try {
+      const stats = fs.statSync(normalizedPath);
+      if (!stats.isFile()) {
+        return;
+      }
+    } catch (error) {
+      return;
+    }
+
+    seen.add(normalizedPath);
+    absolutePaths.push(normalizedPath);
+  };
+
+  addCandidatePath(
     path.resolve(path.dirname(document.uri.fsPath), expandedTemplatePath),
   );
-  if (readTextFile(localPath) !== undefined) {
-    return localPath;
+
+  if (project?.rootPath) {
+    for (const candidatePath of getReleaseTemplateCandidatePaths(
+      project.rootPath,
+      expandedTemplatePath,
+    )) {
+      addCandidatePath(candidatePath);
+    }
   }
 
   for (const releaseRoot of getProjectReleaseSearchRoots(project)) {
@@ -4786,13 +5320,11 @@ function resolveSubstitutionTemplateAbsolutePathForDocument(
       releaseRoot,
       expandedTemplatePath,
     )) {
-      if (readTextFile(candidatePath) !== undefined) {
-        return candidatePath;
-      }
+      addCandidatePath(candidatePath);
     }
   }
 
-  return undefined;
+  return absolutePaths;
 }
 
 function getProjectReleaseSearchRoots(project) {
@@ -5359,6 +5891,97 @@ function getFilesystemPathEntries(startupState, context) {
   }
 
   return items;
+}
+
+function getDbLoadRecordsFilesystemPathItems(startupState, context) {
+  if (!startupState?.currentDirectory) {
+    return [];
+  }
+
+  const allowedExtensions = getAllowedExtensionsForFileContext("dbLoadRecords");
+  const currentDirectory = normalizeFsPath(startupState.currentDirectory);
+  const dbDirectory = normalizeFsPath(path.join(currentDirectory, "db"));
+  const partialText = String(context?.partial || "");
+  const normalizedPartial = normalizePath(partialText);
+  const namePrefix = normalizedPartial.includes("/")
+    ? path.posix.basename(normalizedPartial)
+    : normalizedPartial;
+  const items = [];
+  const seenInsertPaths = new Set();
+
+  const collectFiles = (directoryPath, locationLabel) => {
+    if (!directoryPath || !fs.existsSync(directoryPath)) {
+      return;
+    }
+
+    let stats;
+    try {
+      stats = fs.statSync(directoryPath);
+    } catch (error) {
+      return;
+    }
+    if (!stats.isDirectory()) {
+      return;
+    }
+
+    let directoryEntries;
+    try {
+      directoryEntries = fs.readdirSync(directoryPath, { withFileTypes: true });
+    } catch (error) {
+      return;
+    }
+
+    directoryEntries.sort((left, right) => compareLabels(left.name, right.name));
+    for (const directoryEntry of directoryEntries) {
+      if (!directoryEntry.isFile()) {
+        continue;
+      }
+
+      const extension = path.extname(directoryEntry.name).toLowerCase();
+      if (!allowedExtensions.has(extension)) {
+        continue;
+      }
+
+      if (namePrefix && !matchesCompletionQuery(directoryEntry.name, namePrefix)) {
+        continue;
+      }
+
+      const absoluteEntryPath = normalizeFsPath(path.join(directoryPath, directoryEntry.name));
+      const insertPath = normalizePath(
+        getRelativePathFromBaseDirectory(currentDirectory, absoluteEntryPath),
+      );
+      if (!insertPath || seenInsertPaths.has(insertPath)) {
+        continue;
+      }
+      seenInsertPaths.add(insertPath);
+
+      items.push({
+        label: directoryEntry.name,
+        insertPath,
+        absolutePath: absoluteEntryPath,
+        detail: locationLabel,
+        documentation: `File from ${locationLabel}`,
+      });
+    }
+  };
+
+  collectFiles(currentDirectory, currentDirectory);
+  collectFiles(dbDirectory, dbDirectory);
+
+  return items.map((entry) => {
+    const item = new vscode.CompletionItem(
+      entry.label,
+      vscode.CompletionItemKind.File,
+    );
+    item.range = context.range;
+    item.insertText = entry.insertPath;
+    item.detail = entry.detail;
+    item.documentation = entry.documentation;
+    item.filterText = buildFilterText(entry.label);
+    item.sortText = `0-${entry.label}`;
+    applyDbLoadRecordsPathCompletion(item, context, entry.absolutePath);
+    return item;
+  });
 }
 
 function documentPathKindUsesFilesystem(fileKind) {
@@ -6233,7 +6856,7 @@ function createStartupLoadMacroDiagnostics(document, statement, resolvedFile) {
     return [];
   }
 
-  const providedMacroNames = new Set(extractNamedAssignments(statement.macros).keys());
+  const providedMacroNames = extractAssignedMacroNames(statement.macros);
   const missingMacroNames = requiredMacroNames.filter(
     (macroName) => !providedMacroNames.has(macroName),
   );
@@ -6602,6 +7225,44 @@ async function generateDatabaseTocInActiveEditor() {
   });
 }
 
+async function formatDatabaseFileInActiveEditor() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isDatabaseDocument(editor.document)) {
+    return;
+  }
+
+  await vscode.commands.executeCommand("editor.action.formatDocument");
+}
+
+async function formatActiveEpicsFileInActiveEditor() {
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  if (!document || (!isDatabaseDocument(document) && !isSubstitutionsDocument(document))) {
+    return;
+  }
+
+  await vscode.commands.executeCommand("editor.action.formatDocument");
+}
+
+async function copyAllRecordNamesInActiveEditor() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isDatabaseDocument(editor.document)) {
+    return;
+  }
+
+  const recordNames = extractUniqueRecordNames(editor.document.getText());
+  if (recordNames.length === 0) {
+    vscode.window.showWarningMessage(
+      "No EPICS record names were found in the active database file.",
+    );
+    return;
+  }
+
+  await vscode.env.clipboard.writeText(
+    buildRecordNamesClipboardText(recordNames, getDocumentEol(editor.document)),
+  );
+}
+
 async function copyDatabaseAsMonitorFileInActiveEditor() {
   const editor = vscode.window.activeTextEditor;
   if (!editor || !isDatabaseDocument(editor.document)) {
@@ -6632,14 +7293,27 @@ async function copyDatabaseAsMonitorFileInActiveEditor() {
   );
 }
 
-async function exportDatabaseToExcelInActiveEditor() {
+async function exportDatabaseToExcelInActiveEditor(workspaceIndex) {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || !isDatabaseDocument(editor.document)) {
+  if (!editor || (!isDatabaseDocument(editor.document) && !isSubstitutionsDocument(editor.document))) {
     return;
   }
 
   const document = editor.document;
-  const workbookBuffer = buildDatabaseWorkbookBuffer(document.getText());
+  let sourceText = document.getText();
+  if (isSubstitutionsDocument(document)) {
+    const expandedSource = await resolveExpandedSubstitutionsDatabaseSource(
+      workspaceIndex,
+      document,
+      "export Excel",
+    );
+    if (!expandedSource) {
+      return;
+    }
+    sourceText = expandedSource.text;
+  }
+
+  const workbookBuffer = buildDatabaseWorkbookBuffer(sourceText);
   const sourcePath = document.uri.scheme === "file" ? document.uri.fsPath : "database";
   const defaultUri = document.uri.scheme === "file"
     ? vscode.Uri.file(
@@ -6658,9 +7332,15 @@ async function exportDatabaseToExcelInActiveEditor() {
   }
 
   await vscode.workspace.fs.writeFile(targetUri, workbookBuffer);
-  vscode.window.showInformationMessage(
-    `Exported ${path.basename(sourcePath)} to ${path.basename(targetUri.fsPath || targetUri.path)}.`,
+  const targetLabel = path.basename(targetUri.fsPath || targetUri.path || "database.xlsx");
+  const openChoice = `Open ${targetLabel}`;
+  const selectedChoice = await vscode.window.showInformationMessage(
+    `Exported ${path.basename(sourcePath)} to ${targetLabel}.`,
+    openChoice,
   );
+  if (selectedChoice === openChoice) {
+    await vscode.env.openExternal(targetUri);
+  }
 }
 
 async function importDatabaseFromExcelResource(resourceUri) {
@@ -6672,6 +7352,12 @@ async function importDatabaseFromExcelResource(resourceUri) {
         : resourceUri?.fsPath
           ? vscode.Uri.file(resourceUri.fsPath)
           : undefined;
+  if (
+    targetUri &&
+    path.extname(targetUri.fsPath || targetUri.path).toLowerCase() !== ".xlsx"
+  ) {
+    targetUri = undefined;
+  }
   if (!targetUri) {
     const selectedUris = await vscode.window.showOpenDialog({
       canSelectFiles: true,
@@ -6679,7 +7365,7 @@ async function importDatabaseFromExcelResource(resourceUri) {
       filters: {
         "Excel Workbook": ["xlsx"],
       },
-      openLabel: "Import as EPICS Database",
+      openLabel: "Import Excel as EPICS DB",
     });
     targetUri = selectedUris?.[0];
   }
@@ -6793,6 +7479,28 @@ async function openImportedDatabaseTabs(importedSheets) {
   }
 }
 
+async function updateEpicsProjectContext() {
+  let isEpicsProject = false;
+  if (vscode.workspace.workspaceFolders?.length) {
+    const releaseUris = await vscode.workspace.findFiles(
+      "**/configure/RELEASE",
+      INDEX_EXCLUDE_GLOB,
+      1,
+    );
+    if (releaseUris.length > 0) {
+      isEpicsProject = true;
+    } else {
+      const releaseLocalUris = await vscode.workspace.findFiles(
+        "**/configure/RELEASE.local",
+        INDEX_EXCLUDE_GLOB,
+        1,
+      );
+      isEpicsProject = releaseLocalUris.length > 0;
+    }
+  }
+  await vscode.commands.executeCommand("setContext", EPICS_PROJECT_CONTEXT_KEY, isEpicsProject);
+}
+
 async function openUntitledImportedDatabaseDocument(fileName, text, preserveFocus) {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.tmpdir();
   const untitledUri = vscode.Uri.file(path.join(workspaceRoot, fileName)).with({
@@ -6810,13 +7518,17 @@ async function openUntitledImportedDatabaseDocument(fileName, text, preserveFocu
 }
 
 async function openInProbeFromActiveEditor(workspaceIndex) {
-  const target = await resolveProbeTargetAtActiveEditor(workspaceIndex);
+  const editor = vscode.window.activeTextEditor;
+  const document = editor?.document;
+  const target = isSubstitutionsDocument(document)
+    ? undefined
+    : await resolveProbeTargetAtActiveEditor(workspaceIndex);
   await vscode.commands.executeCommand(OPEN_PROBE_WIDGET_COMMAND, {
     recordName: target?.recordName || "",
   });
 }
 
-async function openInPvlistFromActiveEditor() {
+async function openInPvlistFromActiveEditor(workspaceIndex) {
   const editor = vscode.window.activeTextEditor;
   const document = editor?.document;
   if (!document) {
@@ -6834,6 +7546,35 @@ async function openInPvlistFromActiveEditor() {
     return;
   }
 
+  if (isSubstitutionsDocument(document)) {
+    const expandedSource = await resolveExpandedSubstitutionsDatabaseSource(
+      workspaceIndex,
+      document,
+      "open PV List",
+    );
+    if (!expandedSource) {
+      return;
+    }
+
+    await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
+      sourceKind: "database",
+      sourceLabel,
+      sourceDocumentUri: document.uri.toString(),
+      sourceText: expandedSource.text,
+    });
+    return;
+  }
+
+  if (isStartupDocument(document)) {
+    await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
+      sourceKind: "pvlist",
+      sourceLabel,
+      sourceDocumentUri: document.uri.toString(),
+      sourceText: "",
+    });
+    return;
+  }
+
   if (isPvlistDocument(document)) {
     await vscode.commands.executeCommand(OPEN_PVLIST_WIDGET_COMMAND, {
       sourceKind: "pvlist",
@@ -6847,10 +7588,16 @@ async function openInPvlistFromActiveEditor() {
 async function openInMonitorFromActiveEditor(workspaceIndex) {
   const editor = vscode.window.activeTextEditor;
   const document = editor?.document;
-  const initialChannel = await resolveMonitorTargetAtActiveEditor(workspaceIndex);
+  let initialChannels = [];
+  if (isSubstitutionsDocument(document)) {
+    initialChannels = [];
+  } else {
+    const initialChannel = await resolveMonitorTargetAtActiveEditor(workspaceIndex);
+    initialChannels = initialChannel ? [initialChannel] : [];
+  }
   await vscode.commands.executeCommand(OPEN_MONITOR_WIDGET_COMMAND, {
     sourceLabel: getDocumentDisplayLabel(document),
-    initialChannels: initialChannel ? [initialChannel] : [],
+    initialChannels,
   });
 }
 
@@ -7869,10 +8616,9 @@ async function resolveProbeTargetAtActiveEditor(workspaceIndex) {
       document,
       position,
     );
-    const recordName =
-      extractLinkedRecordCandidates(argument.value).find((candidate) =>
-        loadedDefinitionsByName.has(candidate),
-      ) || extractLinkedRecordCandidates(argument.value)[0];
+    const recordName = extractLinkedRecordCandidates(argument.value).find((candidate) =>
+      loadedDefinitionsByName.has(candidate),
+    );
     if (!recordName) {
       return undefined;
     }
@@ -7882,6 +8628,11 @@ async function resolveProbeTargetAtActiveEditor(workspaceIndex) {
       recordName,
       recordType: definitions[0]?.recordType,
     };
+  }
+
+  if (isSubstitutionsDocument(document)) {
+    const snapshot = await workspaceIndex.getSnapshot();
+    return resolveProbeTargetFromSubstitutionsDocument(snapshot, document, position);
   }
 
   return undefined;
@@ -7918,6 +8669,103 @@ function expandProbeRecordNameFromToc(recordName, macroAssignments) {
       return defaultValue !== undefined ? defaultValue : match;
     },
   );
+}
+
+function resolveProbeTargetFromSubstitutionsDocument(snapshot, document, position) {
+  if (!document?.uri || document.uri.scheme !== "file") {
+    return undefined;
+  }
+
+  const text = document.getText();
+  const offset = document.offsetAt(position);
+  let globalMacros = new Map();
+  let fallbackTarget;
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
+  const releaseVariables = project ? project.releaseVariables : new Map();
+
+  for (const block of extractSubstitutionBlocksWithRanges(text)) {
+    if (block.kind === "global") {
+      globalMacros = mergeMacroMaps(globalMacros, extractNamedAssignments(block.body));
+      continue;
+    }
+
+    if (block.kind !== "file" || !block.templatePath) {
+      continue;
+    }
+
+    const templateAbsolutePath = resolveSubstitutionTemplateAbsolutePathForDocument(
+      snapshot,
+      document,
+      block.templatePath,
+    );
+    if (!templateAbsolutePath) {
+      continue;
+    }
+
+    const templateText = readTextFile(templateAbsolutePath);
+    if (templateText === undefined) {
+      continue;
+    }
+    const templateTextWithoutToc = removeDatabaseTocBlock(templateText);
+    const parsedRows = parseSubstitutionFileBlockRowsDetailed(block.body, block.bodyStart);
+    const candidateRows = parsedRows.rows.length > 0
+      ? parsedRows.rows.map((row) => ({
+        rangeStart: row.rangeStart,
+        rangeEnd: row.rangeEnd,
+        macros: mergeMacroMaps(globalMacros, row.assignments),
+      }))
+      : [{
+        rangeStart: block.bodyStart,
+        rangeEnd: block.bodyEnd,
+        macros: new Map(globalMacros),
+      }];
+    if (!fallbackTarget && candidateRows.length > 0) {
+      const expandedFallbackText = normalizeTextEol(
+        expandEpicsValue(
+          templateTextWithoutToc,
+          [candidateRows[0].macros, releaseVariables, process.env],
+        ),
+        "\n",
+      ).trimEnd();
+      const fallbackDeclaration = extractRecordDeclarations(expandedFallbackText)[0];
+      if (fallbackDeclaration?.name) {
+        fallbackTarget = {
+          recordName: fallbackDeclaration.name,
+          recordType: fallbackDeclaration.recordType,
+        };
+      }
+    }
+    const matchingRow =
+      candidateRows.find((row) => offset >= row.rangeStart && offset <= row.rangeEnd) ||
+      (block.templatePathStart !== undefined &&
+      block.templatePathEnd !== undefined &&
+      offset >= block.templatePathStart &&
+      offset <= block.templatePathEnd
+        ? candidateRows[0]
+        : undefined);
+    if (!matchingRow) {
+      continue;
+    }
+
+    const expandedText = normalizeTextEol(
+      expandEpicsValue(
+        templateTextWithoutToc,
+        [matchingRow.macros, releaseVariables, process.env],
+      ),
+      "\n",
+    ).trimEnd();
+    const declaration = extractRecordDeclarations(expandedText)[0];
+    if (!declaration?.name) {
+      continue;
+    }
+
+    return {
+      recordName: declaration.name,
+      recordType: declaration.recordType,
+    };
+  }
+
+  return fallbackTarget;
 }
 
 function buildChannelGraphState(
@@ -8996,6 +9844,21 @@ function extractRecordNameMacroNames(recordNames) {
   return extractMacroNames(recordNames.join("\n")).sort(compareLabels);
 }
 
+function buildRecordNamesClipboardText(recordNames, eol = "\n") {
+  const macroNames = extractMacroNames(recordNames.join("\n"));
+  const lines = [];
+
+  if (macroNames.length > 0) {
+    for (const macroName of macroNames) {
+      lines.push(`${macroName} = `);
+    }
+    lines.push("");
+  }
+
+  lines.push(...recordNames);
+  return lines.join(eol);
+}
+
 async function copySubstitutionsAsExpandedDatabaseInActiveEditor(workspaceIndex) {
   const editor = vscode.window.activeTextEditor;
   if (!editor || !isSubstitutionsDocument(editor.document)) {
@@ -9030,6 +9893,45 @@ async function copySubstitutionsAsExpandedDatabaseInActiveEditor(workspaceIndex)
   await vscode.env.clipboard.writeText(expansion.text);
   const loadLabel = `${expansion.sectionCount} expansion${expansion.sectionCount === 1 ? "" : "s"}`;
   vscode.window.showInformationMessage(`Copied ${loadLabel} as expanded db text.`);
+}
+
+async function resolveExpandedSubstitutionsDatabaseSource(
+  workspaceIndex,
+  document,
+  actionLabel,
+) {
+  if (!document || !isSubstitutionsDocument(document)) {
+    return undefined;
+  }
+
+  const snapshot = await workspaceIndex.getSnapshot();
+  const diagnostics = createSubstitutionDiagnostics(document, snapshot);
+  if (diagnostics.length > 0) {
+    vscode.window.showErrorMessage(
+      `Cannot ${actionLabel} until the substitutions file errors are fixed.`,
+    );
+    return undefined;
+  }
+
+  const expansion = buildExpandedDatabaseFromSubstitutions(snapshot, document);
+  if (expansion.errors.length > 0) {
+    vscode.window.showErrorMessage(
+      `Cannot ${actionLabel}: ${expansion.errors[0]}`,
+    );
+    return undefined;
+  }
+
+  if (!expansion.text) {
+    vscode.window.showWarningMessage(
+      "No substitutions file loads were found in the active substitutions file.",
+    );
+    return undefined;
+  }
+
+  return {
+    text: expansion.text,
+    recordNames: extractUniqueRecordNames(expansion.text),
+  };
 }
 
 function buildExpandedDatabaseFromSubstitutions(snapshot, document) {
@@ -10097,10 +10999,223 @@ function resolveStartupPath(snapshot, document, load, state) {
   return undefined;
 }
 
-function createInitialStartupExecutionState(snapshot, document) {
+function loadStartupReleaseVariableData(snapshot, document) {
+  if (!document?.uri || document.uri.scheme !== "file") {
+    return {
+      values: new Map(),
+      sources: new Map(),
+    };
+  }
+
+  const rootPath = findStartupOwningRootPath(snapshot, document);
+  if (!rootPath) {
+    return {
+      values: new Map(),
+      sources: new Map(),
+    };
+  }
+
+  return loadReleaseVariablesWithSources(rootPath);
+}
+
+function findStartupOwningRootPath(snapshot, document) {
   const project = findProjectForUri(snapshot.projectModel, document.uri);
+  if (project?.rootPath) {
+    return normalizeFsPath(project.rootPath);
+  }
+
+  let currentDirectory = normalizeFsPath(path.dirname(document.uri.fsPath));
+  while (currentDirectory) {
+    const releasePath = normalizeFsPath(path.join(currentDirectory, "configure", "RELEASE"));
+    const releaseLocalPath = normalizeFsPath(path.join(currentDirectory, "configure", "RELEASE.local"));
+    if (isExistingFile(releasePath) || isExistingFile(releaseLocalPath)) {
+      return currentDirectory;
+    }
+
+    const parentDirectory = normalizeFsPath(path.dirname(currentDirectory));
+    if (!parentDirectory || parentDirectory === currentDirectory) {
+      break;
+    }
+    currentDirectory = parentDirectory;
+  }
+
+  return undefined;
+}
+
+function loadReleaseVariablesWithSources(rootPath) {
+  const rawValues = new Map([["TOP", normalizeFsPath(rootPath)]]);
+  const sources = new Map();
+  const visitedFiles = new Set();
+  const resolvedCache = new Map();
+  const releaseEntryPaths = [
+    normalizeFsPath(path.join(rootPath, "configure", "RELEASE")),
+    normalizeFsPath(path.join(rootPath, "configure", "RELEASE.local")),
+  ];
+
+  const normalizeResolvedReleaseValue = (value) => {
+    const normalizedValue = stripOptionalQuotes(String(value || "").trim());
+    if (!normalizedValue || normalizedValue.includes("$(") || normalizedValue.includes("${")) {
+      return normalizedValue;
+    }
+    const absolutePath = computeAbsoluteVariablePath(normalizedValue, rootPath);
+    return absolutePath || normalizedValue;
+  };
+
+  const resolveReleaseVariableValue = (variableName, stack = new Set()) => {
+    if (resolvedCache.has(variableName)) {
+      return resolvedCache.get(variableName);
+    }
+
+    if (stack.has(variableName)) {
+      return rawValues.get(variableName);
+    }
+
+    if (!rawValues.has(variableName)) {
+      return process.env[variableName];
+    }
+
+    stack.add(variableName);
+    const rawValue = String(rawValues.get(variableName) || "");
+    const expandedValue = rawValue.replace(
+      /\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)/g,
+      (match, parenthesizedName, parenthesizedDefault, bracedName, bracedDefault, bareName) => {
+        const nestedName = parenthesizedName || bracedName || bareName;
+        const defaultValue =
+          parenthesizedName !== undefined
+            ? parenthesizedDefault
+            : bracedName !== undefined
+              ? bracedDefault
+              : undefined;
+        const resolvedValue = resolveReleaseVariableValue(nestedName, new Set(stack));
+        if (resolvedValue !== undefined) {
+          return resolvedValue;
+        }
+        if (defaultValue !== undefined) {
+          return defaultValue;
+        }
+        return match;
+      },
+    );
+    stack.delete(variableName);
+
+    const normalizedValue = normalizeResolvedReleaseValue(expandedValue);
+    resolvedCache.set(variableName, normalizedValue);
+    return normalizedValue;
+  };
+
+  const expandReleaseInlineValue = (rawValue) => {
+    return String(rawValue || "").replace(
+      /\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)/g,
+      (match, parenthesizedName, parenthesizedDefault, bracedName, bracedDefault, bareName) => {
+        const variableName = parenthesizedName || bracedName || bareName;
+        const defaultValue =
+          parenthesizedName !== undefined
+            ? parenthesizedDefault
+            : bracedName !== undefined
+              ? bracedDefault
+              : undefined;
+        const resolvedValue = resolveReleaseVariableValue(variableName);
+        if (resolvedValue !== undefined) {
+          return resolvedValue;
+        }
+        if (defaultValue !== undefined) {
+          return defaultValue;
+        }
+        return match;
+      },
+    );
+  };
+
+  const loadReleaseFile = (filePath) => {
+    const normalizedPath = normalizeFsPath(filePath);
+    if (!normalizedPath || visitedFiles.has(normalizedPath) || !isExistingFile(normalizedPath)) {
+      return;
+    }
+
+    visitedFiles.add(normalizedPath);
+    const text = readTextFile(normalizedPath);
+    if (text === undefined) {
+      return;
+    }
+
+    const lines = text.replace(/\\\n/g, " ").split(/\r?\n/);
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      const rawLine = lines[lineIndex];
+      const line = stripMakeComments(rawLine).trim();
+      if (!line) {
+        continue;
+      }
+
+      const includeMatch = line.match(/^-?include\s+(.+)$/);
+      if (includeMatch) {
+        const includeEntries = splitMakeValue(includeMatch[1]);
+        for (const includeEntry of includeEntries) {
+          const expandedIncludeEntry = stripOptionalQuotes(expandReleaseInlineValue(includeEntry).trim());
+          if (!expandedIncludeEntry || expandedIncludeEntry.includes("$(") || expandedIncludeEntry.includes("${")) {
+            continue;
+          }
+          const includePath = normalizeFsPath(
+            path.isAbsolute(expandedIncludeEntry)
+              ? expandedIncludeEntry
+              : path.resolve(path.dirname(normalizedPath), expandedIncludeEntry),
+          );
+          loadReleaseFile(includePath);
+        }
+        continue;
+      }
+
+      const assignmentMatch = line.match(/^([A-Za-z0-9_.-]+)\s*(\+?=|:=|\?=)\s*(.*)$/);
+      if (!assignmentMatch) {
+        continue;
+      }
+
+      const variableName = assignmentMatch[1];
+      const operator = assignmentMatch[2];
+      const assignedValue = splitMakeValue(assignmentMatch[3]).join(" ");
+      if (operator === "?=" && rawValues.has(variableName)) {
+        continue;
+      }
+
+      if (operator === "+=" && rawValues.has(variableName)) {
+        rawValues.set(
+          variableName,
+          [String(rawValues.get(variableName) || "").trim(), assignedValue.trim()]
+            .filter(Boolean)
+            .join(" "),
+        );
+      } else {
+        rawValues.set(variableName, assignedValue);
+      }
+      sources.set(variableName, {
+        sourceKind: "RELEASE",
+        sourcePath: normalizedPath,
+        line: lineIndex + 1,
+        rawValue: assignedValue,
+      });
+      resolvedCache.clear();
+    }
+  };
+
+  for (const entryPath of releaseEntryPaths) {
+    loadReleaseFile(entryPath);
+  }
+
+  const values = new Map();
+  for (const variableName of rawValues.keys()) {
+    values.set(variableName, resolveReleaseVariableValue(variableName));
+  }
+
   return {
-    envVariables: new Map(project ? project.releaseVariables : []),
+    values,
+    sources,
+  };
+}
+
+function createInitialStartupExecutionState(snapshot, document) {
+  const startupReleaseData = loadStartupReleaseVariableData(snapshot, document);
+  return {
+    envVariables: new Map(startupReleaseData.values),
+    envVariableSources: new Map(startupReleaseData.sources),
     currentDirectory:
       document.uri.scheme === "file"
         ? normalizeFsPath(path.dirname(document.uri.fsPath))
@@ -10123,6 +11238,14 @@ function createStartupExecutionState(snapshot, document, untilOffset) {
   return state;
 }
 
+function setStartupEnvVariable(state, variableName, rawValue, sourceInfo) {
+  const resolvedValue = expandStartupValue(rawValue, state.envVariables);
+  state.envVariables.set(variableName, resolvedValue);
+  if (state.envVariableSources) {
+    state.envVariableSources.set(variableName, sourceInfo);
+  }
+}
+
 function applyStartupStatement(snapshot, document, statement, state) {
   switch (statement.kind) {
     case "include": {
@@ -10134,10 +11257,15 @@ function applyStartupStatement(snapshot, document, statement, state) {
     }
 
     case "envSet":
-      state.envVariables.set(
-        statement.name,
-        expandStartupValue(statement.value, state.envVariables),
-      );
+      setStartupEnvVariable(state, statement.name, statement.value, {
+        sourceKind: "startup",
+        sourcePath:
+          document?.uri?.scheme === "file"
+            ? normalizeFsPath(document.uri.fsPath)
+            : undefined,
+        line: statement.lineNumber,
+        rawValue: statement.value,
+      });
       break;
 
     case "cd": {
@@ -10183,10 +11311,14 @@ function applyIncludedStartupState(absolutePath, state) {
       }
 
       case "envSet":
-        state.envVariables.set(
-          statement.name,
-          expandStartupValue(statement.value, state.envVariables),
-        );
+        setStartupEnvVariable(state, statement.name, statement.value, {
+          sourceKind: /^envPaths(?:\..+)?$/i.test(path.basename(normalizedPath))
+            ? "envPaths"
+            : "startup include",
+          sourcePath: normalizedPath,
+          line: statement.lineNumber,
+          rawValue: statement.value,
+        });
         break;
 
       case "cd": {
@@ -10741,6 +11873,43 @@ function extractNamedAssignments(text) {
   return extractNamedAssignmentsWithRanges(text).assignments;
 }
 
+function extractAssignedMacroNames(text) {
+  if (!text) {
+    return new Set();
+  }
+
+  const names = new Set();
+  let segmentStart = 0;
+  let escaped = false;
+
+  const flushSegment = (segmentEnd) => {
+    const segment = text.slice(segmentStart, segmentEnd);
+    const match = segment.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (match?.[1]) {
+      names.add(match[1]);
+    }
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === ",") {
+      flushSegment(index);
+      segmentStart = index + 1;
+    }
+  }
+
+  flushSegment(text.length);
+  return names;
+}
+
 function createPatternMacroAssignments(columns, valueSegment) {
   const assignments = new Map();
   const values = Array.isArray(valueSegment)
@@ -10790,10 +11959,13 @@ function stripOptionalQuotes(value) {
 function extractStartupStatements(text) {
   const statements = [];
   let offset = 0;
+  let lineNumber = 1;
 
   for (const line of text.split(/\r?\n/)) {
     const lineOffset = offset;
+    const currentLineNumber = lineNumber;
     offset += line.length + 1;
+    lineNumber += 1;
 
     if (/^\s*#/.test(line) || !line.trim()) {
       continue;
@@ -10810,6 +11982,7 @@ function extractStartupStatements(text) {
         pathStart,
         pathEnd: pathStart + pathValue.length,
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
       continue;
     }
@@ -10823,6 +11996,7 @@ function extractStartupStatements(text) {
         name: match[1],
         value: match[2],
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
       continue;
     }
@@ -10838,6 +12012,7 @@ function extractStartupStatements(text) {
         pathStart,
         pathEnd: pathStart + pathValue.length,
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
       continue;
     }
@@ -10853,6 +12028,7 @@ function extractStartupStatements(text) {
         pathStart,
         pathEnd: pathStart + pathValue.length,
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
       continue;
     }
@@ -10871,6 +12047,7 @@ function extractStartupStatements(text) {
         pathStart,
         pathEnd: pathStart + pathValue.length,
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
       continue;
     }
@@ -10886,6 +12063,7 @@ function extractStartupStatements(text) {
         pathStart,
         pathEnd: pathStart + pathValue.length,
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
       continue;
     }
@@ -10903,6 +12081,7 @@ function extractStartupStatements(text) {
         nameStart,
         nameEnd: nameStart + functionName.length,
         start: lineOffset,
+        lineNumber: currentLineNumber,
       });
     }
   }
@@ -11236,13 +12415,11 @@ function getLocalMakefileNavigationTarget(document, reference) {
     return { absolutePath: directCandidate };
   }
 
-  if (reference.kind === "dbFile" && reference.name.toLowerCase().endsWith(".db")) {
-    const substitutionsCandidate = normalizeFsPath(
-      path.resolve(
-        makefileDirectory,
-        `${reference.name.slice(0, -".db".length)}.substitutions`,
-      ),
-    );
+  if (reference.kind === "dbFile") {
+    const substitutionsRelativePath = toSubstitutionsSiblingPath(reference.name);
+    const substitutionsCandidate = substitutionsRelativePath
+      ? normalizeFsPath(path.resolve(makefileDirectory, substitutionsRelativePath))
+      : undefined;
     if (isExistingFile(substitutionsCandidate)) {
       return { absolutePath: substitutionsCandidate };
     }
@@ -11256,6 +12433,15 @@ function getLocalMakefileNavigationTarget(document, reference) {
   }
 
   return undefined;
+}
+
+function toSubstitutionsSiblingPath(filePath) {
+  const parsedPath = path.posix.parse(String(filePath || "").replace(/\\/g, "/"));
+  if (!DATABASE_EXTENSIONS.has(parsedPath.ext.toLowerCase())) {
+    return undefined;
+  }
+
+  return path.posix.join(parsedPath.dir, `${parsedPath.name}.substitutions`);
 }
 
 function getMakefileDatabaseReferenceTarget(snapshot, document, reference) {

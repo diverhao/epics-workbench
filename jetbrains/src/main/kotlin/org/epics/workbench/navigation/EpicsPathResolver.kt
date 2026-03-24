@@ -47,6 +47,83 @@ private data class StartupExecutionState(
 )
 
 object EpicsPathResolver {
+  internal fun collectStartupDbLoadRecordsCompletionCandidates(
+    project: Project,
+    hostFile: VirtualFile,
+    text: String,
+    untilOffset: Int,
+    rawPartial: String,
+  ): List<EpicsPathCompletionCandidate> {
+    if (!isStartupFile(hostFile)) {
+      return emptyList()
+    }
+
+    val ownerRoot = findOwningEpicsRoot(project, hostFile)
+    val state = createStartupExecutionState(hostFile, ownerRoot)
+    applyStartupStateUntilOffset(text, untilOffset, state)
+    return collectDbLoadRecordsCompletionCandidates(state, rawPartial)
+  }
+
+  internal fun resolveStartupDatabasePath(
+    hostFile: VirtualFile,
+    ownerRoot: Path,
+    text: String,
+    untilOffset: Int,
+    rawPath: String,
+  ): Path? {
+    if (!isStartupFile(hostFile)) {
+      return null
+    }
+
+    val state = createStartupExecutionState(hostFile, ownerRoot)
+    applyStartupStateUntilOffset(text, untilOffset, state)
+    val expandedPath = expandEpicsValue(rawPath, state.variables).trim()
+    if (expandedPath.isBlank()) {
+      return null
+    }
+
+    val directCandidate = resolveAbsoluteOrRelative(state.currentDirectory, expandedPath)
+    if (directCandidate.exists() && !directCandidate.isDirectory()) {
+      return directCandidate.normalize()
+    }
+
+    val basename = runCatching { Path.of(expandedPath).fileName?.toString().orEmpty() }
+      .getOrElse { expandedPath.substringAfterLast('/').substringAfterLast('\\') }
+    for (root in state.searchRoots) {
+      candidatePathsForKind(root, expandedPath, basename, EpicsPathKind.DATABASE).forEach { candidate ->
+        if (candidate.exists() && !candidate.isDirectory()) {
+          return candidate.normalize()
+        }
+      }
+    }
+
+    for (root in state.searchRoots) {
+      searchPreferredDirectories(
+        root,
+        basename,
+        EpicsReferenceContext(EpicsPathKind.DATABASE, rawPath),
+      )?.let { return it.targetFile.toNioPath() }
+    }
+
+    return null
+  }
+
+  internal fun resolveSubstitutionsReferences(
+    project: Project,
+    hostFile: VirtualFile,
+    offset: Int,
+  ): List<EpicsResolvedReference> {
+    if (!isSubstitutionsFile(hostFile)) {
+      return emptyList()
+    }
+
+    val text = runCatching { hostFile.inputStream.bufferedReader().use { it.readText() } }.getOrNull()
+      ?: return emptyList()
+    val context = getSubstitutionsReferenceAtOffset(text, offset) ?: return emptyList()
+    val ownerRoot = findOwningEpicsRoot(project, hostFile)
+    return collectSubstitutionsReferences(hostFile, ownerRoot, context)
+  }
+
   internal fun collectStartupPathCompletionCandidates(
     project: Project,
     hostFile: VirtualFile,
@@ -80,7 +157,7 @@ object EpicsPathResolver {
       isDatabaseFile(hostFile) -> resolveDatabaseReference(text, offset, ownerRoot, context)
       isMakefile(hostFile) -> resolveMakefileReference(project, hostFile, ownerRoot, context)
       isStartupFile(hostFile) -> resolveStartupReference(project, hostFile, text, offset, ownerRoot, context)
-      isSubstitutionsFile(hostFile) -> resolveSubstitutionsReference(project, hostFile, ownerRoot, context)
+      isSubstitutionsFile(hostFile) -> resolveSubstitutionsReference(hostFile, ownerRoot, context)
       else -> null
     }
   }
@@ -146,10 +223,8 @@ object EpicsPathResolver {
 
     if (context.kind == EpicsPathKind.DATABASE) {
       resolveFileCandidate(hostDirectory.resolve(context.rawPath), context)?.let { return it }
-      if (context.rawPath.lowercase().endsWith(".db")) {
-        val substitutionsCandidate = hostDirectory.resolve(
-          context.rawPath.removeSuffix(".db") + ".substitutions",
-        )
+      toSubstitutionsSiblingPath(context.rawPath)?.let { substitutionsRelativePath ->
+        val substitutionsCandidate = hostDirectory.resolve(substitutionsRelativePath)
         resolveFileCandidate(
           substitutionsCandidate,
           context.copy(kind = EpicsPathKind.SUBSTITUTIONS),
@@ -167,21 +242,11 @@ object EpicsPathResolver {
   }
 
   private fun resolveSubstitutionsReference(
-    project: Project,
     hostFile: VirtualFile,
     ownerRoot: Path,
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
-    val hostDirectory = hostFile.parent?.toNioPath() ?: ownerRoot
-    val releaseVariables = loadReleaseVariables(ownerRoot)
-    val searchRoots = buildSearchRoots(ownerRoot, releaseVariables, emptyMap())
-    return resolvePath(
-      project,
-      currentDirectory = hostDirectory,
-      searchRoots = searchRoots,
-      context = context,
-      expansionVariables = releaseVariables,
-    )
+    return collectSubstitutionsReferences(hostFile, ownerRoot, context).firstOrNull()
   }
 
   private fun resolveStreamProtocolReference(
@@ -298,6 +363,76 @@ object EpicsPathResolver {
     }
 
     return candidates.values.sortedBy { it.insertPath.lowercase() }
+  }
+
+  private fun collectDbLoadRecordsCompletionCandidates(
+    state: StartupExecutionState,
+    rawPartial: String,
+  ): List<EpicsPathCompletionCandidate> {
+    val expandedPartial = expandEpicsValue(rawPartial, state.variables)
+    if (containsMakeVariableReference(expandedPartial)) {
+      return emptyList()
+    }
+
+    val normalizedPartial = expandedPartial.replace('\\', '/')
+    val query = normalizedPartial
+      .removePrefix("db/")
+      .removePrefix("Db/")
+      .substringAfterLast('/')
+
+    val candidates = linkedMapOf<String, EpicsPathCompletionCandidate>()
+    collectDbLoadRecordsDirectoryFiles(
+      baseDirectory = state.currentDirectory,
+      directory = state.currentDirectory,
+      namePrefix = query,
+      detail = "current dir",
+      candidates = candidates,
+    )
+    collectDbLoadRecordsDirectoryFiles(
+      baseDirectory = state.currentDirectory,
+      directory = state.currentDirectory.resolve("db"),
+      namePrefix = query,
+      detail = "db",
+      candidates = candidates,
+    )
+    return candidates.values.sortedBy { it.insertPath.lowercase() }
+  }
+
+  private fun collectDbLoadRecordsDirectoryFiles(
+    baseDirectory: Path,
+    directory: Path,
+    namePrefix: String,
+    detail: String,
+    candidates: MutableMap<String, EpicsPathCompletionCandidate>,
+  ) {
+    if (!directory.exists() || !directory.isDirectory()) {
+      return
+    }
+
+    val allowedExtensions = allowedExtensionsForKind(EpicsPathKind.DATABASE)
+    directory.toFile().listFiles().orEmpty().sortedBy { it.name.lowercase() }.forEach { child ->
+      if (child.isDirectory) {
+        return@forEach
+      }
+      if (child.extension.lowercase() !in allowedExtensions) {
+        return@forEach
+      }
+      if (namePrefix.isNotBlank() && !child.name.startsWith(namePrefix, ignoreCase = true)) {
+        return@forEach
+      }
+
+      val childPath = child.toPath()
+      val insertPath = relativizePath(baseDirectory, childPath)
+      candidates.putIfAbsent(
+        insertPath,
+        EpicsPathCompletionCandidate(
+          insertPath = insertPath,
+          detail = detail,
+          isDirectory = false,
+          absolutePath = childPath,
+        ),
+      )
+    }
   }
 
   private fun collectDbDirectoryCompletionCandidates(
@@ -685,6 +820,15 @@ object EpicsPathResolver {
     return roots.toList()
   }
 
+  private fun toSubstitutionsSiblingPath(rawPath: String): String? {
+    val normalizedPath = rawPath.replace('\\', '/')
+    val lowerCasePath = normalizedPath.lowercase()
+    val matchingExtension = listOf(".db", ".vdb", ".template")
+      .firstOrNull { extension -> lowerCasePath.endsWith(extension) }
+      ?: return null
+    return normalizedPath.dropLast(matchingExtension.length) + ".substitutions"
+  }
+
   private fun loadReleaseVariables(ownerRoot: Path): Map<String, String> {
     val configureDirectory = ownerRoot.resolve("configure")
     val releaseFiles = listOf(
@@ -787,7 +931,7 @@ object EpicsPathResolver {
     return EpicsResolvedReference(file, context.rawPath, context.kind)
   }
 
-  private fun findOwningEpicsRoot(project: Project, hostFile: VirtualFile): Path {
+  internal fun findOwningEpicsRoot(project: Project, hostFile: VirtualFile): Path {
     var current = hostFile.parent?.toNioPath()
     while (current != null) {
       if (current.resolve("configure").resolve("RELEASE").exists()) {
@@ -1141,5 +1285,44 @@ object EpicsPathResolver {
 
   private fun containsMakeVariableReference(value: String): Boolean {
     return value.contains("\$(") || value.contains("\${")
+  }
+
+  private fun collectSubstitutionsReferences(
+    hostFile: VirtualFile,
+    ownerRoot: Path,
+    context: EpicsReferenceContext,
+  ): List<EpicsResolvedReference> {
+    val hostDirectory = hostFile.parent?.toNioPath() ?: ownerRoot
+    val releaseVariables = loadReleaseVariables(ownerRoot)
+    val expandedPath = expandEpicsValue(context.rawPath, releaseVariables).trim()
+    if (expandedPath.isBlank()) {
+      return emptyList()
+    }
+
+    val basename = runCatching { Path.of(expandedPath).fileName?.toString().orEmpty() }
+      .getOrElse { expandedPath.substringAfterLast('/').substringAfterLast('\\') }
+    val references = mutableListOf<EpicsResolvedReference>()
+    val seenPaths = linkedSetOf<Path>()
+
+    fun addCandidate(candidate: Path) {
+      val normalized = candidate.normalize()
+      if (!seenPaths.add(normalized)) {
+        return
+      }
+      resolveFileCandidate(normalized, context)?.let(references::add)
+    }
+
+    addCandidate(resolveAbsoluteOrRelative(hostDirectory, expandedPath))
+
+    candidatePathsForKind(ownerRoot, expandedPath, basename, context.kind).forEach(::addCandidate)
+
+    buildSearchRoots(ownerRoot, releaseVariables, emptyMap())
+      .asSequence()
+      .filter { it.normalize() != ownerRoot.normalize() }
+      .forEach { searchRoot ->
+        candidatePathsForKind(searchRoot, expandedPath, basename, context.kind).forEach(::addCandidate)
+      }
+
+    return references
   }
 }

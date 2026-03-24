@@ -76,27 +76,30 @@ internal object EpicsRecordResolver {
     return findRecordDefinitionInFile(hostFile, recordName, recordType)
   }
 
-  fun resolveRecordDefinition(
+  internal fun resolveRecordDefinitions(
     project: Project,
     hostFile: VirtualFile,
     offset: Int,
-  ): EpicsResolvedRecordDefinition? {
-    val text = readText(hostFile) ?: return null
+  ): List<EpicsResolvedRecordDefinition> {
+    val text = readText(hostFile) ?: return emptyList()
 
     return when {
-      isDatabaseFile(hostFile) -> resolveDatabaseRecordDefinition(project, hostFile, text, offset)
-      isStartupFile(hostFile) -> resolveStartupRecordDefinition(project, hostFile, text, offset)
-      else -> null
+      isDatabaseFile(hostFile) -> resolveDatabaseRecordDefinitions(project, hostFile, text, offset)
+      isStartupFile(hostFile) -> resolveStartupRecordDefinitions(project, hostFile, text, offset)
+      else -> emptyList()
     }
   }
 
-  private fun resolveDatabaseRecordDefinition(
+  internal fun resolveRecordDefinitionsForName(
     project: Project,
     hostFile: VirtualFile,
-    text: String,
-    offset: Int,
-  ): EpicsResolvedRecordDefinition? {
-    val linkedValue = getDatabaseLinkedRecordValueAtOffset(text, offset) ?: return null
+    recordName: String,
+  ): List<EpicsResolvedRecordDefinition> {
+    val candidateNames = extractLinkedRecordCandidates(recordName)
+    if (candidateNames.isEmpty()) {
+      return emptyList()
+    }
+
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     val releaseVariables = loadReleaseVariables(ownerRoot)
     val envPathsVariables = loadEnvPathsVariables(hostFile.parent?.toNioPath(), releaseVariables)
@@ -108,43 +111,103 @@ internal object EpicsRecordResolver {
       searchDirectories.add(root.resolve("Db"))
     }
 
-    return resolveLinkedRecordFromSearchPaths(
+    return resolveLinkedRecordsFromSearchPaths(
+      currentFile = hostFile,
+      candidateNames = candidateNames,
+      searchDirectories = searchDirectories.toList(),
+    )
+  }
+
+  internal fun collectStartupLoadedRecordNames(
+    project: Project,
+    hostFile: VirtualFile,
+    text: String,
+    untilOffset: Int,
+  ): List<String> {
+    if (!isStartupFile(hostFile)) {
+      return emptyList()
+    }
+    return collectStartupLoadedDefinitions(project, hostFile, text, untilOffset)
+      .keys
+      .sortedWith(String.CASE_INSENSITIVE_ORDER)
+  }
+
+  fun resolveRecordDefinition(
+    project: Project,
+    hostFile: VirtualFile,
+    offset: Int,
+  ): EpicsResolvedRecordDefinition? {
+    return resolveRecordDefinitions(project, hostFile, offset).firstOrNull()
+  }
+
+  private fun resolveDatabaseRecordDefinitions(
+    project: Project,
+    hostFile: VirtualFile,
+    text: String,
+    offset: Int,
+  ): List<EpicsResolvedRecordDefinition> {
+    val linkedValue = getDatabaseLinkedRecordValueAtOffset(text, offset) ?: return emptyList()
+    val ownerRoot = findOwningEpicsRoot(project, hostFile)
+    val releaseVariables = loadReleaseVariables(ownerRoot)
+    val envPathsVariables = loadEnvPathsVariables(hostFile.parent?.toNioPath(), releaseVariables)
+    val searchDirectories = linkedSetOf<Path>()
+
+    hostFile.parent?.toNioPath()?.let(searchDirectories::add)
+    for (root in buildSearchRoots(ownerRoot, releaseVariables, envPathsVariables)) {
+      searchDirectories.add(root.resolve("db"))
+      searchDirectories.add(root.resolve("Db"))
+    }
+
+    return resolveLinkedRecordsFromSearchPaths(
       currentFile = hostFile,
       candidateNames = extractLinkedRecordCandidates(linkedValue),
       searchDirectories = searchDirectories.toList(),
     )
   }
 
-  private fun resolveStartupRecordDefinition(
+  private fun resolveStartupRecordDefinitions(
     project: Project,
     hostFile: VirtualFile,
     text: String,
     offset: Int,
-  ): EpicsResolvedRecordDefinition? {
-    val dbpfRecordName = getStartupDbpfRecordAtOffset(text, offset) ?: return null
+  ): List<EpicsResolvedRecordDefinition> {
+    val dbpfRecordName = getStartupDbpfRecordAtOffset(text, offset) ?: return emptyList()
     val definitionsByName = collectStartupLoadedDefinitions(project, hostFile, text, offset)
+    val results = mutableListOf<EpicsResolvedRecordDefinition>()
+    val seenKeys = mutableSetOf<String>()
 
     for (candidate in extractLinkedRecordCandidates(dbpfRecordName)) {
-      val definition = definitionsByName[candidate]?.firstOrNull()
-      if (definition != null) {
-        return definition
+      val definitions = definitionsByName[candidate].orEmpty()
+      for (definition in definitions) {
+        val key = buildRecordDefinitionKey(definition)
+        if (seenKeys.add(key)) {
+          results += definition
+        }
       }
     }
 
-    return null
+    return results
   }
 
-  private fun resolveLinkedRecordFromSearchPaths(
+  private fun resolveLinkedRecordsFromSearchPaths(
     currentFile: VirtualFile,
     candidateNames: List<String>,
     searchDirectories: List<Path>,
-  ): EpicsResolvedRecordDefinition? {
+  ): List<EpicsResolvedRecordDefinition> {
     if (candidateNames.isEmpty()) {
-      return null
+      return emptyList()
     }
 
+    val results = mutableListOf<EpicsResolvedRecordDefinition>()
+    val seenKeys = mutableSetOf<String>()
+
     for (candidate in candidateNames) {
-      findRecordDefinitionInFile(currentFile, candidate)?.let { return it }
+      findRecordDefinitionInFile(currentFile, candidate)?.let { definition ->
+        val key = buildRecordDefinitionKey(definition)
+        if (seenKeys.add(key)) {
+          results += definition
+        }
+      }
     }
 
     val seenPaths = mutableSetOf(currentFile.path)
@@ -157,12 +220,17 @@ internal object EpicsRecordResolver {
 
         val virtualFile = LocalFileSystem.getInstance().findFileByIoFile(candidateFile.toFile()) ?: continue
         for (candidate in candidateNames) {
-          findRecordDefinitionInFile(virtualFile, candidate)?.let { return it }
+          findRecordDefinitionInFile(virtualFile, candidate)?.let { definition ->
+            val key = buildRecordDefinitionKey(definition)
+            if (seenKeys.add(key)) {
+              results += definition
+            }
+          }
         }
       }
     }
 
-    return null
+    return results
   }
 
   private fun collectStartupLoadedDefinitions(
@@ -849,6 +917,7 @@ internal object EpicsRecordResolver {
         .filter { it.isFile }
         .map { it.toPath() }
         .filter(::isDatabasePath)
+        .sortedBy { it.pathString }
     } else {
       Files.walk(directory).use { stream ->
         stream
@@ -856,9 +925,14 @@ internal object EpicsRecordResolver {
           .iterator()
           .asSequence()
           .toList()
+          .sortedBy { it.pathString }
           .asSequence()
       }
     }
+  }
+
+  private fun buildRecordDefinitionKey(definition: EpicsResolvedRecordDefinition): String {
+    return "${definition.targetFile.path}:${definition.recordName}:${definition.recordStartOffset}:${definition.recordEndOffset}"
   }
 
   private fun isDatabasePath(path: Path): Boolean {

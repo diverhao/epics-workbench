@@ -4,10 +4,12 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import org.epics.workbench.navigation.EpicsRecordResolver
 import org.epics.workbench.probe.EpicsProbeSupport
+import org.epics.workbench.substitutions.EpicsSubstitutionsExpansionSupport
 import org.epics.workbench.toc.EpicsDatabaseToc
 import org.epics.workbench.widget.openEpicsMonitorWidget
 
@@ -24,12 +26,23 @@ class OpenInMonitorAction : DumbAwareAction() {
     val project = event.project ?: return
     val file = getTargetFile(event) ?: return
     val editor = event.getData(CommonDataKeys.EDITOR)
-    val channelName = if (editor != null) {
-      resolveMonitorTarget(project, file, editor.document.text, editor.caretModel.offset)
+    val initialChannels = if (EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)) {
+      val expandedResult = EpicsSubstitutionsExpansionSupport.expandToDatabaseText(project, file)
+      val expandedText = expandedResult.expandedText
+      if (expandedText == null) {
+        Messages.showErrorDialog(project, expandedResult.issues.joinToString("\n"), TITLE)
+        return
+      }
+      EpicsMonitorFileSupport.extractUniqueRecordNames(expandedText)
     } else {
-      null
+      val channelName = if (editor != null) {
+        resolveMonitorTarget(project, file, editor.document.text, editor.caretModel.offset)
+      } else {
+        null
+      }
+      channelName?.let(::listOf).orEmpty()
     }
-    openEpicsMonitorWidget(project, channelName?.let(::listOf).orEmpty())
+    openEpicsMonitorWidget(project, initialChannels)
   }
 
   private fun getTargetFile(event: AnActionEvent): VirtualFile? {
@@ -38,7 +51,11 @@ class OpenInMonitorAction : DumbAwareAction() {
   }
 
   private fun isSupportedFile(file: VirtualFile): Boolean {
-    return isDatabaseFile(file) || isStartupFile(file) || isPvlistFile(file) || isProbeFile(file)
+    return isDatabaseFile(file) ||
+      isStartupFile(file) ||
+      isPvlistFile(file) ||
+      isProbeFile(file) ||
+      EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
   }
 
   private fun resolveMonitorTarget(
@@ -180,6 +197,7 @@ class OpenInMonitorAction : DumbAwareAction() {
   }
 
   private companion object {
+    private const val TITLE = "Open PV Monitor Widget"
     private val MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")
     private val MACRO_ASSIGNMENT_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*\s*=.*$""")
   }

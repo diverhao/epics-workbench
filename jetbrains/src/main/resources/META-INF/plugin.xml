@@ -88,6 +88,7 @@
       language="EPICS Probe"
       implementationClass="org.epics.workbench.highlighting.EpicsProbeSyntaxHighlighterFactory"
     />
+    <notificationGroup id="EPICS Workbench Notifications" displayType="BALLOON" isLogByDefault="true" />
     <spellchecker.support
       language="EPICS Database"
       implementationClass="org.epics.workbench.spellcheck.EpicsNoSpellcheckingStrategy"
@@ -217,7 +218,6 @@
       anchor="right"
       factoryClass="org.epics.workbench.EpicsWorkbenchToolWindowFactory"
     />
-    <fileEditorProvider implementation="org.epics.workbench.export.EpicsExcelImportPreviewFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsWidgetFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsPvlistWidgetFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsMonitorWidgetFileEditorProvider" />
@@ -238,42 +238,60 @@
       class="org.epics.workbench.toc.UpdateDatabaseTocAction"
       text="Update Table of Contents"
       description="Generate or refresh the EPICS record table of contents for this database file"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
+    <action
+      id="org.epics.workbench.ToggleMonitorChannelsAction"
+      class="org.epics.workbench.database.ToggleMonitorChannelsAction"
+      text="Start Monitor Channels"
+      description="Start or stop live monitoring for database TOC channels"
+    />
+    <action
+      id="org.epics.workbench.FormatDatabaseFileAction"
+      class="org.epics.workbench.database.FormatDatabaseFileAction"
+      text="Format DB File"
+      description="Format the selected EPICS database file with the EPICS formatter"
+    />
+    <action
+      id="org.epics.workbench.CopyAllRecordNamesAction"
+      class="org.epics.workbench.database.CopyAllRecordNamesAction"
+      text="Copy All Record Names"
+      description="Copy all record names from the selected EPICS database file"
+    />
+    <action
+      id="org.epics.workbench.CollapseAllRecordsAction"
+      class="org.epics.workbench.folding.CollapseAllRecordsAction"
+      text="Collapse All Records"
+      description="Collapse all EPICS records in the selected database file"
+    />
+    <action
+      id="org.epics.workbench.ExpandAllRecordsAction"
+      class="org.epics.workbench.folding.ExpandAllRecordsAction"
+      text="Expand All Records"
+      description="Expand all EPICS records in the selected database file"
+    />
     <action
       id="org.epics.workbench.ExportDatabaseToExcelAction"
       class="org.epics.workbench.export.ExportDatabaseToExcelAction"
-      text="Export to Excel"
+      text="Export Excel"
       description="Export the EPICS database file as an Excel workbook"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
     <action
       id="org.epics.workbench.CopyDatabaseAsMonitorFileAction"
       class="org.epics.workbench.monitor.CopyDatabaseAsMonitorFileAction"
       text="Copy as PV List File"
       description="Copy the selected EPICS database records as pvlist text"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
     <action
       id="org.epics.workbench.ImportDatabaseFromExcelAction"
       class="org.epics.workbench.export.ImportDatabaseFromExcelAction"
-      text="Import as EPICS Database"
+      text="Import Excel as EPICS DB"
       description="Import EPICS-style Excel sheets as temporary database tabs"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
     <action
       id="org.epics.workbench.OpenExcelImportPreviewAction"
       class="org.epics.workbench.export.OpenExcelImportPreviewAction"
-      text="Open Excel Import Preview"
-      description="Open a preview tab that accepts dropped Excel workbooks"
+      text="Import Excel as EPICS DB"
+      description="Choose an Excel workbook and import EPICS-style sheets as temporary database tabs"
     >
       <add-to-group group-id="ToolsMenu" anchor="last" />
     </action>
@@ -282,18 +300,13 @@
       class="org.epics.workbench.probe.OpenInProbeAction"
       text="Probe"
       description="Open the current EPICS record target in a file-less probe widget"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-    </action>
+    />
     <action
       id="org.epics.workbench.OpenInPvlistAction"
       class="org.epics.workbench.pvlist.OpenInPvlistAction"
-      text="PvList"
+      text="PV List"
       description="Open the current database or pvlist source in a file-less PvList widget"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
     <action
       id="org.epics.workbench.OpenEpicsMonitorWidgetAction"
       class="org.epics.workbench.widget.OpenEpicsMonitorWidgetAction"
@@ -305,20 +318,48 @@
     <action
       id="org.epics.workbench.OpenInMonitorAction"
       class="org.epics.workbench.monitor.OpenInMonitorAction"
-      text="Monitor"
+      text="PV Monitor"
       description="Open the current EPICS channel target in a file-less Monitor widget"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
     <action
       id="org.epics.workbench.OpenInChannelGraphAction"
       class="org.epics.workbench.graph.OpenInChannelGraphAction"
       text="Channel Graph"
       description="Open the current EPICS record target in a file-less Channel Graph widget"
-    >
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-      <add-to-group group-id="ProjectViewPopupMenu" anchor="last" />
-    </action>
+    />
+    <group id="org.epics.workbench.DatabaseEditorPopupGroup" popup="false">
+      <reference ref="org.epics.workbench.UpdateDatabaseTocAction" />
+      <reference ref="org.epics.workbench.ToggleMonitorChannelsAction" />
+      <reference ref="org.epics.workbench.OpenInProbeAction" />
+      <reference ref="org.epics.workbench.OpenInPvlistAction" />
+      <reference ref="org.epics.workbench.OpenInMonitorAction" />
+      <separator />
+      <reference ref="org.epics.workbench.FormatDatabaseFileAction" />
+      <reference ref="org.epics.workbench.CopyAllRecordNamesAction" />
+      <reference ref="org.epics.workbench.ExpandAllRecordsAction" />
+      <reference ref="org.epics.workbench.CollapseAllRecordsAction" />
+      <separator />
+      <reference ref="org.epics.workbench.ExportDatabaseToExcelAction" />
+      <reference ref="org.epics.workbench.ImportDatabaseFromExcelAction" />
+      <separator />
+      <add-to-group group-id="EditorPopupMenu" anchor="first" />
+    </group>
+    <group id="org.epics.workbench.DatabaseProjectPopupGroup" popup="false">
+      <reference ref="org.epics.workbench.UpdateDatabaseTocAction" />
+      <reference ref="org.epics.workbench.ToggleMonitorChannelsAction" />
+      <reference ref="org.epics.workbench.OpenInProbeAction" />
+      <reference ref="org.epics.workbench.OpenInPvlistAction" />
+      <reference ref="org.epics.workbench.OpenInMonitorAction" />
+      <separator />
+      <reference ref="org.epics.workbench.FormatDatabaseFileAction" />
+      <reference ref="org.epics.workbench.CopyAllRecordNamesAction" />
+      <reference ref="org.epics.workbench.ExpandAllRecordsAction" />
+      <reference ref="org.epics.workbench.CollapseAllRecordsAction" />
+      <separator />
+      <reference ref="org.epics.workbench.ExportDatabaseToExcelAction" />
+      <reference ref="org.epics.workbench.ImportDatabaseFromExcelAction" />
+      <separator />
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="first" />
+    </group>
   </actions>
 </idea-plugin>

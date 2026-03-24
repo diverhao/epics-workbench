@@ -11,6 +11,10 @@ const RESTART_RUNTIME_CONTEXT_COMMAND = "vscode-epics.restartRuntimeContext";
 const STOP_RUNTIME_CONTEXT_COMMAND = "vscode-epics.stopRuntimeContext";
 const START_ACTIVE_FILE_RUNTIME_COMMAND = "vscode-epics.startActiveFileRuntimeContext";
 const STOP_ACTIVE_FILE_RUNTIME_COMMAND = "vscode-epics.stopActiveFileRuntimeContext";
+const START_DATABASE_MONITOR_CHANNELS_COMMAND =
+  "vscode-epics.startDatabaseMonitorChannels";
+const STOP_DATABASE_MONITOR_CHANNELS_COMMAND =
+  "vscode-epics.stopDatabaseMonitorChannels";
 const PUT_RUNTIME_VALUE_COMMAND = "vscode-epics.putRuntimeValue";
 const OPEN_PROJECT_RUNTIME_CONFIGURATION_COMMAND =
   "vscode-epics.openProjectRuntimeConfiguration";
@@ -45,6 +49,10 @@ const DEFAULT_MONITOR_WIDGET_BUFFER_SIZE = 500;
 const EPICS_CA_EPOCH_OFFSET_SECONDS = 631152000;
 const CONTEXT_INITIALIZATION_CANCELLED_MESSAGE =
   "EPICS runtime context initialization was cancelled.";
+const ACTIVE_DATABASE_HAS_TOC_CONTEXT_KEY =
+  "epicsWorkbench.activeDatabaseHasToc";
+const ACTIVE_DATABASE_MONITORING_RUNNING_CONTEXT_KEY =
+  "epicsWorkbench.activeDatabaseMonitoringRunning";
 function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   const controller = new EpicsRuntimeMonitorController(databaseHelpers);
   const probeCustomEditorProvider = new EpicsProbeCustomEditorProvider(controller);
@@ -155,6 +163,18 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
+      START_DATABASE_MONITOR_CHANNELS_COMMAND,
+      async () => controller.startDatabaseMonitorChannels(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      STOP_DATABASE_MONITOR_CHANNELS_COMMAND,
+      async () => controller.stopDatabaseMonitorChannels(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
       PUT_RUNTIME_VALUE_COMMAND,
       async (target) => controller.putRuntimeValue(target),
     ),
@@ -242,10 +262,12 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
 
   controller.handleActiveEditorChange(vscode.window.activeTextEditor);
+  controller.updateDatabaseEditorContextKeys(vscode.window.activeTextEditor);
   for (const document of vscode.workspace.textDocuments) {
     controller.refreshMonitorDiagnosticsForDocument(document);
   }
   controller.refreshVisibleMonitorHoverDecorations();
+  return controller;
 }
 
 class EpicsRuntimeMonitorController {
@@ -558,6 +580,11 @@ class EpicsRuntimeMonitorController {
       macroValues: new Map(sourceModel?.macroValues || []),
       rows: [],
     };
+    widgetState.rows = buildPvlistWidgetMonitorPlan(
+      widgetState.sourceModel,
+      widgetState.macroValues,
+      this.getDefaultProtocol(),
+    ).rows;
     this.pvlistWidgets.set(sourceUri, widgetState);
 
     panel.webview.html = buildPvlistWidgetHtml(
@@ -575,8 +602,8 @@ class EpicsRuntimeMonitorController {
         return;
       }
 
-      if (message.type === "addPvlistWidgetChannels") {
-        await this.addPvlistWidgetChannels(widgetState, message.text);
+      if (message.type === "replacePvlistWidgetChannels") {
+        await this.replacePvlistWidgetChannels(widgetState, message.text);
         return;
       }
 
@@ -1072,44 +1099,38 @@ class EpicsRuntimeMonitorController {
     );
   }
 
-  async addPvlistWidgetChannels(widgetState, text) {
+  async replacePvlistWidgetChannels(widgetState, text) {
     const sourceModel = widgetState?.sourceModel;
     if (!sourceModel) {
       return;
     }
 
-    const nextEntries = parseAddedPvlistChannelLines(text);
-    if (!nextEntries.length) {
+    const nextRawPvNames = parseAddedPvlistChannelLines(text);
+    const previousRawPvNames = Array.isArray(sourceModel.rawPvNames) ? sourceModel.rawPvNames : [];
+    const nextMacroNames = extractOrderedEpicsMacroNames(nextRawPvNames);
+    const previousMacroNames = Array.isArray(sourceModel.macroNames) ? sourceModel.macroNames : [];
+    const didChannelsChange =
+      previousRawPvNames.length !== nextRawPvNames.length ||
+      previousRawPvNames.some((entry, index) => String(entry || "") !== nextRawPvNames[index]);
+    const didMacrosChange =
+      previousMacroNames.length !== nextMacroNames.length ||
+      previousMacroNames.some((entry, index) => String(entry || "") !== nextMacroNames[index]);
+
+    if (!didChannelsChange && !didMacrosChange) {
       await this.postPvlistWidgetState(widgetState);
       return;
     }
 
-    const rawPvNames = Array.isArray(sourceModel.rawPvNames) ? sourceModel.rawPvNames : [];
-    const seenPvNames = new Set(rawPvNames.map((entry) => String(entry || "").trim()).filter(Boolean));
-    let didChange = false;
-
-    for (const channelName of nextEntries) {
-      if (seenPvNames.has(channelName)) {
-        continue;
-      }
-      seenPvNames.add(channelName);
-      rawPvNames.push(channelName);
-      didChange = true;
-      for (const macroName of extractOrderedEpicsMacroNames([channelName])) {
-        if (!Array.isArray(sourceModel.macroNames)) {
-          sourceModel.macroNames = [];
-        }
-        if (!sourceModel.macroNames.includes(macroName)) {
-          sourceModel.macroNames.push(macroName);
-          widgetState.macroValues.set(macroName, widgetState.macroValues.get(macroName) || "");
-        }
-      }
-    }
-
-    if (!didChange) {
-      await this.postPvlistWidgetState(widgetState);
-      return;
-    }
+    const previousMacroValues = widgetState?.macroValues instanceof Map
+      ? widgetState.macroValues
+      : new Map();
+    sourceModel.rawPvNames = [...nextRawPvNames];
+    sourceModel.macroNames = [...nextMacroNames];
+    const nextMacroValues = new Map(
+      nextMacroNames.map((macroName) => [macroName, previousMacroValues.get(macroName) || ""]),
+    );
+    sourceModel.macroValues = nextMacroValues;
+    widgetState.macroValues = nextMacroValues;
 
     await this.applyPvlistWidgetMonitoring(widgetState);
   }
@@ -1149,7 +1170,7 @@ class EpicsRuntimeMonitorController {
         void this.connectEntriesInParallel(queuedEntries, runtimeContext);
       } catch (error) {
         if (!isContextInitializationCancelledError(error)) {
-          throw error;
+          // Keep the widget visible even when runtime context startup fails.
         }
       }
     }
@@ -1199,10 +1220,12 @@ class EpicsRuntimeMonitorController {
 
   handleActiveEditorChange(editor) {
     if (!this.statusBarItem) {
+      this.updateDatabaseEditorContextKeys(editor);
       return;
     }
 
     const document = editor?.document;
+    this.updateDatabaseEditorContextKeys(editor);
     if (!isRuntimeDocument(document)) {
       this.statusBarItem.hide();
       return;
@@ -1820,15 +1843,23 @@ class EpicsRuntimeMonitorController {
     }
 
     if (!this.hasEntriesForSourceUri(document.uri.toString())) {
+      if (
+        vscode.window.activeTextEditor?.document?.uri?.toString() ===
+        document.uri.toString()
+      ) {
+        this.updateDatabaseEditorContextKeys(vscode.window.activeTextEditor);
+      }
       return;
     }
 
     if (isProbeDocument(document)) {
       await this.startProbeDocumentRuntime(document);
+      this.updateDatabaseEditorContextKeys(vscode.window.activeTextEditor);
       return;
     }
 
     await this.removeEntriesBySourceUri(document.uri.toString());
+    this.updateDatabaseEditorContextKeys(vscode.window.activeTextEditor);
   }
 
   async addMonitorInteractive() {
@@ -1986,6 +2017,31 @@ class EpicsRuntimeMonitorController {
     this.stopContextInternal();
     this.refresh();
     this.handleActiveEditorChange(vscode.window.activeTextEditor);
+  }
+
+  async startDatabaseMonitorChannels() {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!isDatabaseRuntimeDocument(document)) {
+      return;
+    }
+
+    if (!this.databaseDocumentHasToc(document)) {
+      vscode.window.showWarningMessage(
+        "Update Table of Contents before starting database channel monitoring.",
+      );
+      return;
+    }
+
+    await this.startActiveFileRuntimeContext();
+  }
+
+  async stopDatabaseMonitorChannels() {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!isDatabaseRuntimeDocument(document)) {
+      return;
+    }
+
+    await this.stopActiveFileRuntimeContext();
   }
 
   async startActiveFileRuntimeContext() {
@@ -2479,6 +2535,8 @@ class EpicsRuntimeMonitorController {
     let message = "";
     if ((widgetState?.sourceModel?.diagnostics || []).length > 0) {
       message = widgetState.sourceModel.diagnostics[0]?.message || "";
+    } else if (this.contextError) {
+      message = this.contextError;
     } else if (!rows.length) {
       message = "No resolvable PV list entries are available with the current macro values.";
     }
@@ -2487,6 +2545,9 @@ class EpicsRuntimeMonitorController {
       sourceLabel: widgetState?.sourceModel?.sourceLabel || "EPICS PvList",
       contextStatus: this.contextStatus,
       contextError: this.contextError || "",
+      rawPvNames: Array.isArray(widgetState?.sourceModel?.rawPvNames)
+        ? widgetState.sourceModel.rawPvNames
+        : [],
       macros,
       rows,
       message,
@@ -3351,6 +3412,33 @@ class EpicsRuntimeMonitorController {
     }
 
     return this.monitorEntries.some((entry) => entry.sourceUri === sourceUri);
+  }
+
+  databaseDocumentHasToc(document) {
+    if (!isDatabaseRuntimeDocument(document)) {
+      return false;
+    }
+
+    const tocEntries = this.extractDatabaseTocEntries?.(document.getText()) || [];
+    return tocEntries.length > 0;
+  }
+
+  updateDatabaseEditorContextKeys(editor) {
+    const document = editor?.document;
+    const hasToc = this.databaseDocumentHasToc(document);
+    const isRunning =
+      Boolean(document?.uri) && this.hasEntriesForSourceUri(document.uri.toString());
+
+    void vscode.commands.executeCommand(
+      "setContext",
+      ACTIVE_DATABASE_HAS_TOC_CONTEXT_KEY,
+      hasToc,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      ACTIVE_DATABASE_MONITORING_RUNNING_CONTEXT_KEY,
+      hasToc && isRunning,
+    );
   }
 
   async removeSpecificMonitorEntries(entries) {
@@ -4562,6 +4650,9 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
         overflow: auto;
         padding: 20px 24px 28px;
       }
+      .content.overlay-active {
+        display: flex;
+      }
       h1, h2, p {
         margin: 0;
       }
@@ -5533,18 +5624,9 @@ function buildPvlistWidgetSourceModel(
     rawPvNames.push(name);
   }
 
-  const macroNames = extractOrderedEpicsMacroNames([sourceText]);
-  const macroAssignments =
-    typeof extractDatabaseTocMacroAssignments === "function"
-      ? extractDatabaseTocMacroAssignments(sourceText)
-      : new Map();
-  const macroValues = new Map(
-    macroNames.map((macroName) => [
-      macroName,
-      macroAssignments.get(macroName)?.hasAssignment
-        ? String(macroAssignments.get(macroName)?.value || "")
-        : "",
-    ]),
+  const { macroNames, macroValues } = buildDatabasePvlistMacroState(
+    sourceText,
+    extractDatabaseTocMacroAssignments,
   );
 
   return {
@@ -5557,6 +5639,39 @@ function buildPvlistWidgetSourceModel(
     macroValues,
     diagnostics: [],
   };
+}
+
+function buildDatabasePvlistMacroState(sourceText, extractDatabaseTocMacroAssignments) {
+  const macroNames = [];
+  const macroValues = new Map();
+  const macroAssignments =
+    typeof extractDatabaseTocMacroAssignments === "function"
+      ? extractDatabaseTocMacroAssignments(sourceText)
+      : new Map();
+
+  if (macroAssignments instanceof Map) {
+    for (const [macroName, assignment] of macroAssignments.entries()) {
+      const normalizedMacroName = String(macroName || "").trim();
+      if (!normalizedMacroName || macroValues.has(normalizedMacroName)) {
+        continue;
+      }
+      macroNames.push(normalizedMacroName);
+      macroValues.set(
+        normalizedMacroName,
+        assignment?.hasAssignment ? String(assignment?.value || "") : "",
+      );
+    }
+  }
+
+  for (const macroName of extractOrderedEpicsMacroNames([sourceText])) {
+    if (!macroName || macroValues.has(macroName)) {
+      continue;
+    }
+    macroNames.push(macroName);
+    macroValues.set(macroName, "");
+  }
+
+  return { macroNames, macroValues };
 }
 
 function parsePvlistWidgetSourceText(text, sourceLabel) {
@@ -6116,10 +6231,12 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         display: flex;
         flex-direction: column;
         gap: 10px;
-        height: 100%;
+        flex: 1;
+        min-height: 0;
       }
       .bulk-input {
-        min-height: 240px;
+        width: 100%;
+        min-height: 65vh;
         flex: 1;
         resize: vertical;
         padding: 10px 12px;
@@ -6137,7 +6254,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         justify-content: flex-start;
       }
       .overlay-page {
-        min-height: 100%;
+        flex: 1;
+        min-height: 0;
         display: flex;
         flex-direction: column;
         gap: 16px;
@@ -6239,8 +6357,7 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           <div id="statusText" class="toolbar-status"></div>
         </div>
 	      <div class="toolbar-right">
-          <button id="addChannelsButton" class="action-button">Add Channels</button>
-	        <button id="saveButton" class="action-button">Save</button>
+          <button id="addChannelsButton" class="action-button">Configure Channels</button>
           <button id="doneButton" class="action-button" hidden>Done</button>
 	      </div>
 	    </div>
@@ -6252,7 +6369,6 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
 	      const content = document.getElementById("content");
 	      const statusText = document.getElementById("statusText");
 	      const addChannelsButton = document.getElementById("addChannelsButton");
-	      const saveButton = document.getElementById("saveButton");
 	      const doneButton = document.getElementById("doneButton");
 	      let currentState = initialState;
       let pendingClick = undefined;
@@ -6301,6 +6417,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           value: activeElement.value,
           selectionStart: activeElement.selectionStart,
           selectionEnd: activeElement.selectionEnd,
+          scrollTop: activeElement.scrollTop,
+          scrollLeft: activeElement.scrollLeft,
         };
       }
 
@@ -6313,6 +6431,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           value: input.value,
           selectionStart: input.selectionStart,
           selectionEnd: input.selectionEnd,
+          scrollTop: input.scrollTop,
+          scrollLeft: input.scrollLeft,
         };
       }
 
@@ -6335,15 +6455,21 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           typeof draftState.selectionEnd === "number"
             ? draftState.selectionEnd
             : fallbackCaret;
+        const scrollTop =
+          typeof draftState.scrollTop === "number"
+            ? draftState.scrollTop
+            : 0;
+        const scrollLeft =
+          typeof draftState.scrollLeft === "number"
+            ? draftState.scrollLeft
+            : 0;
         suppressFocusSync = true;
         draftInput.focus();
         suppressFocusSync = false;
         draftInput.setSelectionRange(selectionStart, selectionEnd);
+        draftInput.scrollTop = scrollTop;
+        draftInput.scrollLeft = scrollLeft;
       }
-
-	      saveButton.addEventListener("click", () => {
-	        vscode.postMessage({ type: "savePvlistWidget" });
-	      });
 
       addChannelsButton.addEventListener("click", () => {
         overlayMode = true;
@@ -6446,14 +6572,14 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         currentState = payload || {};
         statusText.textContent = payload?.contextStatus || "";
         addChannelsButton.hidden = overlayMode;
-        doneButton.hidden = !overlayMode;
+        doneButton.hidden = true;
         const messageHtml = payload?.message
           ? '<div class="message">' + escapeHtml(payload.message) + '</div>'
           : "";
         const channelDraftValue =
           draftState?.type === "channels"
             ? draftState.value
-            : "";
+            : (Array.isArray(payload?.rawPvNames) ? payload.rawPvNames.join("\\n") : "");
         const macros = Array.isArray(payload?.macros) ? payload.macros : [];
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
         const macrosHtml = macros.length
@@ -6491,14 +6617,15 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           : '<div class="empty">No channel rows are available.</div>';
 
         isRendering = true;
+        content.className = overlayMode ? "content overlay-active" : "content";
         content.innerHTML = overlayMode
           ? '<div class="overlay-page">' +
-              '<div><div class="overlay-title">Add Channels</div><div class="overlay-hint">One channel per line. Macros will be detected automatically from channel names.</div></div>' +
+              '<div><div class="overlay-title">Edit Channels</div><div class="overlay-hint">One channel per line. The full list here becomes the widget channel list, in this order.</div></div>' +
               '<div class="bulk-editor">' +
                 '<textarea class="bulk-input" data-draft-type="channels" spellcheck="false" placeholder="One channel per line">' +
                   escapeHtml(channelDraftValue) +
                 '</textarea>' +
-                '<div class="bulk-actions"><button class="action-button" data-action="add-channels">Add Channels</button></div>' +
+                '<div class="bulk-actions"><button class="action-button" data-action="apply-channels">OK</button></div>' +
               '</div>' +
             '</div>'
           : messageHtml +
@@ -6516,6 +6643,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
               value: draftInput.value,
               selectionStart: draftInput.selectionStart,
               selectionEnd: draftInput.selectionEnd,
+              scrollTop: draftInput.scrollTop,
+              scrollLeft: draftInput.scrollLeft,
             };
           });
           draftInput.addEventListener("input", (event) => {
@@ -6524,6 +6653,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
               value: event.target.value,
               selectionStart: event.target.selectionStart,
               selectionEnd: event.target.selectionEnd,
+              scrollTop: event.target.scrollTop,
+              scrollLeft: event.target.scrollLeft,
             };
           });
           draftInput.addEventListener("keyup", () => {
@@ -6533,6 +6664,9 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             updateActiveDraftSelection(draftInput);
           });
           draftInput.addEventListener("select", () => {
+            updateActiveDraftSelection(draftInput);
+          });
+          draftInput.addEventListener("scroll", () => {
             updateActiveDraftSelection(draftInput);
           });
           draftInput.addEventListener("blur", () => {
@@ -6549,12 +6683,11 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           actionButton.addEventListener("click", () => {
             const draftInput = content.querySelector('.bulk-input[data-draft-type="channels"]');
             const text = draftInput?.value || "";
-            if (draftInput) {
-              draftInput.value = "";
-            }
+            overlayMode = false;
             draftState = undefined;
+            render(currentState);
             vscode.postMessage({
-              type: "addPvlistWidgetChannels",
+              type: "replacePvlistWidgetChannels",
               text,
             });
           });

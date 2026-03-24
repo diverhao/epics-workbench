@@ -5,6 +5,24 @@ import org.epics.workbench.completion.EpicsRecordCompletionSupport
 internal object EpicsMonitorFileSupport {
   private val macroRegex = Regex("""\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}""")
 
+  fun buildRecordNamesClipboardText(
+    recordNames: List<String>,
+    eol: String = "\n",
+  ): String {
+    val lines = mutableListOf<String>()
+    val macroNames = extractRecordNameMacroNamesInAppearanceOrder(recordNames)
+
+    if (macroNames.isNotEmpty()) {
+      macroNames.forEach { macroName ->
+        lines += "$macroName = "
+      }
+      lines += ""
+    }
+
+    lines += recordNames
+    return lines.joinToString(eol)
+  }
+
   fun buildMonitorFileText(
     recordNames: List<String>,
     macroNames: List<String>,
@@ -73,5 +91,14 @@ internal object EpicsMonitorFileSupport {
     return names
       .filter(String::isNotBlank)
       .sortedWith(String.CASE_INSENSITIVE_ORDER)
+  }
+
+  private fun extractRecordNameMacroNamesInAppearanceOrder(recordNames: List<String>): List<String> {
+    val names = linkedSetOf<String>()
+    val text = recordNames.joinToString("\n")
+    for (match in macroRegex.findAll(text)) {
+      names += match.groups[1]?.value ?: match.groups[2]?.value.orEmpty()
+    }
+    return names.filter(String::isNotBlank)
   }
 }

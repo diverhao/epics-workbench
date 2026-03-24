@@ -3,10 +3,13 @@ package org.epics.workbench.pvlist
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
-import org.epics.workbench.widget.openEpicsPvlistWidget
+import org.epics.workbench.substitutions.EpicsSubstitutionsExpansionSupport
+import org.epics.workbench.widget.EpicsPvlistWidgetVirtualFile
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -27,15 +30,27 @@ class OpenInPvlistAction : DumbAwareAction() {
     }
 
     val path = Path.of(file.path)
-    val text = runCatching { Files.readString(path) }.getOrElse { error ->
-      Messages.showErrorDialog(project, error.message ?: "Failed to read ${file.name}.", TITLE)
+    val text = readSourceText(file) ?: run {
+      val errorMessage = runCatching { Files.readString(path) }
+        .exceptionOrNull()
+        ?.message
+        ?: "Failed to read ${file.name}."
+      Messages.showErrorDialog(project, errorMessage, TITLE)
       return
     }
 
-    val result = if (isPvlistFile(file)) {
-      EpicsPvlistWidgetSupport.buildFromPvlistText(text, file.name, file.path)
-    } else {
-      EpicsPvlistWidgetSupport.buildFromDatabaseText(text, file.name, file.path)
+    val result = when {
+      isPvlistFile(file) -> EpicsPvlistWidgetSupport.buildFromPvlistText(text, file.name, file.path)
+      EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) -> {
+        val expandedResult = EpicsSubstitutionsExpansionSupport.expandToDatabaseText(project, file)
+        val expandedText = expandedResult.expandedText
+        if (expandedText == null) {
+          Messages.showErrorDialog(project, expandedResult.issues.joinToString("\n"), TITLE)
+          return
+        }
+        EpicsPvlistWidgetSupport.buildFromDatabaseText(expandedText, file.name, file.path)
+      }
+      else -> EpicsPvlistWidgetSupport.buildFromDatabaseText(text, file.name, file.path)
     }
 
     val model = result.model
@@ -44,7 +59,7 @@ class OpenInPvlistAction : DumbAwareAction() {
       return
     }
 
-    openEpicsPvlistWidget(project, model)
+    FileEditorManager.getInstance(project).openFile(EpicsPvlistWidgetVirtualFile(model), true, true)
   }
 
   private fun getTargetFile(event: AnActionEvent): VirtualFile? {
@@ -52,8 +67,17 @@ class OpenInPvlistAction : DumbAwareAction() {
       ?: event.getData(CommonDataKeys.PSI_FILE)?.virtualFile
   }
 
+  private fun readSourceText(file: VirtualFile): String? {
+    FileDocumentManager.getInstance().getCachedDocument(file)?.let { document ->
+      return document.text
+    }
+    return runCatching { Files.readString(Path.of(file.path)) }.getOrNull()
+  }
+
   private fun isSupportedFile(file: VirtualFile): Boolean {
-    return isPvlistFile(file) || file.extension?.lowercase() in DATABASE_EXTENSIONS
+    return isPvlistFile(file) ||
+      file.extension?.lowercase() in DATABASE_EXTENSIONS ||
+      EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
   }
 
   private fun isPvlistFile(file: VirtualFile): Boolean {

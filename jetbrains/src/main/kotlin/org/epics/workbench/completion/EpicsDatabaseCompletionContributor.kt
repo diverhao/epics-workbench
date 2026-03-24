@@ -17,6 +17,7 @@ import com.intellij.psi.PsiElement
 import org.epics.workbench.navigation.EpicsPathCompletionCandidate
 import org.epics.workbench.navigation.EpicsPathKind
 import org.epics.workbench.navigation.EpicsPathResolver
+import org.epics.workbench.navigation.EpicsRecordResolver
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -58,28 +59,86 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
         return
       }
 
-      getStartupLoadPathContext(offset, linePrefix)?.let { context ->
-        val hostFile = file.virtualFile
+      getStartupLoadedRecordNameContext(offset, linePrefix)?.let { context ->
         val resultSet = result.withPrefixMatcher(context.partial)
-        val candidates = EpicsPathResolver.collectStartupPathCompletionCandidates(
+        val hostFile = file.virtualFile
+        val names = EpicsRecordResolver.collectStartupLoadedRecordNames(
           project = file.project,
           hostFile = hostFile,
           text = document.text,
           untilOffset = offset,
-          rawPartial = context.partial,
-          kind = context.pathKind,
         )
+        for (name in names) {
+          if (!matchesCompletionQuery(name, context.partial)) {
+            continue
+          }
+          resultSet.addElement(
+            LookupElementBuilder.create(name, name)
+              .withTypeText("Record loaded by this startup script", true)
+              .withInsertHandler(buildSimpleReplacementInsertHandler(name, context.startOffset)),
+          )
+        }
+        result.stopHere()
+        return
+      }
+
+      getStartupLoadPathContext(offset, linePrefix)?.let { context ->
+        val hostFile = file.virtualFile
+        val resultSet = result.withPrefixMatcher(context.partial)
+        val candidates = if (context.pathKind == EpicsPathKind.DATABASE) {
+          EpicsPathResolver.collectStartupDbLoadRecordsCompletionCandidates(
+            project = file.project,
+            hostFile = hostFile,
+            text = document.text,
+            untilOffset = offset,
+            rawPartial = context.partial,
+          )
+        } else {
+          EpicsPathResolver.collectStartupPathCompletionCandidates(
+            project = file.project,
+            hostFile = hostFile,
+            text = document.text,
+            untilOffset = offset,
+            rawPartial = context.partial,
+            kind = context.pathKind,
+          )
+        }
         for (candidate in candidates) {
           if (!matchesStartupPathQuery(candidate, context.partial)) {
             continue
           }
+          val lookupLabel = if (context.pathKind == EpicsPathKind.DATABASE) {
+            candidate.insertPath.substringAfterLast('/')
+          } else {
+            candidate.insertPath
+          }
           resultSet.addElement(
-            LookupElementBuilder.create(candidate.insertPath)
+            LookupElementBuilder.create(lookupLabel)
+              .withLookupString(candidate.insertPath)
               .withTypeText(candidate.detail, true)
               .withInsertHandler(buildStartupPathInsertHandler(candidate, context.startOffset, context.pathKind)),
           )
         }
         result.stopHere()
+        return
+      }
+
+      getStartupLoadMacroTailContext(offset, linePrefix)?.let { context ->
+        val macroNames = extractMacroNamesFromStartupDatabaseFile(
+          file.project,
+          file.virtualFile,
+          document.text,
+          offset,
+          context.path,
+        )
+        if (macroNames.isNotEmpty()) {
+          result.addElement(
+            LookupElementBuilder.create(buildDbLoadRecordsAssignmentLabel(macroNames))
+              .withTypeText("Macros used by ${context.path.substringAfterLast('/')}", true)
+              .withInsertHandler(buildStartupLoadMacroTailInsertHandler(macroNames, context.startOffset)),
+          )
+          result.stopHere()
+        }
         return
       }
 
@@ -195,7 +254,9 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
           getFieldNameContext(offset, linePrefix) != null
         '"' -> getRecordNameContext(offset, linePrefix) != null ||
           shouldPopupForMenuFieldValue(editor.document, offset, linePrefix) ||
-          getStartupLoadPathContext(offset, linePrefix) != null
+          getStartupLoadPathContext(offset, linePrefix) != null ||
+          getStartupLoadedRecordNameContext(offset, linePrefix) != null ||
+          getStartupLoadMacroTailContext(offset, linePrefix) != null
         in 'A'..'Z', in 'a'..'z', in '0'..'9', '_' -> getStartupCommandContext(offset, linePrefix) != null
         else -> false
       }
@@ -286,6 +347,22 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       }
     }
 
+    private fun buildStartupLoadMacroTailInsertHandler(
+      macroNames: List<String>,
+      replacementStartOffset: Int,
+    ): InsertHandler<LookupElement> = InsertHandler { context, _ ->
+      context.setAddCompletionChar(false)
+      val document = context.document
+      val tailEnd = getDbLoadRecordsTailInsertionEnd(document, replacementStartOffset)
+      val tailText = buildDbLoadRecordsTail(macroNames)
+      document.replaceString(replacementStartOffset, tailEnd, tailText)
+      context.commitDocument()
+
+      val firstValueOffset = replacementStartOffset + 5 + macroNames.first().length
+      context.editor.caretModel.moveToOffset(firstValueOffset)
+      context.editor.selectionModel.removeSelection()
+    }
+
     private fun buildStartupCommandInsertHandler(
       commandName: String,
       replacementStartOffset: Int,
@@ -359,6 +436,10 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       }
       val assignments = macroNames.joinToString(",") { "${it}=" }
       return "\", \"$assignments\")"
+    }
+
+    private fun buildDbLoadRecordsAssignmentLabel(macroNames: List<String>): String {
+      return macroNames.joinToString(",") { "${it}=" }
     }
 
     private fun getRecordTailInsertionEnd(document: Document, startOffset: Int): Int {
@@ -535,6 +616,24 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       return null
     }
 
+    private fun getStartupLoadedRecordNameContext(offset: Int, linePrefix: String): CompletionContext? {
+      val match = STARTUP_LOADED_RECORD_NAME_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val partial = match.groups[1]?.value.orEmpty()
+      return CompletionContext(
+        partial = partial,
+        startOffset = offset - partial.length,
+      )
+    }
+
+    private fun getStartupLoadMacroTailContext(offset: Int, linePrefix: String): StartupMacroTailCompletionContext? {
+      val match = DB_LOAD_RECORDS_MACRO_TAIL_CONTEXT_REGEX.find(linePrefix) ?: return null
+      val path = match.groups[1]?.value.orEmpty()
+      return StartupMacroTailCompletionContext(
+        path = path,
+        startOffset = offset,
+      )
+    }
+
     private fun shouldPopupForMenuFieldValue(
       document: Document,
       offset: Int,
@@ -594,6 +693,24 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
     private fun extractMacroNamesFromDatabaseFile(path: Path): List<String> {
       val text = runCatching { Files.readString(path) }.getOrNull() ?: return emptyList()
       return extractMacroNames(maskDatabaseComments(text))
+    }
+
+    private fun extractMacroNamesFromStartupDatabaseFile(
+      project: com.intellij.openapi.project.Project,
+      hostFile: com.intellij.openapi.vfs.VirtualFile,
+      text: String,
+      untilOffset: Int,
+      rawPath: String,
+    ): List<String> {
+      val ownerRoot = EpicsPathResolver.findOwningEpicsRoot(project, hostFile)
+      val resolved = EpicsPathResolver.resolveStartupDatabasePath(
+        hostFile = hostFile,
+        ownerRoot = ownerRoot,
+        text = text,
+        untilOffset = untilOffset,
+        rawPath = rawPath,
+      ) ?: return emptyList()
+      return extractMacroNamesFromDatabaseFile(resolved)
     }
 
     private fun maskDatabaseComments(text: String): String {
@@ -677,13 +794,20 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
       val pathKind: EpicsPathKind,
     )
 
+    private data class StartupMacroTailCompletionContext(
+      val path: String,
+      val startOffset: Int,
+    )
+
     private val RECORD_TYPE_CONTEXT_REGEX = Regex("""record\(\s*([A-Za-z0-9_]*)$""")
     private val RECORD_NAME_CONTEXT_REGEX = Regex("""record\(\s*[A-Za-z0-9_]+\s*,\s*"([^"\n]*)$""")
     private val FIELD_NAME_CONTEXT_REGEX = Regex("""field\(\s*(?:"?([A-Za-z0-9_]*))$""")
     private val FIELD_VALUE_CONTEXT_REGEX =
       Regex("""field\(\s*(?:"([A-Za-z0-9_]+)"|([A-Za-z0-9_]+))\s*,\s*"([^"\n]*)$""")
     private val STARTUP_COMMAND_CONTEXT_REGEX = Regex("""^\s*([A-Za-z0-9_]*)$""")
+    private val STARTUP_LOADED_RECORD_NAME_CONTEXT_REGEX = Regex("""dbpf\(\s*"([^"\n]*)$""")
     private val DB_LOAD_RECORDS_PATH_CONTEXT_REGEX = Regex("""dbLoadRecords\(\s*"([^"\n]*)$""")
+    private val DB_LOAD_RECORDS_MACRO_TAIL_CONTEXT_REGEX = Regex("""dbLoadRecords\(\s*"([^"\n]+)"\s*$""")
     private val DB_LOAD_TEMPLATE_PATH_CONTEXT_REGEX = Regex("""dbLoadTemplate\(\s*"([^"\n]*)$""")
     private val EPICS_MACRO_REFERENCE_REGEX =
       Regex("""\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}""")

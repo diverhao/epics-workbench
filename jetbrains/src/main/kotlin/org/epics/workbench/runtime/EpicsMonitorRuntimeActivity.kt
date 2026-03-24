@@ -68,6 +68,7 @@ import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
 import org.epics.workbench.pvlist.EpicsPvlistWidgetPlan
 import org.epics.workbench.pvlist.EpicsPvlistWidgetSupport
 import org.epics.workbench.probe.EpicsProbeDocumentAnalysis
+import org.epics.workbench.probe.EpicsProbeSupport
 import org.epics.workbench.toc.EpicsDatabaseToc
 import java.awt.Font
 import java.awt.Graphics
@@ -115,6 +116,11 @@ interface EpicsMonitorRuntimeStateListener {
 class EpicsMonitorRuntimeService(
   internal val project: Project,
 ) : DocumentListener, EditorFactoryListener, EditorMouseListener, Disposable {
+  private data class ProbeContext(
+    val sourceKey: String,
+    val analysis: EpicsProbeDocumentAnalysis,
+  )
+
   @Volatile
   private var initialized = false
 
@@ -273,20 +279,11 @@ class EpicsMonitorRuntimeService(
     if (!monitoringActive) {
       return
     }
-    val states = when {
-      isMonitorFile(fileName) -> {
-        val definition = parseMonitorDocument(text, defaultProtocol)
-        definition.entries.map { entry ->
-          MonitorLineState(
-            editor = editor,
-            entry = entry,
-            alignColumn = definition.maxDisplayWidth,
-          )
-        }
+    val states =
+      when {
+        isDatabaseFile(fileName) -> parseDatabaseTocStates(editor, text, defaultProtocol)
+        else -> emptyList()
       }
-      isDatabaseFile(fileName) -> parseDatabaseTocStates(editor, text, defaultProtocol)
-      else -> emptyList()
-    }
     if (states.isEmpty()) {
       return
     }
@@ -583,9 +580,7 @@ class EpicsMonitorRuntimeService(
     widgetPvlistSessions.remove(widgetId)?.close()
   }
 
-  private fun isRuntimeFile(fileName: String): Boolean = isMonitorFile(fileName) || isDatabaseFile(fileName)
-
-  private fun isMonitorFile(fileName: String): Boolean = fileName.substringAfterLast('.', "").lowercase() == "pvlist"
+  private fun isRuntimeFile(fileName: String): Boolean = isDatabaseFile(fileName)
 
   internal fun isProbeFileName(fileName: String): Boolean = fileName.substringAfterLast('.', "").lowercase() == "probe"
 
@@ -593,7 +588,7 @@ class EpicsMonitorRuntimeService(
     return fileName.substringAfterLast('.', "").lowercase() in DATABASE_FILE_EXTENSIONS
   }
 
-  private fun ensureActiveProbeSession(context: ActiveProbeContext): EpicsProbeRuntimeSession? {
+  private fun ensureActiveProbeSession(context: ProbeContext): EpicsProbeRuntimeSession? {
     val existingSession = activeProbeSession
     if (existingSession != null && existingSession.matches(context.sourceKey, context.analysis, defaultProtocol)) {
       return existingSession
@@ -680,6 +675,26 @@ class EpicsMonitorRuntimeService(
   private fun disposeAllWidgetPvlistSessions() {
     widgetPvlistSessions.values.forEach(EpicsPvlistWidgetSession::close)
     widgetPvlistSessions.clear()
+  }
+
+  private fun getProbeContext(editor: Editor): ProbeContext? {
+    val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return null
+    if (!isProbeFileName(file.name)) {
+      return null
+    }
+
+    val analysis = EpicsProbeSupport.analyzeText(editor.document.text)
+    return ProbeContext(
+      sourceKey = buildProbeSourceKey(file.path, analysis),
+      analysis = analysis,
+    )
+  }
+
+  private fun buildProbeSourceKey(
+    filePath: String,
+    analysis: EpicsProbeDocumentAnalysis,
+  ): String {
+    return "$filePath:${analysis.recordName.orEmpty()}:${defaultProtocol.name}"
   }
 
   private fun buildWidgetProbeSourceKey(widgetId: String, recordName: String): String {

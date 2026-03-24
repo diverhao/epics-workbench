@@ -2,18 +2,22 @@ package org.epics.workbench
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.service
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.content.ContentFactory
-import org.epics.workbench.export.openEpicsExcelImportPreview
+import org.epics.workbench.export.EpicsDatabaseExcelImporter
 import org.epics.workbench.runtime.EpicsMonitorRuntimeService
 import org.epics.workbench.runtime.EpicsMonitorRuntimeStateListener
 import org.epics.workbench.runtime.EpicsRuntimeProjectConfigurable
 import java.awt.BorderLayout
 import java.awt.FlowLayout
+import java.nio.file.Path
+import com.intellij.openapi.ui.Messages
 import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -35,7 +39,7 @@ private class EpicsWorkbenchToolWindowPanel(
   private val runtimeService = project.service<EpicsMonitorRuntimeService>()
   private val statusLabel = JLabel()
   private val toggleButton = JButton()
-  private val importPreviewButton = JButton("Excel Import Preview...")
+  private val importPreviewButton = JButton("Import Excel as EPICS DB")
   private val configureButton = JButton("Configuration...")
 
   init {
@@ -52,7 +56,7 @@ private class EpicsWorkbenchToolWindowPanel(
       runtimeService.toggleMonitoring()
     }
     importPreviewButton.addActionListener {
-      openEpicsExcelImportPreview(project)
+      promptImportExcelWorkbook(project)
     }
     configureButton.addActionListener {
       ShowSettingsUtil.getInstance().showSettingsDialog(project, EpicsRuntimeProjectConfigurable::class.java)
@@ -63,12 +67,12 @@ private class EpicsWorkbenchToolWindowPanel(
       Use Start Monitoring to create the EPICS CA/PVA context for this project.
 
       While running:
-      - `.pvlist` files connect and show live channel values after each line.
+      - `PV List` widgets connect and show live channel values.
       - Database TOCs show live values in the `Value` column.
       - `.probe` files show a live record page inline in the editor.
       - Stop Monitoring disposes the active sessions and destroys the EPICS context.
       - Use Configuration... to set the default protocol and CA address settings.
-      - Use Excel Import Preview... to drag an EPICS Excel workbook into a preview tab and open generated database tabs.
+      - Use Import Excel as EPICS DB to choose an EPICS Excel workbook and open generated database tabs.
       - Use Probe from database/startup editor context menus to open a file-less EPICS probe widget.
       """.trimIndent(),
     )
@@ -98,4 +102,34 @@ private class EpicsWorkbenchToolWindowPanel(
   }
 
   override fun dispose() = Unit
+
+  private fun promptImportExcelWorkbook(project: Project) {
+    val descriptor = FileChooserDescriptorFactory
+      .createSingleFileDescriptor("xlsx")
+      .withTitle("Import Excel as EPICS DB")
+    FileChooser.chooseFile(descriptor, project, null) { file ->
+      val path = Path.of(file.path)
+      val importedSheets = runCatching {
+        EpicsDatabaseExcelImporter.importWorkbook(path)
+      }.getOrElse { error ->
+        Messages.showErrorDialog(
+          project,
+          error.message ?: "Failed to import ${path.fileName}.",
+          "Import Excel as EPICS DB",
+        )
+        return@chooseFile
+      }
+
+      if (importedSheets.isEmpty()) {
+        Messages.showWarningDialog(
+          project,
+          "No EPICS-style sheets were found in ${path.fileName}.",
+          "Import Excel as EPICS DB",
+        )
+        return@chooseFile
+      }
+
+      EpicsDatabaseExcelImporter.openImportedSheets(project, importedSheets)
+    }
+  }
 }

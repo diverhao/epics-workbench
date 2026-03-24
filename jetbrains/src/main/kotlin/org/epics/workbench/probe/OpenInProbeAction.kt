@@ -3,12 +3,14 @@ package org.epics.workbench.probe
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.vfs.VirtualFile
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import org.epics.workbench.navigation.EpicsRecordResolver
+import org.epics.workbench.substitutions.EpicsSubstitutionsExpansionSupport
 import org.epics.workbench.toc.EpicsDatabaseToc
-import org.epics.workbench.widget.openEpicsWidget
+import org.epics.workbench.widget.EpicsWidgetVirtualFile
 
 class OpenInProbeAction : DumbAwareAction() {
   override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
@@ -19,17 +21,32 @@ class OpenInProbeAction : DumbAwareAction() {
     val editor = event.getData(CommonDataKeys.EDITOR)
     val enabled = project != null &&
       file != null &&
-      editor != null &&
-      (isDatabaseFile(file) || isStartupFile(file))
+      (
+        (editor != null && (isDatabaseFile(file) || isStartupFile(file) || isPvlistFile(file))) ||
+          (editor == null && isPvlistFile(file)) ||
+          EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
+      )
     event.presentation.isEnabledAndVisible = enabled
   }
 
   override fun actionPerformed(event: AnActionEvent) {
     val project = event.project ?: return
     val file = getTargetFile(event) ?: return
-    val editor = event.getData(CommonDataKeys.EDITOR) ?: return
-    val target = resolveProbeTarget(project, file, editor.document.text, editor.caretModel.offset)
-    openEpicsWidget(project, target?.recordName.orEmpty())
+    if (EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)) {
+      FileEditorManager.getInstance(project).openFile(EpicsWidgetVirtualFile(""), true, true)
+      return
+    }
+    val editor = event.getData(CommonDataKeys.EDITOR)
+    val target = if (editor != null) {
+      resolveProbeTarget(project, file, editor.document.text, editor.caretModel.offset)
+    } else {
+      null
+    }
+    FileEditorManager.getInstance(project).openFile(
+      EpicsWidgetVirtualFile(target?.recordName.orEmpty()),
+      true,
+      true,
+    )
   }
 
   private fun getTargetFile(event: AnActionEvent): VirtualFile? {
@@ -48,6 +65,7 @@ class OpenInProbeAction : DumbAwareAction() {
       isStartupFile(file) -> EpicsRecordResolver.resolveRecordDefinition(project, file, offset)?.let { definition ->
         ProbeTarget(definition.recordName)
       }
+      isPvlistFile(file) -> resolvePvlistProbeTarget(text, offset)
       else -> null
     }
   }
@@ -163,11 +181,29 @@ class OpenInProbeAction : DumbAwareAction() {
     return file.extension?.lowercase() in setOf("cmd", "iocsh") || file.name == "st.cmd"
   }
 
+  private fun isPvlistFile(file: VirtualFile): Boolean {
+    return file.extension?.lowercase() == "pvlist"
+  }
+
+  private fun resolvePvlistProbeTarget(text: String, offset: Int): ProbeTarget? {
+    val lineStart = text.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)).let { if (it >= 0) it + 1 else 0 }
+    val lineEnd = text.indexOf('\n', offset).let { if (it >= 0) it else text.length }
+    val trimmed = text.substring(lineStart, lineEnd).trim()
+    return when {
+      trimmed.isEmpty() -> null
+      trimmed.startsWith("#") -> null
+      MACRO_ASSIGNMENT_REGEX.matches(trimmed) -> null
+      trimmed.any(Char::isWhitespace) -> null
+      else -> ProbeTarget(trimmed)
+    }
+  }
+
   private data class ProbeTarget(
     val recordName: String,
   )
 
   private companion object {
     private val MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")
+    private val MACRO_ASSIGNMENT_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*\s*=.*$""")
   }
 }

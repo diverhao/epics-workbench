@@ -12,7 +12,6 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.impl.FakePsiElement
 import com.intellij.psi.tree.IElementType
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
-import org.epics.workbench.highlighting.DATABASE_KEYWORDS
 import org.epics.workbench.highlighting.EpicsHighlightingKeys
 import org.epics.workbench.highlighting.EpicsLexingProfile
 import org.epics.workbench.highlighting.EpicsSimpleLexer
@@ -39,6 +38,11 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
   }
 
   override fun generateDoc(element: PsiElement?, originalElement: PsiElement?): String? {
+    val referencesElement = element as? EpicsReferencedFilesElement
+    if (referencesElement != null) {
+      val hostFileName = referencesElement.hostFile.virtualFile?.name ?: referencesElement.hostFile.name
+      return buildDocumentation(referencesElement.references, hostFileName)
+    }
     val referenceElement = element as? EpicsReferencedFileElement ?: return null
     val hostFileName = referenceElement.hostFile.virtualFile?.name ?: referenceElement.hostFile.name
     return buildDocumentation(referenceElement.reference, hostFileName)
@@ -51,6 +55,12 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
   companion object {
     internal fun createDocumentationElement(file: PsiFile, offset: Int): EpicsReferencedFileElement? {
       val virtualFile = file.virtualFile ?: return null
+      if (isSubstitutionsFile(virtualFile)) {
+        val resolvedReferences = EpicsPathResolver.resolveSubstitutionsReferences(file.project, virtualFile, offset)
+        if (resolvedReferences.size > 1) {
+          return EpicsReferencedFilesElement(file.manager, file, resolvedReferences)
+        }
+      }
       val resolved = EpicsPathResolver.resolveReference(file.project, virtualFile, offset) ?: return null
       return EpicsReferencedFileElement(file.manager, file, resolved)
     }
@@ -77,15 +87,37 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         }
       }
 
+      if (hostFile.extension?.lowercase() == PVLIST_EXTENSION) {
+        val text = readText(hostFile)
+        val recordName = text?.let { findPvlistHoverRecordName(it, offset) }
+        if (!recordName.isNullOrBlank()) {
+          val definitions = EpicsRecordResolver.resolveRecordDefinitionsForName(project, hostFile, recordName)
+          if (definitions.isNotEmpty()) {
+            val referenceKey = buildRecordReferenceKey(hostFile, definitions)
+            return EpicsDocumentationPreview(referenceKey, buildRecordDocumentation(definitions, hostFile))
+          }
+        }
+      }
+
+      if (isSubstitutionsFile(hostFile)) {
+        val resolvedReferences = EpicsPathResolver.resolveSubstitutionsReferences(project, hostFile, offset)
+        if (resolvedReferences.isNotEmpty()) {
+          val referenceKey = buildReferenceKey(hostFile, resolvedReferences)
+          return EpicsDocumentationPreview(referenceKey, buildDocumentation(resolvedReferences, hostFile.name))
+        }
+      }
+
       EpicsPathResolver.resolveReference(project, hostFile, offset)?.let { resolved ->
         val referenceKey = "${hostFile.path}:${resolved.rawPath}:${resolved.targetFile.path}"
         return EpicsDocumentationPreview(referenceKey, buildDocumentation(resolved, hostFile.name))
       }
 
-      EpicsRecordResolver.resolveRecordDefinition(project, hostFile, offset)?.let { definition ->
-        val referenceKey = "${hostFile.path}:record:${definition.targetFile.path}:${definition.recordName}:${definition.line}"
-        return EpicsDocumentationPreview(referenceKey, buildRecordDocumentation(definition, hostFile))
-      }
+      EpicsRecordResolver.resolveRecordDefinitions(project, hostFile, offset)
+        .takeIf { it.isNotEmpty() }
+        ?.let { definitions ->
+          val referenceKey = buildRecordReferenceKey(hostFile, definitions)
+          return EpicsDocumentationPreview(referenceKey, buildRecordDocumentation(definitions, hostFile))
+        }
 
       return null
     }
@@ -168,6 +200,110 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
               append(paragraph("Library directory", parentPath))
             }
           }
+        }
+
+        append("</body></html>")
+      }
+    }
+
+    private fun buildDocumentation(references: List<EpicsResolvedReference>, hostFileName: String): String {
+      if (references.size == 1) {
+        return buildDocumentation(references.first(), hostFileName)
+      }
+
+      val firstKind = references.firstOrNull()?.kind
+      val title = when (firstKind) {
+        EpicsPathKind.DATABASE -> "EPICS database/template file candidates"
+        EpicsPathKind.SUBSTITUTIONS -> "EPICS substitutions file candidates"
+        EpicsPathKind.PROTOCOL -> "EPICS StreamDevice protocol file candidates"
+        EpicsPathKind.DBD -> "EPICS database definition file candidates"
+        EpicsPathKind.LIBRARY -> "EPICS library file candidates"
+        null -> "EPICS file candidates"
+      }
+
+      return buildString {
+        append("<html><body>")
+        append("<h3>").append(escape(title)).append("</h3>")
+        append(paragraph("Matches", references.size.toString()))
+
+        references.forEachIndexed { index, reference ->
+          val text = readText(reference.targetFile)
+          append("<hr/>")
+          append("<h4>")
+            .append(escape("${index + 1}. ${reference.targetFile.name}"))
+            .append("</h4>")
+          append(pathParagraph("Path", reference.targetFile.path))
+
+          when (reference.kind) {
+            EpicsPathKind.DATABASE -> appendDatabaseSummary(reference.targetFile, text)
+            EpicsPathKind.SUBSTITUTIONS -> appendSubstitutionSummary(reference.targetFile, text)
+            EpicsPathKind.PROTOCOL -> if (text != null) appendPreview("Content preview", previewLines(text, 200))
+            EpicsPathKind.DBD -> if (text != null) appendPreview("Content preview", previewLines(text, 120))
+            EpicsPathKind.LIBRARY -> {
+              val parentPath = reference.targetFile.parent?.path
+              if (!parentPath.isNullOrBlank()) {
+                append(paragraph("Library directory", parentPath))
+              }
+            }
+          }
+        }
+
+        append("</body></html>")
+      }
+    }
+
+    private fun buildReferenceKey(
+      hostFile: VirtualFile,
+      references: List<EpicsResolvedReference>,
+    ): String {
+      return references.joinToString(
+        separator = "|",
+        prefix = "${hostFile.path}:reference:",
+      ) { reference ->
+        "${reference.kind}:${reference.rawPath}:${reference.targetFile.path}"
+      }
+    }
+
+    private fun buildRecordReferenceKey(
+      hostFile: VirtualFile,
+      definitions: List<EpicsResolvedRecordDefinition>,
+    ): String {
+      return definitions.joinToString(
+        separator = "|",
+        prefix = "${hostFile.path}:record:",
+      ) { definition ->
+        "${definition.targetFile.path}:${definition.recordName}:${definition.line}"
+      }
+    }
+
+    private fun buildRecordDocumentation(
+      definitions: List<EpicsResolvedRecordDefinition>,
+      hostFile: VirtualFile,
+    ): String {
+      if (definitions.size == 1) {
+        return buildRecordDocumentation(definitions.first(), hostFile)
+      }
+
+      val referenceLabel = when {
+        isStartupFile(hostFile) -> "dbpf"
+        else -> "record link"
+      }
+
+      return buildString {
+        append("<html><body>")
+        append("<h3>").append(escape("EPICS record definitions")).append("</h3>")
+        append(paragraph("Matches", definitions.size.toString()))
+        append(paragraph("Referenced by", referenceLabel))
+
+        definitions.forEachIndexed { index, definition ->
+          append("<hr/>")
+          append("<h4>")
+            .append(escape("${index + 1}. ${definition.recordName}"))
+            .append("</h4>")
+          append(paragraph("Type", definition.recordType))
+          append(pathParagraph("Path", definition.targetFile.path, definition.recordStartOffset))
+          append(paragraph("Line", definition.line.toString()))
+          appendHighlightedPreview("Record preview", buildRecordPreview(readText(definition.targetFile), definition))
         }
 
         append("</body></html>")
@@ -320,7 +456,7 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
     }
 
     private fun renderDatabasePreviewHtml(content: String): String {
-      val lexer = EpicsSimpleLexer(EpicsLexingProfile(DATABASE_KEYWORDS))
+      val lexer = EpicsSimpleLexer(EpicsLexingProfile(DOCUMENTATION_DATABASE_KEYWORDS))
       lexer.start(content, 0, content.length, 0)
       val html = StringBuilder()
       while (true) {
@@ -452,18 +588,136 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       return extension == "cmd" || extension == "iocsh" || file.name == "st.cmd"
     }
 
+    private fun isSubstitutionsFile(file: VirtualFile): Boolean {
+      return file.extension?.lowercase() in setOf("substitutions", "sub", "subs")
+    }
+
+    private fun findPvlistHoverRecordName(text: String, offset: Int): String? {
+      val lineStart = text.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)).let { it + 1 }
+      val lineEnd = text.indexOf('\n', offset).let { if (it >= 0) it else text.length }
+      if (lineStart >= lineEnd) {
+        return null
+      }
+
+      val lineText = text.substring(lineStart, lineEnd)
+      val trimmed = lineText.trim()
+      if (
+        trimmed.isBlank() ||
+        trimmed.startsWith("#") ||
+        PVLIST_MACRO_ASSIGNMENT_REGEX.matches(trimmed) ||
+        trimmed.contains(' ') ||
+        trimmed.contains('\t') ||
+        trimmed.contains("=")
+      ) {
+        return null
+      }
+
+      val trimmedStart = lineText.indexOf(trimmed).takeIf { it >= 0 } ?: return null
+      val tokenStart = lineStart + trimmedStart
+      val tokenEnd = tokenStart + trimmed.length
+      if (offset !in tokenStart..tokenEnd) {
+        return null
+      }
+
+      val expanded = expandPvlistValue(trimmed, extractPvlistMacroDefinitions(text), linkedSetOf())
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: return null
+      return stripPvlistProtocolPrefix(expanded)
+    }
+
+    private fun extractPvlistMacroDefinitions(text: String): Map<String, String> {
+      val macroDefinitions = linkedMapOf<String, String>()
+      text.split(Regex("""\r?\n""")).forEach { rawLine ->
+        val trimmed = rawLine.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+          return@forEach
+        }
+
+        val match = PVLIST_MACRO_ASSIGNMENT_REGEX.matchEntire(trimmed) ?: return@forEach
+        val macroName = match.groups[1]?.value.orEmpty()
+        if (macroName.isNotBlank() && macroName !in macroDefinitions) {
+          macroDefinitions[macroName] = match.groups[2]?.value.orEmpty()
+        }
+      }
+      return macroDefinitions
+    }
+
+    private fun expandPvlistValue(
+      text: String,
+      macroDefinitions: Map<String, String>,
+      stack: LinkedHashSet<String>,
+    ): String? {
+      var unresolved = false
+      val expanded = PVLIST_MACRO_REFERENCE_REGEX.replace(text) { match ->
+        val macroName = match.groups[1]?.value ?: match.groups[3]?.value.orEmpty()
+        val defaultValue = match.groups[2]?.value
+        val resolved = resolvePvlistMacro(macroName, defaultValue, macroDefinitions, stack)
+        if (resolved == null) {
+          unresolved = true
+          ""
+        } else {
+          resolved
+        }
+      }
+      return if (unresolved) null else expanded
+    }
+
+    private fun resolvePvlistMacro(
+      macroName: String,
+      defaultValue: String?,
+      macroDefinitions: Map<String, String>,
+      stack: LinkedHashSet<String>,
+    ): String? {
+      if (macroName in stack) {
+        return null
+      }
+
+      val value = macroDefinitions[macroName] ?: return defaultValue
+      val nextStack = LinkedHashSet(stack)
+      nextStack += macroName
+      return expandPvlistValue(value, macroDefinitions, nextStack)
+    }
+
+    private fun stripPvlistProtocolPrefix(value: String): String {
+      return when {
+        value.startsWith("pva://", ignoreCase = true) -> value.drop(6)
+        value.startsWith("ca://", ignoreCase = true) -> value.drop(5)
+        else -> value
+      }
+    }
+
     private data class SubstitutionBlock(
       val templatePath: String,
       val body: String,
     )
 
     private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")
+    private const val PVLIST_EXTENSION = "pvlist"
     private const val RECORD_PREVIEW_MAX_LINES = 100
     private const val RECORD_PREVIEW_MAX_CHARACTERS = 12000
+    private val DOCUMENTATION_DATABASE_KEYWORDS = setOf(
+      "record",
+      "grecord",
+      "field",
+      "info",
+      "alias",
+      "menu",
+      "choice",
+      "device",
+      "driver",
+      "registrar",
+      "function",
+      "variable",
+      "include",
+      "breaktable",
+    )
     private val RECORD_DECLARATION_REGEX = Regex("""\b(?:g?record)\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*"((?:[^"\\]|\\.)*)"""")
     private val RECORD_DECLARATION_PREFIX_REGEX = Regex("""(record\(\s*[A-Za-z0-9_]+\s*,\s*")((?:[^"\\]|\\.)*)(")""")
     private val SUBSTITUTION_BLOCK_START_REGEX = Regex("""(?m)^\s*file\s+("?[^"\s{]+"?)\s*\{""")
     private val EPICS_VARIABLE_REGEX = Regex("""\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)""")
+    private val PVLIST_MACRO_ASSIGNMENT_REGEX = Regex("""^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$""")
+    private val PVLIST_MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")
     private val DEFAULT_TOKEN_COLORS = mapOf<TextAttributesKey, Color>(
       EpicsHighlightingKeys.COMMENT to Color(0x6A, 0x99, 0x55),
       EpicsHighlightingKeys.STRING to Color(0xCE, 0x91, 0x78),
@@ -484,7 +738,7 @@ internal data class EpicsDocumentationPreview(
   val html: String,
 )
 
-internal class EpicsReferencedFileElement(
+internal open class EpicsReferencedFileElement(
   private val manager: PsiManager,
   val hostFile: PsiFile,
   val reference: EpicsResolvedReference,
@@ -500,4 +754,11 @@ internal class EpicsReferencedFileElement(
   override fun getName(): String = reference.targetFile.name
 
   override fun getPresentableText(): String = reference.targetFile.name
+}
+
+internal class EpicsReferencedFilesElement(
+  manager: PsiManager,
+  hostFile: PsiFile,
+  val references: List<EpicsResolvedReference>,
+) : EpicsReferencedFileElement(manager, hostFile, references.first()) {
 }

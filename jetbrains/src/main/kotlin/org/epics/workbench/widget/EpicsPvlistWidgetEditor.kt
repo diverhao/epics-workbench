@@ -3,8 +3,6 @@ package org.epics.workbench.widget
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.colors.EditorColorsManager
-import com.intellij.openapi.fileChooser.FileChooserFactory
-import com.intellij.openapi.fileChooser.FileSaverDescriptor
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorLocation
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -14,9 +12,7 @@ import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.UserDataHolderBase
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
 import com.intellij.ui.ColorUtil
@@ -24,11 +20,9 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
-import org.epics.workbench.pvlist.EpicsPvlistWidgetSourceKind
 import org.epics.workbench.pvlist.EpicsPvlistWidgetSupport
 import org.epics.workbench.runtime.EpicsMonitorRuntimeService
 import org.epics.workbench.runtime.EpicsPvlistWidgetRowViewState
-import org.epics.workbench.runtime.EpicsPvlistWidgetViewState
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
@@ -38,8 +32,6 @@ import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Graphics
 import java.beans.PropertyChangeListener
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
@@ -97,17 +89,15 @@ private class EpicsPvlistWidgetFileEditor(
   private val tableModel = PvlistTableModel()
   private val channelTable = JBTable(tableModel)
   private val channelEditor = PvlistValueCellEditor()
-  private val saveButton = JButton("Save")
-  private val addOverlayButton = JButton("Add Channels")
-  private val closeOverlayButton = JButton("Done")
+  private val configureChannelsButton = JButton("Configure Channels")
   private val sourceLabel = JBLabel()
   private val messageLabel = JBLabel()
   private val macroFields = LinkedHashMap<String, JTextField>()
   private val macrosTitleLabel = JLabel("Macros")
   private val channelsTitleLabel = JLabel("Channels")
-  private val overlayTitleLabel = JLabel("Add Channels")
-  private val addChannelsArea = PromptTextArea("Add one channel per line", 4, 28)
-  private val addChannelsButton = JButton("Add Channels")
+  private val overlayTitleLabel = JLabel("Configure Channels")
+  private val addChannelsArea = PromptTextArea("One channel per line", 16, 28)
+  private val addChannelsButton = JButton("OK")
   private val refreshTimer = Timer(1000) { refreshViewState() }
   private val component = JPanel(BorderLayout(0, 12))
   private val macrosFieldsContainer = JPanel()
@@ -156,13 +146,10 @@ private class EpicsPvlistWidgetFileEditor(
   private fun buildUi() {
     val controlRow = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
       isOpaque = false
-      add(saveButton)
-      add(addOverlayButton)
+      add(configureChannelsButton)
     }
 
-    saveButton.addActionListener { saveWidgetToFile() }
-    addOverlayButton.addActionListener { showOverlay() }
-    closeOverlayButton.addActionListener { showMainContent() }
+    configureChannelsButton.addActionListener { showOverlay() }
 
     sourceLabel.border = BorderFactory.createEmptyBorder(0, 0, 2, 0)
     messageLabel.border = BorderFactory.createEmptyBorder(0, 0, 10, 0)
@@ -196,14 +183,14 @@ private class EpicsPvlistWidgetFileEditor(
     channelTable.putClientProperty("terminateEditOnFocusLost", false)
 
     addChannelsButton.addActionListener {
-      val previousMacroCount = file.model.macroNames.size
-      if (EpicsPvlistWidgetSupport.addChannels(file.model, addChannelsArea.text)) {
-        if (file.model.macroNames.size != previousMacroCount) {
+      val previousMacros = file.model.macroNames.toList()
+      if (EpicsPvlistWidgetSupport.replaceChannels(file.model, addChannelsArea.text)) {
+        if (previousMacros != file.model.macroNames) {
           rebuildMacroPanel()
         }
         refreshViewState()
       }
-      addChannelsArea.text = ""
+      showMainContent()
     }
 
     val addSection = JPanel().apply {
@@ -243,13 +230,6 @@ private class EpicsPvlistWidgetFileEditor(
     val overlayHeader = JPanel(BorderLayout()).apply {
       isOpaque = false
       add(overlayTitleLabel, BorderLayout.WEST)
-      add(
-        JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
-          isOpaque = false
-          add(closeOverlayButton)
-        },
-        BorderLayout.EAST,
-      )
     }
 
     val overlayContent = JPanel(BorderLayout(0, 16)).apply {
@@ -287,7 +267,7 @@ private class EpicsPvlistWidgetFileEditor(
       component.font = font
     }
 
-    listOf(saveButton, addOverlayButton, closeOverlayButton, addChannelsButton).forEach { button ->
+    listOf(configureChannelsButton, addChannelsButton).forEach { button ->
       button.font = font
     }
 
@@ -380,40 +360,6 @@ private class EpicsPvlistWidgetFileEditor(
     }
   }
 
-  private fun saveWidgetToFile() {
-    val targetPath = if (
-      file.model.sourceKind == EpicsPvlistWidgetSourceKind.PVLIST &&
-      !file.model.sourcePath.isNullOrBlank()
-    ) {
-      Path.of(file.model.sourcePath!!)
-    } else {
-      chooseSavePath() ?: return
-    }
-
-    val fileText = EpicsPvlistWidgetSupport.buildFileText(file.model)
-    runCatching {
-      Files.writeString(targetPath, fileText)
-      LocalFileSystem.getInstance().refreshNioFiles(listOf(targetPath))
-    }.onFailure { error ->
-      Messages.showErrorDialog(project, error.message ?: "Failed to write ${targetPath.fileName}.", TITLE)
-      return
-    }
-
-    file.model.sourceKind = EpicsPvlistWidgetSourceKind.PVLIST
-    file.model.sourcePath = targetPath.toString()
-    file.model.sourceLabel = targetPath.fileName.toString()
-    refreshViewState()
-  }
-
-  private fun chooseSavePath(): Path? {
-    val descriptor = FileSaverDescriptor(TITLE, "Save the current PV list widget as a .pvlist file.", "pvlist")
-    val saver = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
-    val sourcePath = file.model.sourcePath?.let(Path::of)
-    val defaultDirectory = sourcePath?.parent ?: project.basePath?.let(Path::of)
-    val defaultName = file.model.sourceLabel.substringBeforeLast('.').ifBlank { "epics" } + ".pvlist"
-    return saver.save(defaultDirectory, defaultName)?.file?.toPath()
-  }
-
   private fun buildMonospaceEditorFont(fontName: String, fontSize: Int): Font {
     val candidate = Font(fontName, Font.PLAIN, fontSize)
     val family = candidate.family.lowercase(Locale.ROOT)
@@ -502,7 +448,6 @@ private class EpicsPvlistWidgetFileEditor(
   }
 
   private companion object {
-    private const val TITLE = "Save PV List File"
     private const val MAIN_CARD = "main"
     private const val OVERLAY_CARD = "overlay"
   }
@@ -512,7 +457,9 @@ private class EpicsPvlistWidgetFileEditor(
   }
 
   private fun showOverlay() {
+    addChannelsArea.text = file.model.rawPvNames.joinToString("\n")
     cardLayout.show(cardPanel, OVERLAY_CARD)
+    addChannelsArea.requestFocusInWindow()
   }
 }
 
@@ -522,6 +469,7 @@ private fun createInputBox(textArea: JTextArea): JComponent {
     viewport.isOpaque = false
     isOpaque = false
     alignmentX = Component.LEFT_ALIGNMENT
+    preferredSize = Dimension(720, textArea.preferredSize.height.coerceAtLeast(420))
   }
 }
 

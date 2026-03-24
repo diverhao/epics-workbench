@@ -43,7 +43,7 @@ internal object EpicsStartupMacroValidator {
       val requiredMacroNames = extractRequiredMacroNames(sanitizedText)
       val definedMacroNames = extractMacroNames(sanitizedText).toSet()
       val providedAssignments = extractNamedAssignments(statement.macros, statement.macrosStart)
-      val providedMacroNames = providedAssignments.mapTo(linkedSetOf()) { it.name }
+      val providedMacroNames = extractAssignedMacroNames(statement.macros)
 
       val missingMacroNames = requiredMacroNames.filterNot(providedMacroNames::contains)
       if (missingMacroNames.isNotEmpty()) {
@@ -136,6 +136,40 @@ internal object EpicsStartupMacroValidator {
 
     flushSegment(text.length)
     return assignments
+  }
+
+  private fun extractAssignedMacroNames(text: String): Set<String> {
+    if (text.isBlank()) {
+      return emptySet()
+    }
+
+    val names = linkedSetOf<String>()
+    var segmentStart = 0
+    var escaped = false
+
+    fun flushSegment(segmentEnd: Int) {
+      val segment = text.substring(segmentStart, segmentEnd)
+      val match = NAMED_ASSIGNMENT_REGEX.find(segment) ?: return
+      val name = match.groups[1]?.value.orEmpty()
+      if (name.isNotBlank()) {
+        names += name
+      }
+    }
+
+    for (index in text.indices) {
+      val character = text[index]
+      when {
+        escaped -> escaped = false
+        character == '\\' -> escaped = true
+        character == ',' -> {
+          flushSegment(index)
+          segmentStart = index + 1
+        }
+      }
+    }
+
+    flushSegment(text.length)
+    return names
   }
 
   private fun maskDatabaseComments(text: String): String {
