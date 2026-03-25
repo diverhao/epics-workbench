@@ -14,14 +14,6 @@
     "displayName": "EPICS Workbench",
     "description": "EPICS syntax highlighting, autocompletion, formatting, file/record navigation, and runtime montioring tools.",
     "contributes": {
-        "views": {
-            "explorer": [
-                {
-                    "id": "epicsRuntimeMonitors",
-                    "name": "EPICS Runtime"
-                }
-            ]
-        },
         "menus": {
             "editor/context": [
                 {
@@ -115,6 +107,36 @@
                     "command": "vscode-epics.openInMonitor"
                 },
                 {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStartIoc",
+                    "group": "navigation@27",
+                    "command": "vscode-epics.startActiveStartupIoc"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "group": "navigation@28",
+                    "command": "vscode-epics.stopActiveStartupIoc"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "group": "navigation@28.5",
+                    "command": "vscode-epics.showActiveStartupIocTerminal"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "group": "navigation@28.7",
+                    "command": "vscode-epics.openActiveStartupIocCommands"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "group": "navigation@28.8",
+                    "command": "vscode-epics.openActiveStartupIocVariables"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "group": "navigation@28.9",
+                    "command": "vscode-epics.openActiveStartupIocEnvironment"
+                },
+                {
                     "when": "editorLangId == startup",
                     "group": "navigation@29",
                     "command": "vscode-epics.openInProbe"
@@ -200,6 +222,18 @@
                     "command": "vscode-epics.openInMonitor"
                 }
             ],
+            "editor/title": [
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStartIoc",
+                    "group": "navigation",
+                    "command": "vscode-epics.startActiveStartupIoc"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "group": "navigation",
+                    "command": "vscode-epics.stopActiveStartupIoc"
+                }
+            ],
             "commandPalette": [
                 {
                     "when": "editorLangId == database",
@@ -224,6 +258,26 @@
                 {
                     "when": "editorLangId == database || editorLangId == startup || editorLangId == substitutions || editorLangId == pvlist || editorLangId == probe",
                     "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStartIoc",
+                    "command": "vscode-epics.startActiveStartupIoc"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "command": "vscode-epics.stopActiveStartupIoc"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "command": "vscode-epics.openActiveStartupIocCommands"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "command": "vscode-epics.openActiveStartupIocVariables"
+                },
+                {
+                    "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
+                    "command": "vscode-epics.openActiveStartupIocEnvironment"
                 },
                 {
                     "when": "editorLangId == database",
@@ -300,40 +354,6 @@
                 {
                     "when": "editorLangId == substitutions",
                     "command": "vscode-epics.copyAsExpandedDb"
-                }
-            ],
-            "view/item/context": [
-                {
-                    "when": "view == epicsRuntimeMonitors && viewItem == epicsRuntimeMonitor",
-                    "command": "vscode-epics.removeRuntimeMonitor",
-                    "group": "inline"
-                }
-            ],
-            "view/title": [
-                {
-                    "when": "view == epicsRuntimeMonitors",
-                    "command": "vscode-epics.addRuntimeMonitor",
-                    "group": "navigation"
-                },
-                {
-                    "when": "view == epicsRuntimeMonitors",
-                    "command": "vscode-epics.openProjectRuntimeConfiguration",
-                    "group": "navigation"
-                },
-                {
-                    "when": "view == epicsRuntimeMonitors",
-                    "command": "vscode-epics.restartRuntimeContext",
-                    "group": "navigation"
-                },
-                {
-                    "when": "view == epicsRuntimeMonitors",
-                    "command": "vscode-epics.stopRuntimeContext",
-                    "group": "navigation"
-                },
-                {
-                    "when": "view == epicsRuntimeMonitors",
-                    "command": "vscode-epics.clearRuntimeMonitors",
-                    "group": "navigation"
                 }
             ],
             "explorer/context": [
@@ -640,6 +660,11 @@
                 "category": "EPICS"
             },
             {
+                "title": "EPICS Runtime",
+                "command": "vscode-epics.openRuntimeWidget",
+                "category": "EPICS"
+            },
+            {
                 "title": "Add Runtime Monitor",
                 "command": "vscode-epics.addRuntimeMonitor",
                 "category": "EPICS"
@@ -683,6 +708,66 @@
                 "title": "Open Project Runtime Configuration",
                 "command": "vscode-epics.openProjectRuntimeConfiguration",
                 "category": "EPICS"
+            },
+            {
+                "title": "Set IOC Shell Terminal",
+                "command": "vscode-epics.setIocShellTerminal",
+                "category": "EPICS",
+                "icon": "$(terminal)"
+            },
+            {
+                "title": "Run IOC Command...",
+                "command": "vscode-epics.runIocShellCommand",
+                "category": "EPICS",
+                "icon": "$(terminal-cmd)"
+            },
+            {
+                "title": "Run IOC dbl",
+                "command": "vscode-epics.runIocShellDbl",
+                "category": "EPICS",
+                "icon": "$(list-unordered)"
+            },
+            {
+                "title": "Run IOC dbpr Current Record",
+                "command": "vscode-epics.runIocShellDbprCurrentRecord",
+                "category": "EPICS",
+                "icon": "$(symbol-field)"
+            },
+            {
+                "title": "Start IOC",
+                "command": "vscode-epics.startActiveStartupIoc",
+                "category": "EPICS",
+                "icon": "$(play)"
+            },
+            {
+                "title": "Stop IOC",
+                "command": "vscode-epics.stopActiveStartupIoc",
+                "category": "EPICS",
+                "icon": "$(stop-circle)"
+            },
+            {
+                "title": "Show Running Terminal",
+                "command": "vscode-epics.showActiveStartupIocTerminal",
+                "category": "EPICS",
+                "icon": "$(terminal)"
+            },
+            {
+                "title": "IOC Runtime Commands",
+                "command": "vscode-epics.openActiveStartupIocCommands",
+                "category": "EPICS",
+                "icon": "$(list-tree)"
+            },
+            {
+                "title": "IOC Runtime Variables",
+                "command": "vscode-epics.openActiveStartupIocVariables",
+                "category": "EPICS",
+                "icon": "$(symbol-variable)"
+            },
+            {
+                "title": "IOC Runtime Environment",
+                "command": "vscode-epics.openActiveStartupIocEnvironment",
+                "category": "EPICS",
+                "icon": "$(gear)"
             }
         ]
     },
@@ -701,13 +786,13 @@
         "onLanguage:database definition",
         "onCustomEditor:epicsWorkbench.probeEditor",
         "onLanguage:makefile",
-        "onView:epicsRuntimeMonitors",
         "onCommand:vscode-epics.copyAsMonitorFile",
         "onCommand:vscode-epics.copyAsExpandedDb",
         "onCommand:vscode-epics.exportDatabaseToExcel",
         "onCommand:vscode-epics.openInProbe",
         "onCommand:vscode-epics.openInChannelGraph",
         "onCommand:vscode-epics.openInMonitor",
+        "onCommand:vscode-epics.openRuntimeWidget",
         "onCommand:vscode-epics.addRuntimeMonitor",
         "onCommand:vscode-epics.removeRuntimeMonitor",
         "onCommand:vscode-epics.clearRuntimeMonitors",
@@ -716,7 +801,17 @@
         "onCommand:vscode-epics.startActiveFileRuntimeContext",
         "onCommand:vscode-epics.stopActiveFileRuntimeContext",
         "onCommand:vscode-epics.putRuntimeValue",
-        "onCommand:vscode-epics.openProjectRuntimeConfiguration"
+        "onCommand:vscode-epics.openProjectRuntimeConfiguration",
+        "onCommand:vscode-epics.setIocShellTerminal",
+        "onCommand:vscode-epics.runIocShellCommand",
+        "onCommand:vscode-epics.runIocShellDbl",
+        "onCommand:vscode-epics.runIocShellDbprCurrentRecord",
+        "onCommand:vscode-epics.startActiveStartupIoc",
+        "onCommand:vscode-epics.stopActiveStartupIoc",
+        "onCommand:vscode-epics.showActiveStartupIocTerminal",
+        "onCommand:vscode-epics.openActiveStartupIocCommands",
+        "onCommand:vscode-epics.openActiveStartupIocVariables",
+        "onCommand:vscode-epics.openActiveStartupIocEnvironment"
     ],
     "dependencies": {
         "epics-tca": "^1.1.33"

@@ -1,7 +1,9 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const vscode = require("vscode");
+const { collectEpicsBuildApplication } = require("../scripts/epics-build-model");
 const { createDatabaseExcelTools } = require("./databaseExcel");
 const { createDatabaseExcelImportTools } = require("./databaseExcelImport");
 const {
@@ -34,6 +36,7 @@ const LANGUAGE_IDS = {
   startup: "startup",
   substitutions: "substitutions",
   dbd: "database definition",
+  source: "epics-source",
   proto: "proto",
   sequencer: "sequencer",
   pvlist: "pvlist",
@@ -44,6 +47,9 @@ const DATABASE_EXTENSIONS = new Set([".db", ".vdb", ".template"]);
 const SUBSTITUTION_EXTENSIONS = new Set([".sub", ".subs", ".substitutions"]);
 const STARTUP_EXTENSIONS = new Set([".cmd", ".iocsh"]);
 const DBD_EXTENSIONS = new Set([".dbd"]);
+const PVLIST_EXTENSIONS = new Set([".pvlist"]);
+const PROBE_EXTENSIONS = new Set([".probe"]);
+const PROTOCOL_EXTENSIONS = new Set([".proto"]);
 const SOURCE_EXTENSIONS = new Set([
   ".c",
   ".cc",
@@ -54,7 +60,12 @@ const SOURCE_EXTENSIONS = new Set([
   ".hpp",
   ".hxx",
 ]);
-const INDEX_GLOB = "**/*.{db,vdb,template,sub,subs,substitutions,cmd,iocsh,dbd}";
+const EPICS_SOURCE_DOCUMENT_SELECTORS = [...SOURCE_EXTENSIONS].map((extension) => ({
+  scheme: "file",
+  pattern: `**/*${extension}`,
+}));
+const INDEX_GLOB =
+  "**/*.{db,vdb,template,sub,subs,substitutions,cmd,iocsh,dbd,pvlist,probe,proto}";
 const SOURCE_INDEX_GLOB = "**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx}";
 const PROJECT_INDEX_GLOBS = [
   "**/Makefile",
@@ -725,8 +736,31 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.languages.registerReferenceProvider(
-      { language: LANGUAGE_IDS.sequencer },
-      new EpicsReferenceProvider(),
+      [
+        { language: LANGUAGE_IDS.database },
+        { language: LANGUAGE_IDS.startup },
+        { language: LANGUAGE_IDS.substitutions },
+        { language: LANGUAGE_IDS.dbd },
+        { language: LANGUAGE_IDS.pvlist },
+        { language: LANGUAGE_IDS.probe },
+        { language: LANGUAGE_IDS.sequencer },
+        ...EPICS_SOURCE_DOCUMENT_SELECTORS,
+      ],
+      new EpicsReferenceProvider(workspaceIndex),
+    ),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerRenameProvider(
+      [
+        { language: LANGUAGE_IDS.database },
+        { language: LANGUAGE_IDS.startup },
+        { language: LANGUAGE_IDS.substitutions },
+        { language: LANGUAGE_IDS.dbd },
+        { language: LANGUAGE_IDS.pvlist },
+        { language: LANGUAGE_IDS.probe },
+        ...EPICS_SOURCE_DOCUMENT_SELECTORS,
+      ],
+      new EpicsRenameProvider(workspaceIndex),
     ),
   );
   context.subscriptions.push(
@@ -742,6 +776,18 @@ function activate(context) {
         { scheme: "file", pattern: "**/envPaths*" },
       ],
       new EpicsHoverProvider(workspaceIndex),
+    ),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      [
+        { language: LANGUAGE_IDS.database },
+        { language: LANGUAGE_IDS.startup },
+      ],
+      new EpicsCodeActionProvider(workspaceIndex),
+      {
+        providedCodeActionKinds: [vscode.CodeActionKind.QuickFix],
+      },
     ),
   );
   context.subscriptions.push(
@@ -1041,16 +1087,59 @@ class EpicsDefinitionProvider {
 }
 
 class EpicsReferenceProvider {
-  provideReferences(document, position, context) {
-    if (!isSequencerDocument(document)) {
-      return [];
+  constructor(workspaceIndex) {
+    this.workspaceIndex = workspaceIndex;
+  }
+
+  async provideReferences(document, position, context) {
+    if (isSequencerDocument(document)) {
+      return getSequencerReferenceLocations(
+        document,
+        position,
+        Boolean(context?.includeDeclaration),
+      );
     }
 
-    return getSequencerReferenceLocations(
+    const snapshot = mergeSnapshotWithDocument(
+      await this.workspaceIndex.getSnapshot(),
+      document,
+    );
+    return getEpicsReferenceLocations(
+      snapshot,
       document,
       position,
-      Boolean(context?.includeDeclaration),
+      true,
     );
+  }
+}
+
+class EpicsRenameProvider {
+  constructor(workspaceIndex) {
+    this.workspaceIndex = workspaceIndex;
+  }
+
+  async prepareRename(document, position) {
+    const snapshot = mergeSnapshotWithDocument(
+      await this.workspaceIndex.getSnapshot(),
+      document,
+    );
+    const symbol = getEpicsSemanticSymbolAtPosition(snapshot, document, position);
+    if (!symbol || symbol.readOnly) {
+      throw new Error("Nothing renameable at the current cursor position.");
+    }
+
+    return {
+      range: symbol.range,
+      placeholder: symbol.name,
+    };
+  }
+
+  async provideRenameEdits(document, position, newName) {
+    const snapshot = mergeSnapshotWithDocument(
+      await this.workspaceIndex.getSnapshot(),
+      document,
+    );
+    return buildEpicsRenameWorkspaceEdit(snapshot, document, position, newName);
   }
 }
 
@@ -1065,6 +1154,20 @@ class EpicsHoverProvider {
       document,
     );
     return getHover(snapshot, document, position);
+  }
+}
+
+class EpicsCodeActionProvider {
+  constructor(workspaceIndex) {
+    this.workspaceIndex = workspaceIndex;
+  }
+
+  async provideCodeActions(document, range, context) {
+    const snapshot = mergeSnapshotWithDocument(
+      await this.workspaceIndex.getSnapshot(),
+      document,
+    );
+    return getEpicsCodeActions(snapshot, document, range, context);
   }
 }
 
@@ -1154,6 +1257,7 @@ class WorkspaceIndex {
     this.dirty = true;
     this.rebuildPromise = undefined;
     this.disposables = [];
+    this.buildModelCache = new EpicsBuildModelCache();
     this.changeEmitter = new vscode.EventEmitter();
     this.disposables.push(this.changeEmitter);
 
@@ -1219,7 +1323,7 @@ class WorkspaceIndex {
       }
     }
 
-    snapshot.projectModel = buildProjectModel(projectFiles);
+    snapshot.projectModel = await buildProjectModel(projectFiles, this.buildModelCache);
     snapshot.workspaceFilesByAbsolutePath = buildWorkspaceFileLookup(snapshot.workspaceFiles);
     snapshot.workspaceFiles.sort((left, right) =>
       compareLabels(left.relativePath, right.relativePath),
@@ -1231,8 +1335,57 @@ class WorkspaceIndex {
   }
 
   dispose() {
+    this.buildModelCache.dispose();
     this.disposables.forEach((disposable) => disposable.dispose());
   }
+}
+
+class EpicsBuildModelCache {
+  constructor() {
+    this.entries = new Map();
+  }
+
+  async getApplication(rootPath, filesByAbsolutePath) {
+    const normalizedRootPath = normalizeFsPath(rootPath);
+    const signature = computeProjectBuildSignature(normalizedRootPath, filesByAbsolutePath);
+    const cached = this.entries.get(normalizedRootPath);
+    if (cached?.signature === signature) {
+      return cached.application;
+    }
+
+    try {
+      const application = await collectEpicsBuildApplication(normalizedRootPath);
+      if (application) {
+        this.entries.set(normalizedRootPath, {
+          signature,
+          application,
+        });
+      }
+      return application;
+    } catch (error) {
+      return cached?.application;
+    }
+  }
+
+  dispose() {
+    this.entries.clear();
+  }
+}
+
+function computeProjectBuildSignature(rootPath, filesByAbsolutePath) {
+  const hash = crypto.createHash("sha1");
+  const relevantFiles = [...filesByAbsolutePath.entries()]
+    .filter(([filePath]) => isPathWithinRoot(filePath, rootPath))
+    .sort((left, right) => compareLabels(left[0], right[0]));
+
+  for (const [filePath, file] of relevantFiles) {
+    hash.update(filePath);
+    hash.update("\0");
+    hash.update(String(file?.text || ""));
+    hash.update("\0");
+  }
+
+  return hash.digest("hex");
 }
 
 function loadStaticData(extensionPath) {
@@ -4011,6 +4164,2117 @@ function createSubstitutionTemplateHover(document, reference, absolutePaths) {
   );
 }
 
+function getEpicsReferenceLocations(snapshot, document, position, includeDeclaration) {
+  const symbol = getEpicsSemanticSymbolAtPosition(snapshot, document, position);
+  if (!symbol) {
+    return [];
+  }
+
+  return collectEpicsSymbolOccurrences(
+    snapshot,
+    symbol,
+    document,
+    includeDeclaration,
+  ).map((occurrence) => new vscode.Location(occurrence.uri, occurrence.range));
+}
+
+function getEpicsSemanticSymbolAtPosition(snapshot, document, position) {
+  return (
+    getRecordSymbolAtPosition(snapshot, document, position) ||
+    getMacroSymbolAtPosition(document, position) ||
+    getRecordTypeSymbolAtPosition(document, position) ||
+    getFieldSymbolAtPosition(document, position) ||
+    getDbdNamedSymbolAtPosition(document, position) ||
+    getSourceNamedSymbolAtPosition(document, position)
+  );
+}
+
+function getRecordSymbolAtPosition(snapshot, document, position) {
+  if (isDatabaseDocument(document)) {
+    return getDatabaseRecordSymbolAtPosition(snapshot, document, position);
+  }
+
+  if (isStartupDocument(document)) {
+    return getStartupRecordSymbolAtPosition(snapshot, document, position);
+  }
+
+  if (isPvlistDocument(document)) {
+    return getPvlistRecordSymbolAtPosition(document, position);
+  }
+
+  if (isProbeDocument(document)) {
+    return getProbeRecordSymbolAtPosition(document, position);
+  }
+
+  return undefined;
+}
+
+function getRecordTypeSymbolAtPosition(document, position) {
+  if (isDatabaseDocument(document)) {
+    return getDatabaseRecordTypeSymbolAtPosition(document, position);
+  }
+
+  if (document?.languageId === LANGUAGE_IDS.dbd) {
+    return getDbdRecordTypeSymbolAtPosition(document, position);
+  }
+
+  return undefined;
+}
+
+function getDatabaseRecordTypeSymbolAtPosition(document, position) {
+  const offset = document.offsetAt(position);
+  for (const declaration of extractRecordDeclarations(document.getText())) {
+    if (offset < declaration.recordTypeStart || offset > declaration.recordTypeEnd) {
+      continue;
+    }
+
+    return createEpicsSemanticSymbol(
+      "recordType",
+      declaration.recordType,
+      document,
+      declaration.recordTypeStart,
+      declaration.recordTypeEnd,
+    );
+  }
+
+  return undefined;
+}
+
+function getDbdRecordTypeSymbolAtPosition(document, position) {
+  const offset = document.offsetAt(position);
+  const text = document.getText();
+
+  for (const declaration of extractDbdRecordTypeDeclarations(text)) {
+    if (offset >= declaration.nameStart && offset <= declaration.nameEnd) {
+      return createEpicsSemanticSymbol(
+        "recordType",
+        declaration.name,
+        document,
+        declaration.nameStart,
+        declaration.nameEnd,
+      );
+    }
+  }
+
+  for (const entry of extractDbdDeviceDeclarations(text)) {
+    if (offset < entry.recordTypeStart || offset > entry.recordTypeEnd) {
+      continue;
+    }
+
+    return createEpicsSemanticSymbol(
+      "recordType",
+      entry.recordType,
+      document,
+      entry.recordTypeStart,
+      entry.recordTypeEnd,
+    );
+  }
+
+  return undefined;
+}
+
+function getFieldSymbolAtPosition(document, position) {
+  if (isDatabaseDocument(document)) {
+    return getDatabaseFieldSymbolAtPosition(document, position);
+  }
+
+  if (document?.languageId === LANGUAGE_IDS.dbd) {
+    return getDbdFieldSymbolAtPosition(document, position);
+  }
+
+  return undefined;
+}
+
+function getDatabaseFieldSymbolAtPosition(document, position) {
+  const offset = document.offsetAt(position);
+  const text = document.getText();
+
+  for (const recordDeclaration of extractRecordDeclarations(text)) {
+    if (offset < recordDeclaration.recordStart || offset > recordDeclaration.recordEnd) {
+      continue;
+    }
+
+    for (const fieldDeclaration of extractFieldDeclarationsInRecord(text, recordDeclaration)) {
+      if (
+        offset >= fieldDeclaration.fieldNameStart &&
+        offset <= fieldDeclaration.fieldNameEnd
+      ) {
+        return createEpicsSemanticSymbol(
+          "field",
+          fieldDeclaration.fieldName,
+          document,
+          fieldDeclaration.fieldNameStart,
+          fieldDeclaration.fieldNameEnd,
+          undefined,
+          { recordType: recordDeclaration.recordType },
+        );
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function getDbdFieldSymbolAtPosition(document, position) {
+  const offset = document.offsetAt(position);
+  const text = document.getText();
+
+  for (const recordTypeDeclaration of extractDbdRecordTypeDeclarations(text)) {
+    if (offset < recordTypeDeclaration.blockStart || offset > recordTypeDeclaration.blockEnd) {
+      continue;
+    }
+
+    for (const fieldDeclaration of extractDbdFieldDeclarationsInRecordType(
+      text,
+      recordTypeDeclaration,
+    )) {
+      if (
+        offset >= fieldDeclaration.fieldNameStart &&
+        offset <= fieldDeclaration.fieldNameEnd
+      ) {
+        return createEpicsSemanticSymbol(
+          "field",
+          fieldDeclaration.fieldName,
+          document,
+          fieldDeclaration.fieldNameStart,
+          fieldDeclaration.fieldNameEnd,
+          undefined,
+          { recordType: recordTypeDeclaration.name },
+        );
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function getDbdNamedSymbolAtPosition(document, position) {
+  if (document?.languageId !== LANGUAGE_IDS.dbd) {
+    return undefined;
+  }
+
+  const offset = document.offsetAt(position);
+  const text = document.getText();
+
+  for (const entry of extractDbdDeviceDeclarations(text)) {
+    if (offset < entry.supportNameStart || offset > entry.supportNameEnd) {
+      continue;
+    }
+
+    return createEpicsSemanticSymbol(
+      "deviceSupport",
+      entry.supportName,
+      document,
+      entry.supportNameStart,
+      entry.supportNameEnd,
+    );
+  }
+
+  for (const [kind, keyword] of [
+    ["driver", "driver"],
+    ["registrar", "registrar"],
+    ["function", "function"],
+    ["variable", "variable"],
+  ]) {
+    for (const entry of extractDbdNamedEntries(text, keyword)) {
+      if (offset < entry.nameStart || offset > entry.nameEnd) {
+        continue;
+      }
+
+      return createEpicsSemanticSymbol(
+        kind,
+        entry.name,
+        document,
+        entry.nameStart,
+        entry.nameEnd,
+      );
+    }
+  }
+
+  return undefined;
+}
+
+function getSourceNamedSymbolAtPosition(document, position) {
+  if (!isSourceDocument(document)) {
+    return undefined;
+  }
+
+  const offset = document.offsetAt(position);
+  const text = document.getText();
+
+  for (const entry of extractSourceNamedSymbolOccurrences(text)) {
+    if (offset < entry.nameStart || offset > entry.nameEnd) {
+      continue;
+    }
+
+    return createEpicsSemanticSymbol(
+      entry.kind,
+      entry.name,
+      document,
+      entry.nameStart,
+      entry.nameEnd,
+    );
+  }
+
+  return undefined;
+}
+
+function getDatabaseRecordSymbolAtPosition(snapshot, document, position) {
+  const offset = document.offsetAt(position);
+  const text = document.getText();
+  const macroAssignments = extractDatabaseTocMacroAssignments(text);
+
+  for (const declaration of extractRecordDeclarations(text)) {
+    if (offset >= declaration.nameStart && offset <= declaration.nameEnd) {
+      return createEpicsSemanticSymbol(
+        "record",
+        declaration.name,
+        document,
+        declaration.nameStart,
+        declaration.nameEnd,
+        getDatabaseRecordSearchNames(text, declaration.name),
+      );
+    }
+
+    for (const fieldDeclaration of extractFieldDeclarationsInRecord(text, declaration)) {
+      const candidateRanges = getLinkedRecordCandidateRanges(
+        fieldDeclaration.value,
+        fieldDeclaration.valueStart,
+        {
+          allowMacroReferences: true,
+          macroAssignments,
+        },
+      ).filter((candidate) => offset >= candidate.start && offset <= candidate.end);
+      if (candidateRanges.length === 0) {
+        continue;
+      }
+
+      const searchNames = getShortestRecordCandidateNames(candidateRanges);
+      const declarationMatch = [...searchNames]
+        .map((recordName) => findDatabaseDeclarationByAnyRecordName(text, recordName))
+        .find(Boolean);
+      const hasDefinition = [...searchNames].some(
+        (candidateName) =>
+          getRecordDefinitionsForName(snapshot, document, candidateName).length > 0,
+      );
+      if (!hasDefinition) {
+        continue;
+      }
+
+      return createEpicsSemanticSymbol(
+        "record",
+        declarationMatch?.declaration?.name || [...searchNames][0],
+        document,
+        candidateRanges.reduce((minimum, candidate) => Math.min(minimum, candidate.start), Number.POSITIVE_INFINITY),
+        candidateRanges.reduce((maximum, candidate) => Math.max(maximum, candidate.end), 0),
+        searchNames,
+      );
+    }
+  }
+
+  const fallbackFieldDeclaration = getRecordScopedFieldDeclarationAtPosition(
+    snapshot,
+    document,
+    position,
+  );
+  if (fallbackFieldDeclaration) {
+    const fallbackSymbol = resolveDatabaseFieldRecordSymbol(
+      snapshot,
+      document,
+      text,
+      fallbackFieldDeclaration,
+      macroAssignments,
+    );
+    if (fallbackSymbol) {
+      return fallbackSymbol;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveDatabaseFieldRecordSymbol(
+  snapshot,
+  document,
+  documentText,
+  fieldDeclaration,
+  macroAssignments,
+) {
+  const candidateRanges = getLinkedRecordCandidateRanges(
+    fieldDeclaration.value,
+    fieldDeclaration.valueStart,
+    {
+      allowMacroReferences: true,
+      macroAssignments,
+    },
+  );
+  const searchNames = getShortestRecordCandidateNames(candidateRanges);
+  if (searchNames.size === 0) {
+    return undefined;
+  }
+
+  const declarationMatch = [...searchNames]
+    .map((recordName) => findDatabaseDeclarationByAnyRecordName(documentText, recordName))
+    .find(Boolean);
+  const hasDefinition = [...searchNames].some(
+    (candidateName) =>
+      getRecordDefinitionsForName(snapshot, document, candidateName).length > 0,
+  );
+  if (!hasDefinition) {
+    return undefined;
+  }
+
+  const shortestRanges = candidateRanges.filter((candidate) => searchNames.has(candidate.name));
+  return createEpicsSemanticSymbol(
+    "record",
+    declarationMatch?.declaration?.name || [...searchNames][0],
+    document,
+    shortestRanges.reduce((minimum, candidate) => Math.min(minimum, candidate.start), Number.POSITIVE_INFINITY),
+    shortestRanges.reduce((maximum, candidate) => Math.max(maximum, candidate.end), 0),
+    searchNames,
+  );
+
+  return undefined;
+}
+
+function getStartupRecordSymbolAtPosition(snapshot, document, position) {
+  const argument = getStartupDbpfArgumentAtPosition(document, position);
+  if (!argument) {
+    return undefined;
+  }
+
+  const baseOffset = document.offsetAt(argument.range.start);
+  const candidateRange = getLinkedRecordCandidateRangeAtOffset(
+    argument.value,
+    baseOffset,
+    document.offsetAt(position),
+  );
+  if (!candidateRange) {
+    return undefined;
+  }
+
+  const loadedDefinitionsByName = getStartupLoadedRecordDefinitionMap(
+    snapshot,
+    document,
+    argument.range.end,
+  );
+  if (!loadedDefinitionsByName.has(candidateRange.name)) {
+    return undefined;
+  }
+
+  return createEpicsSemanticSymbol(
+    "record",
+    candidateRange.name,
+    document,
+    candidateRange.start,
+    candidateRange.end,
+    new Set([candidateRange.name]),
+  );
+}
+
+function getPvlistRecordSymbolAtPosition(document, position) {
+  const lineInfo = getPvlistRecordReferenceForLine(document, position.line);
+  if (!lineInfo || !lineInfo.range.contains(position)) {
+    return undefined;
+  }
+
+  return createEpicsSemanticSymbol(
+    "record",
+    lineInfo.name,
+    document,
+    document.offsetAt(lineInfo.range.start),
+    document.offsetAt(lineInfo.range.end),
+    new Set([lineInfo.name]),
+  );
+}
+
+function getProbeRecordSymbolAtPosition(document, position) {
+  const lineInfo = getProbeRecordReferenceForLine(document, position.line);
+  if (!lineInfo || !lineInfo.range.contains(position)) {
+    return undefined;
+  }
+
+  return createEpicsSemanticSymbol(
+    "record",
+    lineInfo.name,
+    document,
+    document.offsetAt(lineInfo.range.start),
+    document.offsetAt(lineInfo.range.end),
+    new Set([lineInfo.name]),
+  );
+}
+
+function getMacroSymbolAtPosition(document, position) {
+  const offset = document.offsetAt(position);
+
+  const assignmentSymbol =
+    getStartupMacroSymbolAtOffset(document, offset) ||
+    getSubstitutionsMacroSymbolAtOffset(document, offset) ||
+    getPvlistMacroSymbolAtOffset(document, offset);
+  if (assignmentSymbol) {
+    return assignmentSymbol;
+  }
+
+  return getGenericMacroReferenceSymbolAtOffset(document, offset);
+}
+
+function getStartupMacroSymbolAtOffset(document, offset) {
+  if (!isStartupDocument(document)) {
+    return undefined;
+  }
+
+  for (const statement of extractStartupStatements(document.getText())) {
+    if (
+      statement.kind === "envSet" &&
+      statement.nameStart !== undefined &&
+      statement.nameEnd !== undefined &&
+      offset >= statement.nameStart &&
+      offset <= statement.nameEnd
+    ) {
+      return createEpicsSemanticSymbol(
+        "macro",
+        statement.name,
+        document,
+        statement.nameStart,
+        statement.nameEnd,
+      );
+    }
+
+    if (
+      statement.kind === "load" &&
+      statement.command === "dbLoadRecords" &&
+      statement.macros &&
+      statement.macroValueStart !== undefined
+    ) {
+      const extracted = extractNamedAssignmentsWithRanges(
+        statement.macros,
+        statement.macroValueStart,
+      );
+      for (const [macroName, range] of extracted.nameRanges.entries()) {
+        if (offset < range.start || offset > range.end) {
+          continue;
+        }
+
+        return createEpicsSemanticSymbol(
+          "macro",
+          macroName,
+          document,
+          range.start,
+          range.end,
+        );
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function getSubstitutionsMacroSymbolAtOffset(document, offset) {
+  if (!isSubstitutionsDocument(document)) {
+    return undefined;
+  }
+
+  for (const block of extractSubstitutionBlocksWithRanges(document.getText())) {
+    if (block.kind === "global") {
+      const extracted = extractNamedAssignmentsWithRanges(block.body, block.bodyStart);
+      for (const [macroName, range] of extracted.nameRanges.entries()) {
+        if (offset < range.start || offset > range.end) {
+          continue;
+        }
+
+        return createEpicsSemanticSymbol(
+          "macro",
+          macroName,
+          document,
+          range.start,
+          range.end,
+        );
+      }
+      continue;
+    }
+
+    if (block.kind !== "file") {
+      continue;
+    }
+
+    const parsedRows = parseSubstitutionFileBlockRowsDetailed(block.body, block.bodyStart);
+    if (parsedRows.kind === "pattern") {
+      for (const range of extractSubstitutionPatternColumnRanges(block.body, block.bodyStart)) {
+        if (offset < range.start || offset > range.end) {
+          continue;
+        }
+
+        return createEpicsSemanticSymbol(
+          "macro",
+          range.name,
+          document,
+          range.start,
+          range.end,
+        );
+      }
+    }
+
+    for (const row of parsedRows.rows) {
+      for (const [macroName, range] of row.nameRanges.entries()) {
+        if (offset < range.start || offset > range.end) {
+          continue;
+        }
+
+        return createEpicsSemanticSymbol(
+          "macro",
+          macroName,
+          document,
+          range.start,
+          range.end,
+        );
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function getPvlistMacroSymbolAtOffset(document, offset) {
+  if (!isPvlistDocument(document)) {
+    return undefined;
+  }
+
+  let lineStart = 0;
+  for (const rawLine of document.getText().split(/\r?\n/)) {
+    const match = rawLine.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (match) {
+      const start = lineStart + match[1].length;
+      const end = start + match[2].length;
+      if (offset >= start && offset <= end) {
+        return createEpicsSemanticSymbol("macro", match[2], document, start, end);
+      }
+    }
+
+    lineStart += rawLine.length + 1;
+  }
+
+  return undefined;
+}
+
+function getGenericMacroReferenceSymbolAtOffset(document, offset) {
+  const maskedText = maskDatabaseComments(document.getText());
+  const regex = /\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}/g;
+  let match;
+
+  while ((match = regex.exec(maskedText))) {
+    const macroName = match[1] || match[2];
+    const nameStart = match.index + 2;
+    const nameEnd = nameStart + macroName.length;
+    if (offset < nameStart || offset > nameEnd) {
+      continue;
+    }
+
+    return createEpicsSemanticSymbol(
+      "macro",
+      macroName,
+      document,
+      nameStart,
+      nameEnd,
+    );
+  }
+
+  return undefined;
+}
+
+function createEpicsSemanticSymbol(
+  kind,
+  name,
+  document,
+  startOffset,
+  endOffset,
+  searchNames,
+  extra = undefined,
+) {
+  return {
+    kind,
+    name,
+    searchNames:
+      searchNames instanceof Set && searchNames.size > 0
+        ? new Set(searchNames)
+        : new Set([name]),
+    range: new vscode.Range(
+      document.positionAt(startOffset),
+      document.positionAt(endOffset),
+    ),
+    ...(extra && typeof extra === "object" ? extra : {}),
+  };
+}
+
+function collectEpicsSymbolOccurrences(
+  snapshot,
+  symbol,
+  currentDocument,
+  includeDeclaration,
+) {
+  const occurrences = [];
+  const seen = new Set();
+
+  for (const document of collectSemanticReferenceDocuments(snapshot, currentDocument)) {
+    switch (symbol.kind) {
+      case "record":
+        collectRecordOccurrencesInDocument(
+          snapshot,
+          document,
+          symbol.searchNames || new Set([symbol.name]),
+          includeDeclaration,
+          occurrences,
+          seen,
+        );
+        break;
+
+      case "macro":
+        collectMacroOccurrencesInDocument(
+          document,
+          symbol.name,
+          includeDeclaration,
+          occurrences,
+          seen,
+        );
+        break;
+
+      case "recordType":
+        collectRecordTypeOccurrencesInDocument(
+          document,
+          symbol.name,
+          includeDeclaration,
+          occurrences,
+          seen,
+        );
+        break;
+
+      case "field":
+        collectFieldOccurrencesInDocument(
+          document,
+          symbol.recordType,
+          symbol.name,
+          includeDeclaration,
+          occurrences,
+          seen,
+        );
+        break;
+
+      case "deviceSupport":
+      case "driver":
+      case "registrar":
+      case "function":
+      case "variable":
+        collectNamedDbdSymbolOccurrencesInDocument(
+          document,
+          symbol.kind,
+          symbol.name,
+          includeDeclaration,
+          occurrences,
+          seen,
+        );
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  return occurrences;
+}
+
+function collectSemanticReferenceDocuments(snapshot, currentDocument) {
+  const documentsByUri = new Map();
+  const addDocument = (document) => {
+    if (!document?.uri || !isSemanticReferenceDocument(document)) {
+      return;
+    }
+
+    documentsByUri.set(document.uri.toString(), document);
+  };
+
+  addDocument(currentDocument);
+  for (const document of vscode.workspace.textDocuments) {
+    addDocument(document);
+  }
+
+  for (const entry of snapshot.workspaceFiles) {
+    if (!entry.uri || documentsByUri.has(entry.uri.toString())) {
+      continue;
+    }
+
+    const languageId = getEpicsLanguageIdForUri(entry.uri);
+    if (!isSemanticReferenceLanguageId(languageId)) {
+      continue;
+    }
+
+    const text = entry.absolutePath ? readTextFile(entry.absolutePath) : undefined;
+    if (text === undefined) {
+      continue;
+    }
+
+    documentsByUri.set(
+      entry.uri.toString(),
+      createSyntheticTextDocument(entry.uri, languageId, text),
+    );
+  }
+
+  return [...documentsByUri.values()];
+}
+
+function isSemanticReferenceLanguageId(languageId) {
+  return new Set([
+    LANGUAGE_IDS.database,
+    LANGUAGE_IDS.startup,
+    LANGUAGE_IDS.substitutions,
+    LANGUAGE_IDS.dbd,
+    LANGUAGE_IDS.source,
+    LANGUAGE_IDS.pvlist,
+    LANGUAGE_IDS.probe,
+  ]).has(languageId);
+}
+
+function isSemanticReferenceDocument(document) {
+  return (
+    Boolean(document) &&
+    (
+      isSemanticReferenceLanguageId(document.languageId) ||
+      isSourceDocument(document)
+    )
+  );
+}
+
+function collectRecordOccurrencesInDocument(
+  snapshot,
+  document,
+  recordNames,
+  includeDeclaration,
+  occurrences,
+  seen,
+) {
+  const searchNames =
+    recordNames instanceof Set ? recordNames : new Set([String(recordNames || "")]);
+
+  if (isDatabaseDocument(document)) {
+    const text = document.getText();
+    const macroAssignments = extractDatabaseTocMacroAssignments(text);
+
+    if (includeDeclaration) {
+      for (const declaration of extractRecordDeclarations(text)) {
+        const declarationNames = getDatabaseRecordSearchNames(text, declaration.name);
+        if (![...declarationNames].some((candidateName) => searchNames.has(candidateName))) {
+          continue;
+        }
+
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(declaration.nameStart),
+            document.positionAt(declaration.nameEnd),
+          ),
+        );
+      }
+    }
+
+    for (const declaration of extractRecordDeclarations(text)) {
+      for (const fieldDeclaration of extractFieldDeclarationsInRecord(text, declaration)) {
+        for (const candidate of getLinkedRecordCandidateRanges(
+          fieldDeclaration.value,
+          fieldDeclaration.valueStart,
+          {
+            allowMacroReferences: true,
+            macroAssignments,
+          },
+        )) {
+          if (!searchNames.has(candidate.name)) {
+            continue;
+          }
+
+          addSemanticOccurrence(
+            occurrences,
+            seen,
+            document.uri,
+            new vscode.Range(
+              document.positionAt(candidate.start),
+              document.positionAt(candidate.end),
+            ),
+          );
+        }
+      }
+    }
+    return;
+  }
+
+  if (isStartupDocument(document)) {
+    const lineCount = document.getText().split(/\r?\n/).length;
+    const regex = /dbpf\(\s*"((?:[^"\\]|\\.)*)"/g;
+
+    for (let line = 0; line < lineCount; line += 1) {
+      const lineText = `${document.lineAt(line).text}\n`;
+      const sanitizedLineText = maskDatabaseComments(lineText).slice(0, -1);
+      let match;
+      while ((match = regex.exec(sanitizedLineText))) {
+        const valueStart = match.index + match[0].length - match[1].length - 1;
+        const absoluteValueStart = document.offsetAt(new vscode.Position(line, valueStart));
+        const loadedDefinitionsByName = getStartupLoadedRecordDefinitionMap(
+          snapshot,
+          document,
+          new vscode.Position(line, valueStart + match[1].length),
+        );
+        for (const candidate of getLinkedRecordCandidateRanges(match[1], absoluteValueStart)) {
+          if (
+            !searchNames.has(candidate.name) ||
+            ![...searchNames].some((recordName) => loadedDefinitionsByName.has(recordName))
+          ) {
+            continue;
+          }
+
+          addSemanticOccurrence(
+            occurrences,
+            seen,
+            document.uri,
+            new vscode.Range(
+              document.positionAt(candidate.start),
+              document.positionAt(candidate.end),
+            ),
+          );
+        }
+      }
+    }
+    return;
+  }
+
+  if (isPvlistDocument(document)) {
+    const lineCount = document.getText().split(/\r?\n/).length;
+    for (let line = 0; line < lineCount; line += 1) {
+      const recordReference = getPvlistRecordReferenceForLine(document, line);
+      if (!recordReference || !searchNames.has(recordReference.name)) {
+        continue;
+      }
+
+      addSemanticOccurrence(occurrences, seen, document.uri, recordReference.range);
+    }
+    return;
+  }
+
+  if (isProbeDocument(document)) {
+    const lineCount = document.getText().split(/\r?\n/).length;
+    for (let line = 0; line < lineCount; line += 1) {
+      const recordReference = getProbeRecordReferenceForLine(document, line);
+      if (!recordReference || !searchNames.has(recordReference.name)) {
+        continue;
+      }
+
+      addSemanticOccurrence(occurrences, seen, document.uri, recordReference.range);
+    }
+  }
+}
+
+function collectRecordTypeOccurrencesInDocument(
+  document,
+  recordTypeName,
+  includeDeclaration,
+  occurrences,
+  seen,
+) {
+  if (!recordTypeName) {
+    return;
+  }
+
+  if (isDatabaseDocument(document)) {
+    for (const declaration of extractRecordDeclarations(document.getText())) {
+      if (declaration.recordType !== recordTypeName) {
+        continue;
+      }
+
+      addSemanticOccurrence(
+        occurrences,
+        seen,
+        document.uri,
+        new vscode.Range(
+          document.positionAt(declaration.recordTypeStart),
+          document.positionAt(declaration.recordTypeEnd),
+        ),
+      );
+    }
+    return;
+  }
+
+  if (document?.languageId === LANGUAGE_IDS.dbd) {
+    const text = document.getText();
+    if (includeDeclaration) {
+      for (const declaration of extractDbdRecordTypeDeclarations(text)) {
+        if (declaration.name !== recordTypeName) {
+          continue;
+        }
+
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(declaration.nameStart),
+            document.positionAt(declaration.nameEnd),
+          ),
+        );
+      }
+    }
+
+    for (const entry of extractDbdDeviceDeclarations(text)) {
+      if (entry.recordType !== recordTypeName) {
+        continue;
+      }
+
+      addSemanticOccurrence(
+        occurrences,
+        seen,
+        document.uri,
+        new vscode.Range(
+          document.positionAt(entry.recordTypeStart),
+          document.positionAt(entry.recordTypeEnd),
+        ),
+      );
+    }
+  }
+}
+
+function collectFieldOccurrencesInDocument(
+  document,
+  recordTypeName,
+  fieldName,
+  includeDeclaration,
+  occurrences,
+  seen,
+) {
+  if (!recordTypeName || !fieldName) {
+    return;
+  }
+
+  if (isDatabaseDocument(document)) {
+    const text = document.getText();
+    for (const declaration of extractRecordDeclarations(text)) {
+      if (declaration.recordType !== recordTypeName) {
+        continue;
+      }
+
+      for (const fieldDeclaration of extractFieldDeclarationsInRecord(
+        text,
+        declaration,
+        fieldName,
+      )) {
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(fieldDeclaration.fieldNameStart),
+            document.positionAt(fieldDeclaration.fieldNameEnd),
+          ),
+        );
+      }
+    }
+    return;
+  }
+
+  if (document?.languageId !== LANGUAGE_IDS.dbd || !includeDeclaration) {
+    return;
+  }
+
+  const text = document.getText();
+  for (const declaration of extractDbdRecordTypeDeclarations(text)) {
+    if (declaration.name !== recordTypeName) {
+      continue;
+    }
+
+    for (const fieldDeclaration of extractDbdFieldDeclarationsInRecordType(
+      text,
+      declaration,
+      fieldName,
+    )) {
+      addSemanticOccurrence(
+        occurrences,
+        seen,
+        document.uri,
+        new vscode.Range(
+          document.positionAt(fieldDeclaration.fieldNameStart),
+          document.positionAt(fieldDeclaration.fieldNameEnd),
+        ),
+      );
+    }
+  }
+}
+
+function collectNamedDbdSymbolOccurrencesInDocument(
+  document,
+  kind,
+  symbolName,
+  includeDeclaration,
+  occurrences,
+  seen,
+) {
+  if (!symbolName) {
+    return;
+  }
+
+  if (document?.languageId === LANGUAGE_IDS.dbd) {
+    const text = document.getText();
+
+    if (kind === "deviceSupport") {
+      for (const entry of extractDbdDeviceDeclarations(text)) {
+        if (entry.supportName !== symbolName) {
+          continue;
+        }
+
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(entry.supportNameStart),
+            document.positionAt(entry.supportNameEnd),
+          ),
+        );
+      }
+      return;
+    }
+
+    const keyword = getDbdNamedSymbolKeyword(kind);
+    if (!keyword) {
+      return;
+    }
+
+    for (const entry of extractDbdNamedEntries(text, keyword)) {
+      if (entry.name !== symbolName) {
+        continue;
+      }
+
+      addSemanticOccurrence(
+        occurrences,
+        seen,
+        document.uri,
+        new vscode.Range(
+          document.positionAt(entry.nameStart),
+          document.positionAt(entry.nameEnd),
+        ),
+      );
+    }
+    return;
+  }
+
+  if (!isSourceDocument(document) || !includeDeclaration) {
+    return;
+  }
+
+  for (const entry of extractSourceNamedSymbolOccurrences(document.getText())) {
+    if (entry.kind !== kind || entry.name !== symbolName) {
+      continue;
+    }
+
+    addSemanticOccurrence(
+      occurrences,
+      seen,
+      document.uri,
+      new vscode.Range(
+        document.positionAt(entry.nameStart),
+        document.positionAt(entry.nameEnd),
+      ),
+    );
+  }
+}
+
+function collectMacroOccurrencesInDocument(
+  document,
+  macroName,
+  includeDeclaration,
+  occurrences,
+  seen,
+) {
+  if (includeDeclaration) {
+    collectMacroDefinitionOccurrences(document, macroName, occurrences, seen);
+  }
+  collectMacroReferenceOccurrences(document, macroName, occurrences, seen);
+}
+
+function collectMacroDefinitionOccurrences(document, macroName, occurrences, seen) {
+  if (isStartupDocument(document)) {
+    for (const statement of extractStartupStatements(document.getText())) {
+      if (
+        statement.kind === "envSet" &&
+        statement.name === macroName &&
+        statement.nameStart !== undefined &&
+        statement.nameEnd !== undefined
+      ) {
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(statement.nameStart),
+            document.positionAt(statement.nameEnd),
+          ),
+        );
+      }
+
+      if (
+        statement.kind === "load" &&
+        statement.command === "dbLoadRecords" &&
+        statement.macros &&
+        statement.macroValueStart !== undefined
+      ) {
+        const extracted = extractNamedAssignmentsWithRanges(
+          statement.macros,
+          statement.macroValueStart,
+        );
+        const range = extracted.nameRanges.get(macroName);
+        if (!range) {
+          continue;
+        }
+
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(range.start),
+            document.positionAt(range.end),
+          ),
+        );
+      }
+    }
+  }
+
+  if (isSubstitutionsDocument(document)) {
+    for (const block of extractSubstitutionBlocksWithRanges(document.getText())) {
+      if (block.kind === "global") {
+        const extracted = extractNamedAssignmentsWithRanges(block.body, block.bodyStart);
+        const range = extracted.nameRanges.get(macroName);
+        if (range) {
+          addSemanticOccurrence(
+            occurrences,
+            seen,
+            document.uri,
+            new vscode.Range(
+              document.positionAt(range.start),
+              document.positionAt(range.end),
+            ),
+          );
+        }
+        continue;
+      }
+
+      if (block.kind !== "file") {
+        continue;
+      }
+
+      const parsedRows = parseSubstitutionFileBlockRowsDetailed(block.body, block.bodyStart);
+      if (parsedRows.kind === "pattern") {
+        for (const range of extractSubstitutionPatternColumnRanges(block.body, block.bodyStart)) {
+          if (range.name !== macroName) {
+            continue;
+          }
+
+          addSemanticOccurrence(
+            occurrences,
+            seen,
+            document.uri,
+            new vscode.Range(
+              document.positionAt(range.start),
+              document.positionAt(range.end),
+            ),
+          );
+        }
+      }
+
+      for (const row of parsedRows.rows) {
+        const range = row.nameRanges.get(macroName);
+        if (!range) {
+          continue;
+        }
+
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(range.start),
+            document.positionAt(range.end),
+          ),
+        );
+      }
+    }
+  }
+
+  if (isPvlistDocument(document)) {
+    let lineStart = 0;
+    for (const rawLine of document.getText().split(/\r?\n/)) {
+      const match = rawLine.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+      if (match?.[2] === macroName) {
+        const start = lineStart + match[1].length;
+        const end = start + macroName.length;
+        addSemanticOccurrence(
+          occurrences,
+          seen,
+          document.uri,
+          new vscode.Range(
+            document.positionAt(start),
+            document.positionAt(end),
+          ),
+        );
+      }
+
+      lineStart += rawLine.length + 1;
+    }
+  }
+}
+
+function collectMacroReferenceOccurrences(document, macroName, occurrences, seen) {
+  const maskedText = maskDatabaseComments(document.getText());
+  const regex = /\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}/g;
+  let match;
+
+  while ((match = regex.exec(maskedText))) {
+    const matchedName = match[1] || match[2];
+    if (matchedName !== macroName) {
+      continue;
+    }
+
+    const start = match.index + 2;
+    const end = start + matchedName.length;
+    addSemanticOccurrence(
+      occurrences,
+      seen,
+      document.uri,
+      new vscode.Range(
+        document.positionAt(start),
+        document.positionAt(end),
+      ),
+    );
+  }
+}
+
+function getLinkedRecordCandidateRangeAtOffset(fieldValue, baseOffset, offset) {
+  return getLinkedRecordCandidateRanges(fieldValue, baseOffset)
+    .filter((candidate) => offset >= candidate.start && offset <= candidate.end)
+    .sort(
+      (left, right) =>
+        (left.end - left.start) - (right.end - right.start) ||
+        compareLabels(left.name, right.name),
+    )[0];
+}
+
+function getLinkedRecordCandidateRangeForValue(fieldValue, baseOffset, recordName) {
+  return getLinkedRecordCandidateRanges(fieldValue, baseOffset).find(
+    (candidate) => candidate.name === recordName,
+  );
+}
+
+function getLinkedRecordCandidateRanges(fieldValue, baseOffset = 0, options = undefined) {
+  if (!fieldValue) {
+    return [];
+  }
+
+  const text = String(fieldValue || "");
+  const leadingWhitespaceLength = text.match(/^\s*/)?.[0]?.length || 0;
+  const trimmedText = text.slice(leadingWhitespaceLength);
+  const tokenMatch = trimmedText.match(/^[^\s]+/);
+  if (!tokenMatch) {
+    return [];
+  }
+
+  let token = tokenMatch[0];
+  let tokenStart = baseOffset + leadingWhitespaceLength;
+  if (token.startsWith("@")) {
+    return [];
+  }
+
+  const protocolMatch = token.match(/^(?:ca|pva):\/\//i);
+  if (protocolMatch) {
+    tokenStart += protocolMatch[0].length;
+    token = token.slice(protocolMatch[0].length);
+  }
+
+  const normalizedToken = token.replace(/[),;]+$/, "");
+  if (!normalizedToken) {
+    return [];
+  }
+
+  const sourceLastDotIndex = normalizedToken.lastIndexOf(".");
+  const sourceFieldSuffix =
+    sourceLastDotIndex > 0 ? normalizedToken.slice(sourceLastDotIndex + 1) : undefined;
+  const sourceRecordEnd =
+    sourceLastDotIndex > 0 && /^[A-Z0-9_]+$/.test(sourceFieldSuffix)
+      ? tokenStart + sourceLastDotIndex
+      : undefined;
+
+  const ranges = [];
+  const addRange = (name, start, end) => {
+    if (
+      !name ||
+      ranges.some(
+        (existing) => existing.name === name && existing.start === start && existing.end === end,
+      )
+    ) {
+      return;
+    }
+
+    ranges.push({ name, start, end });
+  };
+
+  const addTokenVariants = (tokenValue, start, end) => {
+    if (!tokenValue) {
+      return;
+    }
+
+    addRange(tokenValue, start, end);
+
+    const lastDotIndex = tokenValue.lastIndexOf(".");
+    if (lastDotIndex > 0) {
+      const suffix = tokenValue.slice(lastDotIndex + 1);
+      if (/^[A-Z0-9_]+$/.test(suffix) && sourceRecordEnd !== undefined) {
+        addRange(
+          tokenValue.slice(0, lastDotIndex),
+          start,
+          sourceRecordEnd,
+        );
+      }
+    }
+  };
+
+  if (containsEpicsMacroReference(normalizedToken)) {
+    if (!options?.allowMacroReferences) {
+      return [];
+    }
+
+    addTokenVariants(normalizedToken, tokenStart, tokenStart + normalizedToken.length);
+
+    const expandedToken = expandProbeRecordNameFromToc(
+      normalizedToken,
+      options?.macroAssignments instanceof Map ? options.macroAssignments : new Map(),
+    );
+    if (expandedToken && expandedToken !== normalizedToken) {
+      addTokenVariants(expandedToken, tokenStart, tokenStart + normalizedToken.length);
+    }
+
+    return ranges;
+  }
+
+  addTokenVariants(normalizedToken, tokenStart, tokenStart + normalizedToken.length);
+  return ranges;
+}
+
+function getPvlistRecordReferenceForLine(document, lineNumber) {
+  if (!isPvlistDocument(document) || lineNumber < 0 || lineNumber >= document.lineCount) {
+    return undefined;
+  }
+
+  const line = document.lineAt(lineNumber);
+  const rawLine = String(line.text || "");
+  const trimmedLine = rawLine.trim();
+  if (
+    !trimmedLine ||
+    trimmedLine.startsWith("#") ||
+    /^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(trimmedLine) ||
+    containsEpicsMacroReference(trimmedLine)
+  ) {
+    return undefined;
+  }
+
+  const leadingWhitespaceLength = rawLine.length - rawLine.trimStart().length;
+  const protocolPrefixMatch = trimmedLine.match(/^(?:ca|pva):\/\//i);
+  const baseOffset =
+    document.offsetAt(new vscode.Position(lineNumber, leadingWhitespaceLength)) +
+    (protocolPrefixMatch ? protocolPrefixMatch[0].length : 0);
+  const candidate = getLinkedRecordCandidateRanges(
+    protocolPrefixMatch ? trimmedLine.slice(protocolPrefixMatch[0].length) : trimmedLine,
+    baseOffset,
+  )[0];
+  if (!candidate) {
+    return undefined;
+  }
+
+  return {
+    name: candidate.name,
+    range: new vscode.Range(
+      document.positionAt(candidate.start),
+      document.positionAt(candidate.end),
+    ),
+  };
+}
+
+function getProbeRecordReferenceForLine(document, lineNumber) {
+  if (!isProbeDocument(document) || lineNumber < 0 || lineNumber >= document.lineCount) {
+    return undefined;
+  }
+
+  const line = document.lineAt(lineNumber);
+  const rawLine = String(line.text || "");
+  const trimmedLine = rawLine.trim();
+  if (
+    !trimmedLine ||
+    trimmedLine.startsWith("#") ||
+    /\s/.test(trimmedLine) ||
+    containsEpicsMacroReference(trimmedLine)
+  ) {
+    return undefined;
+  }
+
+  const leadingWhitespaceLength = rawLine.length - rawLine.trimStart().length;
+  const candidate = getLinkedRecordCandidateRanges(
+    trimmedLine,
+    document.offsetAt(new vscode.Position(lineNumber, leadingWhitespaceLength)),
+  )[0];
+  if (!candidate) {
+    return undefined;
+  }
+
+  return {
+    name: candidate.name,
+    range: new vscode.Range(
+      document.positionAt(candidate.start),
+      document.positionAt(candidate.end),
+    ),
+  };
+}
+
+function getShortestRecordCandidateNames(candidateRanges) {
+  if (!Array.isArray(candidateRanges) || candidateRanges.length === 0) {
+    return new Set();
+  }
+
+  const minimumLength = candidateRanges.reduce(
+    (minimum, candidate) => Math.min(minimum, candidate.end - candidate.start),
+    Number.POSITIVE_INFINITY,
+  );
+  return new Set(
+    candidateRanges
+      .filter((candidate) => candidate.end - candidate.start === minimumLength)
+      .map((candidate) => candidate.name)
+      .filter(Boolean),
+  );
+}
+
+function getDatabaseRecordSearchNames(documentText, recordName) {
+  const names = new Set([recordName]);
+  if (!documentText || !containsEpicsMacroReference(recordName)) {
+    return names;
+  }
+
+  const expandedName = expandProbeRecordNameFromToc(
+    recordName,
+    extractDatabaseTocMacroAssignments(documentText),
+  );
+  if (expandedName && expandedName !== recordName) {
+    names.add(expandedName);
+  }
+
+  return names;
+}
+
+function findDatabaseDeclarationByAnyRecordName(documentText, recordName) {
+  for (const declaration of extractRecordDeclarations(documentText)) {
+    const searchNames = getDatabaseRecordSearchNames(documentText, declaration.name);
+    if (!searchNames.has(recordName)) {
+      continue;
+    }
+
+    return {
+      declaration,
+      searchNames,
+    };
+  }
+
+  return undefined;
+}
+
+function extractSubstitutionPatternColumnRanges(body, baseOffset = 0) {
+  if (!/^\s*pattern\b/.test(body)) {
+    return [];
+  }
+
+  const segments = extractTopLevelBraceSegments(body, baseOffset);
+  if (segments.length === 0) {
+    return [];
+  }
+
+  const headerSegment = segments[0];
+  const regex = /"((?:[^"\\]|\\.)*)"|([A-Za-z_][A-Za-z0-9_]*)/g;
+  const ranges = [];
+  let match;
+
+  while ((match = regex.exec(headerSegment.text))) {
+    const name = match[1] || match[2];
+    const offset = match[1] ? 1 : 0;
+    ranges.push({
+      name,
+      start: headerSegment.contentStart + match.index + offset,
+      end: headerSegment.contentStart + match.index + offset + name.length,
+    });
+  }
+
+  return ranges;
+}
+
+function addSemanticOccurrence(occurrences, seen, uri, range) {
+  const key = `${uri.toString()}:${range.start.line}:${range.start.character}:${range.end.line}:${range.end.character}`;
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  occurrences.push({ uri, range });
+}
+
+function buildEpicsRenameWorkspaceEdit(snapshot, document, position, newName) {
+  const symbol = getEpicsSemanticSymbolAtPosition(snapshot, document, position);
+  if (!symbol) {
+    throw new Error("Nothing renameable at the current cursor position.");
+  }
+
+  const normalizedName = validateEpicsRename(snapshot, symbol, document, newName);
+
+  const occurrences = collectEpicsSymbolOccurrences(
+    snapshot,
+    symbol,
+    document,
+    true,
+  );
+  if (occurrences.length === 0) {
+    return undefined;
+  }
+
+  const edit = new vscode.WorkspaceEdit();
+  for (const occurrence of occurrences) {
+    edit.replace(occurrence.uri, occurrence.range, normalizedName);
+  }
+
+  return edit;
+}
+
+function validateEpicsRename(snapshot, symbol, document, newName) {
+  const trimmedName = String(newName || "").trim();
+  if (!trimmedName) {
+    throw new Error("The new name must not be empty.");
+  }
+
+  switch (symbol.kind) {
+    case "macro": {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedName)) {
+        throw new Error("EPICS macro names must match [A-Za-z_][A-Za-z0-9_]*.");
+      }
+
+      const conflicts = [];
+      collectMacroDefinitionOccurrences(document, trimmedName, conflicts, new Set());
+      if (conflicts.some((occurrence) => !rangesEqual(occurrence.range, symbol.range))) {
+        throw new Error(`Macro "${trimmedName}" is already defined in this file.`);
+      }
+      break;
+    }
+
+    case "record": {
+      if (/[\s",]/.test(trimmedName)) {
+        throw new Error("EPICS record names must not contain spaces, quotes, or commas.");
+      }
+
+      const conflictSearchNames = isDatabaseDocument(document)
+        ? getDatabaseRecordSearchNames(document.getText(), trimmedName)
+        : new Set([trimmedName]);
+      const currentSearchNames = symbol.searchNames || new Set([symbol.name]);
+
+      for (const referenceDocument of collectSemanticReferenceDocuments(snapshot, document)) {
+        if (!isDatabaseDocument(referenceDocument)) {
+          continue;
+        }
+
+        const referenceText = referenceDocument.getText();
+        for (const declaration of extractRecordDeclarations(referenceText)) {
+          const declarationNames = getDatabaseRecordSearchNames(referenceText, declaration.name);
+          const hasConflict = [...declarationNames].some((candidateName) =>
+            conflictSearchNames.has(candidateName),
+          );
+          const isCurrentDeclaration =
+            referenceDocument.uri.toString() === document.uri.toString() &&
+            rangesEqual(
+              new vscode.Range(
+                referenceDocument.positionAt(declaration.nameStart),
+                referenceDocument.positionAt(declaration.nameEnd),
+              ),
+              symbol.range,
+            ) &&
+            [...declarationNames].some((candidateName) => currentSearchNames.has(candidateName));
+          if (hasConflict && !isCurrentDeclaration) {
+            throw new Error(`Record "${trimmedName}" is already defined in the workspace.`);
+          }
+        }
+      }
+      break;
+    }
+
+    case "recordType":
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedName)) {
+        throw new Error("EPICS record types must match [A-Za-z_][A-Za-z0-9_]*.");
+      }
+      if (!hasWorkspaceDbdRecordTypeDeclaration(snapshot, document, symbol.name)) {
+        throw new Error(
+          `Record type "${symbol.name}" can only be renamed when it is declared in a workspace .dbd file.`,
+        );
+      }
+      if (trimmedName !== symbol.name && snapshot.recordTypes.has(trimmedName)) {
+        throw new Error(`Record type "${trimmedName}" already exists in the workspace.`);
+      }
+      break;
+
+    case "field":
+      if (!/^[A-Z][A-Z0-9_]*$/.test(trimmedName)) {
+        throw new Error("EPICS field names must match [A-Z][A-Z0-9_]*.");
+      }
+      if (!hasWorkspaceDbdFieldDeclaration(snapshot, document, symbol.recordType, symbol.name)) {
+        throw new Error(
+          `Field "${symbol.name}" can only be renamed when "${symbol.recordType}.${symbol.name}" is declared in a workspace .dbd file.`,
+        );
+      }
+      if (
+        trimmedName !== symbol.name &&
+        snapshot.fieldsByRecordType.get(symbol.recordType)?.has(trimmedName)
+      ) {
+        throw new Error(
+          `Field "${trimmedName}" already exists on record type "${symbol.recordType}".`,
+        );
+      }
+      break;
+
+    case "deviceSupport":
+    case "driver":
+    case "registrar":
+    case "function":
+    case "variable":
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedName)) {
+        throw new Error(`${formatEpicsSymbolKindLabel(symbol.kind)} names must match [A-Za-z_][A-Za-z0-9_]*.`);
+      }
+      if (
+        trimmedName !== symbol.name &&
+        getNamedSymbolDefinitionMap(snapshot, symbol.kind)?.has(trimmedName)
+      ) {
+        throw new Error(
+          `${formatEpicsSymbolKindLabel(symbol.kind)} "${trimmedName}" already exists in the workspace.`,
+        );
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  return trimmedName;
+}
+
+function getNamedSymbolDefinitionMap(snapshot, kind) {
+  switch (kind) {
+    case "deviceSupport":
+      return snapshot.deviceSupportDefinitionsByName;
+    case "driver":
+      return snapshot.driverDefinitionsByName;
+    case "registrar":
+      return snapshot.registrarDefinitionsByName;
+    case "function":
+      return snapshot.functionDefinitionsByName;
+    case "variable":
+      return snapshot.variableDefinitionsByName;
+    default:
+      return undefined;
+  }
+}
+
+function formatEpicsSymbolKindLabel(kind) {
+  return {
+    deviceSupport: "Device support",
+    driver: "Driver",
+    registrar: "Registrar",
+    function: "Function",
+    variable: "Variable",
+  }[kind] || "EPICS symbol";
+}
+
+function rangesEqual(left, right) {
+  return (
+    Boolean(left && right) &&
+    left.start.line === right.start.line &&
+    left.start.character === right.start.character &&
+    left.end.line === right.end.line &&
+    left.end.character === right.end.character
+  );
+}
+
+function hasWorkspaceDbdRecordTypeDeclaration(snapshot, currentDocument, recordTypeName) {
+  return collectSemanticReferenceDocuments(snapshot, currentDocument)
+    .filter((document) => document?.languageId === LANGUAGE_IDS.dbd)
+    .some((document) =>
+      extractDbdRecordTypeDeclarations(document.getText()).some(
+        (declaration) => declaration.name === recordTypeName,
+      ),
+    );
+}
+
+function hasWorkspaceDbdFieldDeclaration(snapshot, currentDocument, recordTypeName, fieldName) {
+  return collectSemanticReferenceDocuments(snapshot, currentDocument)
+    .filter((document) => document?.languageId === LANGUAGE_IDS.dbd)
+    .some((document) =>
+      extractDbdRecordTypeDeclarations(document.getText()).some((declaration) =>
+        declaration.name === recordTypeName &&
+        extractDbdFieldDeclarationsInRecordType(
+          document.getText(),
+          declaration,
+          fieldName,
+        ).length > 0,
+      ),
+    );
+}
+
+function getEpicsCodeActions(snapshot, document, range, context) {
+  const actions = [];
+  for (const diagnostic of context?.diagnostics || []) {
+    if (
+      diagnostic.code === "epics.startup.missingDbLoadRecordsMacros" &&
+      isStartupDocument(document)
+    ) {
+      const action = createStartupLoadMacroQuickFix(snapshot, document, diagnostic);
+      if (action) {
+        actions.push(action);
+      }
+      continue;
+    }
+
+    if (
+      diagnostic.code === "epics.database.duplicateRecordName" &&
+      isDatabaseDocument(document)
+    ) {
+      const action = createDuplicateRecordNameQuickFix(document, diagnostic);
+      if (action) {
+        actions.push(action);
+      }
+      continue;
+    }
+
+    if (
+      diagnostic.code === "epics.database.invalidFieldName" &&
+      isDatabaseDocument(document)
+    ) {
+      const action = createInvalidFieldNameQuickFix(snapshot, document, diagnostic);
+      if (action) {
+        actions.push(action);
+      }
+      continue;
+    }
+
+    if (
+      diagnostic.code === "epics.database.invalidMenuFieldValue" &&
+      isDatabaseDocument(document)
+    ) {
+      const action = createInvalidMenuFieldValueQuickFix(snapshot, document, diagnostic);
+      if (action) {
+        actions.push(action);
+      }
+      continue;
+    }
+
+    if (
+      diagnostic.code === "epics.startup.unknownIocRegistrationFunction" &&
+      isStartupDocument(document)
+    ) {
+      actions.push(...createUnknownIocRegistrationQuickFixes(snapshot, document, diagnostic));
+    }
+  }
+
+  return actions;
+}
+
+function createStartupLoadMacroQuickFix(snapshot, document, diagnostic) {
+  const statement = extractStartupStatements(document.getText()).find(
+    (candidate) =>
+      candidate.kind === "load" &&
+      candidate.command === "dbLoadRecords" &&
+      candidate.pathStart === document.offsetAt(diagnostic.range.start) &&
+      candidate.pathEnd === document.offsetAt(diagnostic.range.end),
+  );
+  if (!statement) {
+    return undefined;
+  }
+
+  const resolvedMacroData = resolveStartupLoadMacroData(
+    snapshot,
+    document,
+    diagnostic.range.end,
+    statement.path,
+  );
+  if (!resolvedMacroData || resolvedMacroData.macroNames.length === 0) {
+    return undefined;
+  }
+
+  const providedMacroNames = extractAssignedMacroNames(statement.macros);
+  const missingMacroNames = resolvedMacroData.macroNames.filter(
+    (macroName) => !providedMacroNames.has(macroName),
+  );
+  if (missingMacroNames.length === 0) {
+    return undefined;
+  }
+
+  const action = new vscode.CodeAction(
+    `Add missing dbLoadRecords macros: ${missingMacroNames.join(", ")}`,
+    vscode.CodeActionKind.QuickFix,
+  );
+  action.diagnostics = [diagnostic];
+  action.isPreferred = true;
+  action.edit = new vscode.WorkspaceEdit();
+
+  if (statement.macroValueStart !== undefined && statement.macroValueEnd !== undefined) {
+    const existingMacros = String(statement.macros || "");
+    const appendedMacros = buildDbLoadRecordsMacroAssignmentsLabel(missingMacroNames);
+    const separator = existingMacros.trim() ? "," : "";
+    action.edit.replace(
+      document.uri,
+      new vscode.Range(
+        document.positionAt(statement.macroValueStart),
+        document.positionAt(statement.macroValueEnd),
+      ),
+      `${existingMacros}${separator}${appendedMacros}`,
+    );
+  } else {
+    action.edit.insert(
+      document.uri,
+      document.positionAt(statement.pathEnd + 1),
+      `, "${buildDbLoadRecordsMacroAssignmentsLabel(missingMacroNames)}"`,
+    );
+  }
+
+  return action;
+}
+
+function createDuplicateRecordNameQuickFix(document, diagnostic) {
+  const currentName = document.getText(diagnostic.range);
+  if (!currentName) {
+    return undefined;
+  }
+
+  const newName = suggestUniqueRecordName(document.getText(), currentName);
+  const action = new vscode.CodeAction(
+    `Rename duplicate record to "${newName}"`,
+    vscode.CodeActionKind.QuickFix,
+  );
+  action.diagnostics = [diagnostic];
+  action.isPreferred = true;
+  action.edit = new vscode.WorkspaceEdit();
+  action.edit.replace(document.uri, diagnostic.range, newName);
+  return action;
+}
+
+function createInvalidFieldNameQuickFix(snapshot, document, diagnostic) {
+  const invalidFieldName = document.getText(diagnostic.range);
+  if (!invalidFieldName) {
+    return undefined;
+  }
+
+  const recordDeclaration = findEnclosingRecordDeclaration(
+    document.getText(),
+    document.offsetAt(diagnostic.range.start),
+  );
+  if (!recordDeclaration) {
+    return undefined;
+  }
+
+  const replacement = findBestMatchingLabel(
+    getFieldNamesForRecordType(snapshot, recordDeclaration.recordType).filter(
+      (fieldName) => fieldName !== invalidFieldName,
+    ),
+    invalidFieldName,
+  );
+  if (!replacement) {
+    return undefined;
+  }
+
+  const action = new vscode.CodeAction(
+    `Replace invalid field with "${replacement}"`,
+    vscode.CodeActionKind.QuickFix,
+  );
+  action.diagnostics = [diagnostic];
+  action.isPreferred = true;
+  action.edit = new vscode.WorkspaceEdit();
+  action.edit.replace(document.uri, diagnostic.range, replacement);
+  return action;
+}
+
+function createInvalidMenuFieldValueQuickFix(snapshot, document, diagnostic) {
+  const invalidValue = document.getText(diagnostic.range);
+  const text = document.getText();
+  const recordDeclaration = findEnclosingRecordDeclaration(
+    text,
+    document.offsetAt(diagnostic.range.start),
+  );
+  if (!recordDeclaration) {
+    return undefined;
+  }
+
+  const fieldDeclaration = extractFieldDeclarationsInRecord(text, recordDeclaration).find(
+    (candidate) =>
+      candidate.valueStart === document.offsetAt(diagnostic.range.start) &&
+      candidate.valueEnd === document.offsetAt(diagnostic.range.end),
+  );
+  if (!fieldDeclaration) {
+    return undefined;
+  }
+
+  const allowedChoices = getMenuFieldChoices(
+    snapshot,
+    recordDeclaration.recordType,
+    fieldDeclaration.fieldName,
+  ).filter((choice) => choice !== invalidValue);
+  const replacement =
+    findBestMatchingLabel(allowedChoices, invalidValue) ||
+    getFieldInitialValue(snapshot, recordDeclaration.recordType, fieldDeclaration.fieldName) ||
+    allowedChoices[0];
+  if (!replacement) {
+    return undefined;
+  }
+
+  const action = new vscode.CodeAction(
+    `Replace with menu value "${replacement}"`,
+    vscode.CodeActionKind.QuickFix,
+  );
+  action.diagnostics = [diagnostic];
+  action.isPreferred = true;
+  action.edit = new vscode.WorkspaceEdit();
+  action.edit.replace(document.uri, diagnostic.range, replacement);
+  return action;
+}
+
+function createUnknownIocRegistrationQuickFixes(snapshot, document, diagnostic) {
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
+  if (!project || project.iocsByName.size === 0) {
+    return [];
+  }
+
+  const currentName = document.getText(diagnostic.range);
+  const actions = [];
+  for (const iocName of [...project.iocsByName.keys()].sort(compareLabels)) {
+    const replacement = `${iocName}_registerRecordDeviceDriver`;
+    if (replacement === currentName) {
+      continue;
+    }
+
+    const action = new vscode.CodeAction(
+      `Replace with "${replacement}"`,
+      vscode.CodeActionKind.QuickFix,
+    );
+    action.diagnostics = [diagnostic];
+    action.edit = new vscode.WorkspaceEdit();
+    action.edit.replace(document.uri, diagnostic.range, replacement);
+    if (actions.length === 0) {
+      action.isPreferred = true;
+    }
+    actions.push(action);
+  }
+
+  return actions;
+}
+
+function suggestUniqueRecordName(text, recordName) {
+  const existingNames = new Set(
+    extractRecordDeclarations(text).map((declaration) => declaration.name),
+  );
+  let suffix = 1;
+  let candidate = `${recordName}_${suffix}`;
+  while (existingNames.has(candidate)) {
+    suffix += 1;
+    candidate = `${recordName}_${suffix}`;
+  }
+
+  return candidate;
+}
+
+function createSyntheticTextDocument(uri, languageId, text) {
+  const documentText = String(text || "");
+  const lineOffsets = createLineOffsets(documentText);
+
+  return {
+    uri,
+    languageId,
+    fileName: uri?.fsPath || uri?.path || "",
+    lineCount: lineOffsets.length,
+    getText(range) {
+      if (!range) {
+        return documentText;
+      }
+
+      return documentText.slice(this.offsetAt(range.start), this.offsetAt(range.end));
+    },
+    positionAt(offset) {
+      return positionAtOffset(documentText, lineOffsets, offset);
+    },
+    offsetAt(position) {
+      return offsetAtPosition(documentText, lineOffsets, position);
+    },
+    lineAt(line) {
+      const safeLine = Math.max(0, Math.min(line, lineOffsets.length - 1));
+      const start = lineOffsets[safeLine];
+      const end =
+        safeLine + 1 < lineOffsets.length
+          ? Math.max(start, lineOffsets[safeLine + 1] - 1)
+          : documentText.length;
+      const textValue =
+        documentText[end - 1] === "\r"
+          ? documentText.slice(start, end - 1)
+          : documentText.slice(start, end);
+      return {
+        text: textValue,
+        range: new vscode.Range(
+          new vscode.Position(safeLine, 0),
+          new vscode.Position(safeLine, textValue.length),
+        ),
+      };
+    },
+  };
+}
+
+function createLineOffsets(text) {
+  const offsets = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\n") {
+      offsets.push(index + 1);
+    }
+  }
+
+  return offsets;
+}
+
+function positionAtOffset(text, lineOffsets, offset) {
+  const safeOffset = Math.max(0, Math.min(offset, text.length));
+  let low = 0;
+  let high = lineOffsets.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (lineOffsets[mid] > safeOffset) {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  const line = Math.max(0, low - 1);
+  return new vscode.Position(line, safeOffset - lineOffsets[line]);
+}
+
+function offsetAtPosition(text, lineOffsets, position) {
+  if (!position) {
+    return 0;
+  }
+
+  const safeLine = Math.max(0, Math.min(position.line, lineOffsets.length - 1));
+  const lineStart = lineOffsets[safeLine];
+  const lineEnd =
+    safeLine + 1 < lineOffsets.length
+      ? lineOffsets[safeLine + 1]
+      : text.length;
+  return Math.max(lineStart, Math.min(lineStart + position.character, lineEnd));
+}
+
 function getMakefileDatabaseFileHover(snapshot, document, position) {
   if (!isMakefileDocument(document)) {
     return undefined;
@@ -4452,7 +6716,12 @@ function resolveStreamProtocolFileReferences(snapshot, document, protocolPath) {
 function collectStreamProtocolPathDefinitions(snapshot, project) {
   const definitions = [];
 
-  for (const startupFilePath of findProjectIocBootFilePaths(project.rootPath)) {
+  const startupFilePaths =
+    Array.isArray(project.startupEntryPoints) && project.startupEntryPoints.length > 0
+      ? project.startupEntryPoints
+      : findProjectIocBootFilePaths(project.rootPath);
+
+  for (const startupFilePath of startupFilePaths) {
     const text = readTextFile(startupFilePath);
     if (!text || !text.includes(STREAM_PROTOCOL_PATH_VARIABLE)) {
       continue;
@@ -5619,6 +7888,10 @@ function buildFieldCompletionDetail(snapshot, recordType, fieldName) {
   return "EPICS field";
 }
 
+function getFieldInitialValue(snapshot, recordType, fieldName) {
+  return getDefaultFieldValue(snapshot, recordType, fieldName);
+}
+
 function getDefaultFieldValue(snapshot, recordType, fieldName) {
   const dbfType = snapshot.fieldTypesByRecordType.get(recordType)?.get(fieldName);
   const explicitInitialValue = snapshot.fieldInitialValuesByRecordType
@@ -6256,6 +8529,7 @@ function createEmptyProjectModel() {
   return {
     applications: [],
     runtimeArtifacts: [],
+    startupEntryPoints: [],
     iocsByName: new Map(),
     releaseVariables: new Map(),
     availableDbds: new Map(),
@@ -6263,7 +8537,7 @@ function createEmptyProjectModel() {
   };
 }
 
-function buildProjectModel(projectFiles) {
+async function buildProjectModel(projectFiles, buildModelCache) {
   const projectModel = createEmptyProjectModel();
   const filesByAbsolutePath = new Map();
   const rootPaths = new Set();
@@ -6272,7 +8546,7 @@ function buildProjectModel(projectFiles) {
     filesByAbsolutePath.set(normalizeFsPath(file.uri.fsPath), file);
 
     if (
-      path.basename(file.uri.fsPath) === "RELEASE" &&
+      ["RELEASE", "RELEASE.local"].includes(path.basename(file.uri.fsPath)) &&
       path.basename(path.dirname(file.uri.fsPath)) === "configure"
     ) {
       rootPaths.add(normalizeFsPath(path.dirname(path.dirname(file.uri.fsPath))));
@@ -6280,7 +8554,13 @@ function buildProjectModel(projectFiles) {
   }
 
   for (const rootPath of [...rootPaths].sort(compareLabels)) {
-    const application = buildProjectApplication(rootPath, filesByAbsolutePath);
+    const buildApplication =
+      buildModelCache && typeof buildModelCache.getApplication === "function"
+        ? await buildModelCache.getApplication(rootPath, filesByAbsolutePath)
+        : undefined;
+    const application = buildApplication
+      ? normalizeBuildModelApplication(buildApplication)
+      : buildProjectApplicationFromFiles(rootPath, filesByAbsolutePath);
     if (!application) {
       continue;
     }
@@ -6289,6 +8569,10 @@ function buildProjectModel(projectFiles) {
 
     for (const artifact of application.runtimeArtifacts) {
       projectModel.runtimeArtifacts.push(artifact);
+    }
+
+    if (Array.isArray(application.startupEntryPoints)) {
+      projectModel.startupEntryPoints.push(...application.startupEntryPoints);
     }
 
     for (const [iocName, iocInfo] of application.iocsByName.entries()) {
@@ -6310,7 +8594,45 @@ function buildProjectModel(projectFiles) {
   return projectModel;
 }
 
-function buildProjectApplication(rootPath, filesByAbsolutePath) {
+function normalizeBuildModelApplication(application) {
+  const rootPath = normalizeFsPath(application?.rootPath);
+  const rootUri = vscode.Uri.file(rootPath);
+  const rootRelativePath = normalizePath(vscode.workspace.asRelativePath(rootUri, false));
+
+  return {
+    rootPath,
+    rootUri,
+    rootRelativePath,
+    releaseVariables: new Map(Object.entries(application?.releaseVariables || {})),
+    iocsByName: new Map(
+      (Array.isArray(application?.iocs) ? application.iocs : [])
+        .filter((iocInfo) => iocInfo?.name)
+        .map((iocInfo) => [iocInfo.name, iocInfo]),
+    ),
+    runtimeArtifacts: Array.isArray(application?.runtimeArtifacts)
+      ? application.runtimeArtifacts.map((artifact) => ({
+          ...artifact,
+          absoluteRuntimePath: normalizeFsPath(artifact.absoluteRuntimePath),
+        }))
+      : [],
+    startupEntryPoints: Array.isArray(application?.startupEntryPoints)
+      ? application.startupEntryPoints.map((entryPath) => normalizeFsPath(entryPath))
+      : [],
+    availableDbds: new Map(
+      (Array.isArray(application?.availableDbds) ? application.availableDbds : [])
+        .filter((entry) => entry?.name)
+        .map((entry) => [entry.name, entry]),
+    ),
+    availableLibs: new Map(
+      (Array.isArray(application?.availableLibs) ? application.availableLibs : [])
+        .filter((entry) => entry?.name)
+        .map((entry) => [entry.name, entry]),
+    ),
+    buildInfo: application?.buildInfo || undefined,
+  };
+}
+
+function buildProjectApplicationFromFiles(rootPath, filesByAbsolutePath) {
   const rootUri = vscode.Uri.file(rootPath);
   const rootRelativePath = normalizePath(vscode.workspace.asRelativePath(rootUri, false));
   const releaseVariables = new Map();
@@ -6431,6 +8753,7 @@ function buildProjectApplication(rootPath, filesByAbsolutePath) {
     releaseVariables,
     iocsByName,
     runtimeArtifacts,
+    startupEntryPoints: findProjectIocBootFilePaths(rootPath),
     availableDbds,
     availableLibs,
   };
@@ -6593,6 +8916,7 @@ function createDuplicateRecordDiagnostics(document) {
         vscode.DiagnosticSeverity.Error,
       );
       diagnostic.source = "vscode-epics";
+      diagnostic.code = "epics.database.duplicateRecordName";
       diagnostics.push(diagnostic);
     }
   }
@@ -6653,10 +8977,15 @@ function createInvalidFieldDiagnostics(document, snapshot) {
       }
 
       diagnostics.push(
-        createDiagnostic(
-          document.positionAt(fieldDeclaration.fieldNameStart),
-          document.positionAt(fieldDeclaration.fieldNameEnd),
-          `Field "${fieldDeclaration.fieldName}" is not valid for record type "${recordDeclaration.recordType}".`,
+        Object.assign(
+          createDiagnostic(
+            document.positionAt(fieldDeclaration.fieldNameStart),
+            document.positionAt(fieldDeclaration.fieldNameEnd),
+            `Field "${fieldDeclaration.fieldName}" is not valid for record type "${recordDeclaration.recordType}".`,
+          ),
+          {
+            code: "epics.database.invalidFieldName",
+          },
         ),
       );
     }
@@ -6738,10 +9067,15 @@ function createInvalidMenuFieldValueDiagnostics(document, snapshot) {
       }
 
       diagnostics.push(
-        createDiagnostic(
-          document.positionAt(fieldDeclaration.valueStart),
-          document.positionAt(fieldDeclaration.valueEnd),
-          `Field "${fieldDeclaration.fieldName}" must be one of the menu choices for "${recordDeclaration.recordType}".`,
+        Object.assign(
+          createDiagnostic(
+            document.positionAt(fieldDeclaration.valueStart),
+            document.positionAt(fieldDeclaration.valueEnd),
+            `Field "${fieldDeclaration.fieldName}" must be one of the menu choices for "${recordDeclaration.recordType}".`,
+          ),
+          {
+            code: "epics.database.invalidMenuFieldValue",
+          },
         ),
       );
     }
@@ -6851,10 +9185,15 @@ function createStartupDiagnostics(document, snapshot) {
         }
 
         diagnostics.push(
-          createDiagnostic(
-            document.positionAt(statement.nameStart),
-            document.positionAt(statement.nameEnd),
-            `Unknown IOC registration function "${statement.functionName}" for this EPICS application.`,
+          Object.assign(
+            createDiagnostic(
+              document.positionAt(statement.nameStart),
+              document.positionAt(statement.nameEnd),
+              `Unknown IOC registration function "${statement.functionName}" for this EPICS application.`,
+            ),
+            {
+              code: "epics.startup.unknownIocRegistrationFunction",
+            },
           ),
         );
         break;
@@ -6888,12 +9227,17 @@ function createStartupLoadMacroDiagnostics(document, statement, resolvedFile) {
   }
 
   return [
-    createDiagnostic(
-      document.positionAt(statement.pathStart),
-      document.positionAt(statement.pathEnd),
-      `dbLoadRecords is missing macro assignments for "${path.posix.basename(
-        normalizePath(statement.path),
-      )}": ${missingMacroNames.join(", ")}.`,
+    Object.assign(
+      createDiagnostic(
+        document.positionAt(statement.pathStart),
+        document.positionAt(statement.pathEnd),
+        `dbLoadRecords is missing macro assignments for "${path.posix.basename(
+          normalizePath(statement.path),
+        )}": ${missingMacroNames.join(", ")}.`,
+      ),
+      {
+        code: "epics.startup.missingDbLoadRecordsMacros",
+      },
     ),
   ];
 }
@@ -10593,8 +12937,8 @@ function extractSubstitutionMacros(text) {
   return [...names];
 }
 
-function extractDbdFieldsByRecordType(text) {
-  const fieldsByRecordType = new Map();
+function extractDbdRecordTypeDeclarations(text) {
+  const declarations = [];
   const recordTypeRegex = /recordtype\(\s*([A-Za-z0-9_]+)\s*\)\s*\{/g;
   let match;
 
@@ -10604,15 +12948,202 @@ function extractDbdFieldsByRecordType(text) {
       continue;
     }
 
-    const recordType = match[1];
-    const fieldRegex = /field\(\s*([A-Z0-9_]+)\s*,/g;
-    let fieldMatch;
-
-    while ((fieldMatch = fieldRegex.exec(block.body))) {
-      addToMapOfSets(fieldsByRecordType, recordType, [fieldMatch[1]]);
-    }
+    const typePrefixMatch = match[0].match(/recordtype\(\s*/);
+    const nameStart = match.index + typePrefixMatch[0].length;
+    declarations.push({
+      name: match[1],
+      nameStart,
+      nameEnd: nameStart + match[1].length,
+      blockStart: match.index,
+      blockEnd: block.endIndex,
+    });
 
     recordTypeRegex.lastIndex = block.endIndex;
+  }
+
+  return declarations;
+}
+
+function extractDbdFieldDeclarationsInRecordType(text, recordTypeDeclaration, expectedFieldName) {
+  if (!recordTypeDeclaration) {
+    return [];
+  }
+
+  const blockText = text.slice(recordTypeDeclaration.blockStart, recordTypeDeclaration.blockEnd);
+  const declarations = [];
+  const fieldRegex = /field\(\s*([A-Z0-9_]+)\s*,/g;
+  let match;
+
+  while ((match = fieldRegex.exec(blockText))) {
+    if (expectedFieldName && match[1] !== expectedFieldName) {
+      continue;
+    }
+
+    const fieldPrefixMatch = match[0].match(/field\(\s*/);
+    const fieldNameStart = recordTypeDeclaration.blockStart + match.index + fieldPrefixMatch[0].length;
+    declarations.push({
+      fieldName: match[1],
+      fieldNameStart,
+      fieldNameEnd: fieldNameStart + match[1].length,
+    });
+  }
+
+  return declarations;
+}
+
+function extractDbdDeviceDeclarations(text) {
+  const declarations = [];
+  const regex =
+    /device\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)/g;
+  let match;
+
+  while ((match = regex.exec(text))) {
+    const prefixMatch = match[0].match(/device\(\s*/);
+    const firstCommaOffset = match[0].indexOf(",");
+    const secondCommaOffset = match[0].indexOf(",", firstCommaOffset + 1);
+    const thirdCommaOffset = match[0].indexOf(",", secondCommaOffset + 1);
+    const recordTypeStart = match.index + prefixMatch[0].length;
+    const linkTypeStart = match.index + firstCommaOffset + 1 + (match[0].slice(firstCommaOffset + 1).match(/^\s*/) || [""])[0].length;
+    const supportNameStart = match.index + secondCommaOffset + 1 + (match[0].slice(secondCommaOffset + 1).match(/^\s*/) || [""])[0].length;
+    const choiceNameStart = match.index + thirdCommaOffset + 1 + (match[0].slice(thirdCommaOffset + 1).match(/^\s*"/) || [""])[0].length;
+
+    declarations.push({
+      recordType: match[1],
+      linkType: match[2],
+      supportName: match[3],
+      choiceName: match[4],
+      recordTypeStart,
+      recordTypeEnd: recordTypeStart + match[1].length,
+      supportNameStart,
+      supportNameEnd: supportNameStart + match[3].length,
+      choiceNameStart,
+      choiceNameEnd: choiceNameStart + match[4].length,
+    });
+  }
+
+  return declarations;
+}
+
+function extractDbdNamedEntries(text, keyword) {
+  const declarations = [];
+  const regex = new RegExp(`${keyword}\\(\\s*([A-Za-z_][A-Za-z0-9_]*)`, "g");
+  let match;
+
+  while ((match = regex.exec(text))) {
+    const prefixMatch = match[0].match(new RegExp(`${keyword}\\(\\s*`));
+    const nameStart = match.index + prefixMatch[0].length;
+    declarations.push({
+      name: match[1],
+      nameStart,
+      nameEnd: nameStart + match[1].length,
+    });
+  }
+
+  return declarations;
+}
+
+function extractSourceNamedSymbolOccurrences(text) {
+  return [
+    ...extractSourceExportAddressOccurrences(text),
+    ...extractSourceRegistrarOccurrences(text),
+    ...extractSourceFunctionOccurrences(text),
+  ];
+}
+
+function extractSourceExportAddressOccurrences(text) {
+  const occurrences = [];
+  const regex =
+    /epicsExportAddress\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/g;
+  let match;
+
+  while ((match = regex.exec(text))) {
+    const exportType = match[1];
+    const name = match[2];
+    const secondArgumentStart = match.index + match[0].lastIndexOf(name);
+    if (isDeviceSupportExportType(exportType)) {
+      occurrences.push({
+        kind: "deviceSupport",
+        name,
+        nameStart: secondArgumentStart,
+        nameEnd: secondArgumentStart + name.length,
+      });
+      continue;
+    }
+
+    if (isDriverExportType(exportType)) {
+      occurrences.push({
+        kind: "driver",
+        name,
+        nameStart: secondArgumentStart,
+        nameEnd: secondArgumentStart + name.length,
+      });
+      continue;
+    }
+
+    if (isVariableExportType(exportType)) {
+      occurrences.push({
+        kind: "variable",
+        name,
+        nameStart: secondArgumentStart,
+        nameEnd: secondArgumentStart + name.length,
+      });
+    }
+  }
+
+  return occurrences;
+}
+
+function extractSourceRegistrarOccurrences(text) {
+  const occurrences = [];
+  const regex = /epicsExportRegistrar\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/g;
+  let match;
+
+  while ((match = regex.exec(text))) {
+    const nameStart = match.index + match[0].lastIndexOf(match[1]);
+    occurrences.push({
+      kind: "registrar",
+      name: match[1],
+      nameStart,
+      nameEnd: nameStart + match[1].length,
+    });
+  }
+
+  return occurrences;
+}
+
+function extractSourceFunctionOccurrences(text) {
+  const occurrences = [];
+  const regex = /epicsRegisterFunction\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/g;
+  let match;
+
+  while ((match = regex.exec(text))) {
+    const nameStart = match.index + match[0].lastIndexOf(match[1]);
+    occurrences.push({
+      kind: "function",
+      name: match[1],
+      nameStart,
+      nameEnd: nameStart + match[1].length,
+    });
+  }
+
+  return occurrences;
+}
+
+function getDbdNamedSymbolKeyword(kind) {
+  return new Map([
+    ["driver", "driver"],
+    ["registrar", "registrar"],
+    ["function", "function"],
+    ["variable", "variable"],
+  ]).get(kind);
+}
+
+function extractDbdFieldsByRecordType(text) {
+  const fieldsByRecordType = new Map();
+  for (const declaration of extractDbdRecordTypeDeclarations(text)) {
+    for (const fieldDeclaration of extractDbdFieldDeclarationsInRecordType(text, declaration)) {
+      addToMapOfSets(fieldsByRecordType, declaration.name, [fieldDeclaration.fieldName]);
+    }
   }
 
   return fieldsByRecordType;
@@ -12042,10 +14573,13 @@ function extractStartupStatements(text) {
       /^\s*epicsEnvSet\(\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)/,
     );
     if (match) {
+      const nameStart = lineOffset + line.indexOf(match[1]);
       statements.push({
         kind: "envSet",
         name: match[1],
         value: match[2],
+        nameStart,
+        nameEnd: nameStart + match[1].length,
         start: lineOffset,
         lineNumber: currentLineNumber,
       });
@@ -12090,6 +14624,15 @@ function extractStartupStatements(text) {
     if (match) {
       const pathValue = match[1];
       const pathStart = lineOffset + line.indexOf(pathValue);
+      const macroStartSearchIndex = pathStart + pathValue.length + 1;
+      const macroMatch = line
+        .slice(Math.max(0, macroStartSearchIndex - lineOffset))
+        .match(/^\s*,\s*"((?:[^"\\]|\\.)*)"/);
+      const macroValueStart = macroMatch
+        ? macroStartSearchIndex + macroMatch[0].indexOf("\"") + 1
+        : undefined;
+      const macroValueEnd =
+        macroValueStart !== undefined ? macroValueStart + (match[2] || "").length : undefined;
       statements.push({
         kind: "load",
         command: "dbLoadRecords",
@@ -12097,6 +14640,8 @@ function extractStartupStatements(text) {
         macros: match[2] || "",
         pathStart,
         pathEnd: pathStart + pathValue.length,
+        macroValueStart,
+        macroValueEnd,
         start: lineOffset,
         lineNumber: currentLineNumber,
       });
@@ -12971,6 +15516,46 @@ function isProjectModelDocument(document) {
   return document && isProjectModelUri(document.uri);
 }
 
+function getEpicsLanguageIdForUri(uri) {
+  if (!uri || uri.scheme !== "file") {
+    return undefined;
+  }
+
+  if (hasExtension(uri, DATABASE_EXTENSIONS)) {
+    return LANGUAGE_IDS.database;
+  }
+
+  if (hasExtension(uri, SUBSTITUTION_EXTENSIONS)) {
+    return LANGUAGE_IDS.substitutions;
+  }
+
+  if (hasExtension(uri, STARTUP_EXTENSIONS)) {
+    return LANGUAGE_IDS.startup;
+  }
+
+  if (hasExtension(uri, DBD_EXTENSIONS)) {
+    return LANGUAGE_IDS.dbd;
+  }
+
+  if (hasExtension(uri, PVLIST_EXTENSIONS)) {
+    return LANGUAGE_IDS.pvlist;
+  }
+
+  if (hasExtension(uri, PROBE_EXTENSIONS)) {
+    return LANGUAGE_IDS.probe;
+  }
+
+  if (hasExtension(uri, PROTOCOL_EXTENSIONS)) {
+    return LANGUAGE_IDS.proto;
+  }
+
+  if (hasExtension(uri, SOURCE_EXTENSIONS)) {
+    return LANGUAGE_IDS.source;
+  }
+
+  return undefined;
+}
+
 function getEpicsFileExtension(uri) {
   if (!uri || uri.scheme !== "file") {
     return undefined;
@@ -12982,6 +15567,9 @@ function getEpicsFileExtension(uri) {
     SUBSTITUTION_EXTENSIONS.has(extension) ||
     STARTUP_EXTENSIONS.has(extension) ||
     DBD_EXTENSIONS.has(extension) ||
+    PVLIST_EXTENSIONS.has(extension) ||
+    PROBE_EXTENSIONS.has(extension) ||
+    PROTOCOL_EXTENSIONS.has(extension) ||
     SOURCE_EXTENSIONS.has(extension)
   ) {
     return extension;
@@ -13292,6 +15880,60 @@ function compareLabels(left, right) {
   return String(left).localeCompare(String(right));
 }
 
+function findBestMatchingLabel(labels, target) {
+  const normalizedTarget = String(target || "").trim();
+  if (!normalizedTarget) {
+    return undefined;
+  }
+
+  const uniqueLabels = [...new Set((labels || []).filter(Boolean))];
+  if (uniqueLabels.length === 0) {
+    return undefined;
+  }
+
+  return uniqueLabels
+    .map((label) => ({
+      label,
+      distance: computeLevenshteinDistance(
+        String(label).toUpperCase(),
+        normalizedTarget.toUpperCase(),
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        left.distance - right.distance ||
+        compareLabels(left.label, right.label),
+    )[0]?.label;
+}
+
+function computeLevenshteinDistance(left, right) {
+  const source = String(left || "");
+  const target = String(right || "");
+  const matrix = Array.from({ length: source.length + 1 }, () =>
+    new Array(target.length + 1).fill(0),
+  );
+
+  for (let row = 0; row <= source.length; row += 1) {
+    matrix[row][0] = row;
+  }
+  for (let column = 0; column <= target.length; column += 1) {
+    matrix[0][column] = column;
+  }
+
+  for (let row = 1; row <= source.length; row += 1) {
+    for (let column = 1; column <= target.length; column += 1) {
+      const substitutionCost = source[row - 1] === target[column - 1] ? 0 : 1;
+      matrix[row][column] = Math.min(
+        matrix[row - 1][column] + 1,
+        matrix[row][column - 1] + 1,
+        matrix[row - 1][column - 1] + substitutionCost,
+      );
+    }
+  }
+
+  return matrix[source.length][target.length];
+}
+
 function createDiagnostic(start, end, message) {
   const diagnostic = new vscode.Diagnostic(
     new vscode.Range(start, end),
@@ -13320,6 +15962,10 @@ function isSubstitutionsDocument(document) {
 
 function isProtocolDocument(document) {
   return document && document.languageId === LANGUAGE_IDS.proto;
+}
+
+function isSourceDocument(document) {
+  return document && hasExtension(document.uri, SOURCE_EXTENSIONS);
 }
 
 function isPvlistDocument(document) {

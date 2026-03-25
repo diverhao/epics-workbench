@@ -1,9 +1,9 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
 const { formatMonitorText } = require("./formatters");
 
-const RUNTIME_VIEW_ID = "epicsRuntimeMonitors";
 const ADD_RUNTIME_MONITOR_COMMAND = "vscode-epics.addRuntimeMonitor";
 const REMOVE_RUNTIME_MONITOR_COMMAND = "vscode-epics.removeRuntimeMonitor";
 const CLEAR_RUNTIME_MONITORS_COMMAND = "vscode-epics.clearRuntimeMonitors";
@@ -18,9 +18,25 @@ const STOP_DATABASE_MONITOR_CHANNELS_COMMAND =
 const PUT_RUNTIME_VALUE_COMMAND = "vscode-epics.putRuntimeValue";
 const OPEN_PROJECT_RUNTIME_CONFIGURATION_COMMAND =
   "vscode-epics.openProjectRuntimeConfiguration";
+const OPEN_RUNTIME_WIDGET_COMMAND = "vscode-epics.openRuntimeWidget";
 const OPEN_PROBE_WIDGET_COMMAND = "vscode-epics.openProbeWidget";
 const OPEN_PVLIST_WIDGET_COMMAND = "vscode-epics.openPvlistWidget";
 const OPEN_MONITOR_WIDGET_COMMAND = "vscode-epics.openMonitorWidget";
+const SET_IOC_SHELL_TERMINAL_COMMAND = "vscode-epics.setIocShellTerminal";
+const RUN_IOC_SHELL_COMMAND = "vscode-epics.runIocShellCommand";
+const RUN_IOC_SHELL_DBL_COMMAND = "vscode-epics.runIocShellDbl";
+const RUN_IOC_SHELL_DBPR_CURRENT_RECORD_COMMAND =
+  "vscode-epics.runIocShellDbprCurrentRecord";
+const START_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.startActiveStartupIoc";
+const STOP_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.stopActiveStartupIoc";
+const SHOW_ACTIVE_STARTUP_IOC_TERMINAL_COMMAND =
+  "vscode-epics.showActiveStartupIocTerminal";
+const OPEN_ACTIVE_STARTUP_IOC_COMMANDS_COMMAND =
+  "vscode-epics.openActiveStartupIocCommands";
+const OPEN_ACTIVE_STARTUP_IOC_VARIABLES_COMMAND =
+  "vscode-epics.openActiveStartupIocVariables";
+const OPEN_ACTIVE_STARTUP_IOC_ENVIRONMENT_COMMAND =
+  "vscode-epics.openActiveStartupIocEnvironment";
 const DEFAULT_PROTOCOL = "ca";
 const DEFAULT_CHANNEL_CREATION_TIMEOUT_SECONDS = 0;
 const DEFAULT_MONITOR_SUBSCRIBE_TIMEOUT_SECONDS = 0;
@@ -34,9 +50,13 @@ const PROJECT_RUNTIME_CONFIG_FILE_NAME = ".epics-workbench-config.json";
 const PROJECT_RUNTIME_CONFIGURATION_VIEW_TYPE =
   "epicsWorkbench.projectRuntimeConfiguration";
 const PROBE_CUSTOM_EDITOR_VIEW_TYPE = "epicsWorkbench.probeEditor";
+const RUNTIME_WIDGET_VIEW_TYPE = "epicsWorkbench.runtimeWidget";
 const PROBE_WIDGET_VIEW_TYPE = "epicsWorkbench.probeWidget";
 const PVLIST_WIDGET_VIEW_TYPE = "epicsWorkbench.pvlistWidget";
 const MONITOR_WIDGET_VIEW_TYPE = "epicsWorkbench.monitorWidget";
+const IOC_RUNTIME_COMMANDS_VIEW_TYPE = "epicsWorkbench.iocRuntimeCommands";
+const IOC_RUNTIME_VARIABLES_VIEW_TYPE = "epicsWorkbench.iocRuntimeVariables";
+const IOC_RUNTIME_ENVIRONMENT_VIEW_TYPE = "epicsWorkbench.iocRuntimeEnvironment";
 const PROJECT_RUNTIME_CONFIGURATION_PROTOCOL_VALUES = ["ca", "pva"];
 const PROJECT_RUNTIME_CONFIGURATION_AUTO_ADDR_LIST_VALUES = ["Yes", "No"];
 const PVA_HAS_DATA_WITHOUT_VALUE_TEXT = "Has data, but no value";
@@ -47,19 +67,22 @@ const PROBE_FIELD_CONNECT_BATCH_SIZE = 8;
 const PROBE_OVERLAY_MAX_LINES = 160;
 const DEFAULT_MONITOR_WIDGET_BUFFER_SIZE = 500;
 const EPICS_CA_EPOCH_OFFSET_SECONDS = 631152000;
+const STARTUP_TERMINAL_OUTPUT_MAX_LENGTH = 250000;
+const IOC_RUNTIME_COMMANDS_FETCH_TIMEOUT_MS = 5000;
+const STARTUP_RUNNING_WATERMARK_LINE_INTERVAL = 6;
 const CONTEXT_INITIALIZATION_CANCELLED_MESSAGE =
   "EPICS runtime context initialization was cancelled.";
 const ACTIVE_DATABASE_HAS_TOC_CONTEXT_KEY =
   "epicsWorkbench.activeDatabaseHasToc";
 const ACTIVE_DATABASE_MONITORING_RUNNING_CONTEXT_KEY =
   "epicsWorkbench.activeDatabaseMonitoringRunning";
+const ACTIVE_STARTUP_CAN_START_IOC_CONTEXT_KEY =
+  "epicsWorkbench.activeStartupCanStartIoc";
+const ACTIVE_STARTUP_CAN_STOP_IOC_CONTEXT_KEY =
+  "epicsWorkbench.activeStartupCanStopIoc";
 function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   const controller = new EpicsRuntimeMonitorController(databaseHelpers);
   const probeCustomEditorProvider = new EpicsProbeCustomEditorProvider(controller);
-  const treeView = vscode.window.createTreeView(RUNTIME_VIEW_ID, {
-    treeDataProvider: controller,
-    showCollapseAll: false,
-  });
   const diagnostics = vscode.languages.createDiagnosticCollection("vscode-epics-pvlist");
   const statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -73,6 +96,17 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   const databaseTocValueDecorationType = vscode.window.createTextEditorDecorationType({
     after: {
       color: new vscode.ThemeColor("descriptionForeground"),
+    },
+  });
+  const startupRunningDecorationType = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    after: {
+      color: "transparent",
+      margin: "0.9em 0 0.9em 5ch",
+      fontStyle: "italic",
+      fontWeight: "700",
+      textDecoration:
+        "none; display: block; font-size: 3.2em; letter-spacing: 0.08em; -webkit-text-stroke: 1.4px rgba(220, 38, 38, 0.7);",
     },
   });
   const probeDecorationTypes = Array.from(
@@ -89,16 +123,17 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   controller.attachDiagnosticsCollection(diagnostics);
   controller.attachHoverDecorationType(hoverDecorationType);
   controller.attachDatabaseTocValueDecorationType(databaseTocValueDecorationType);
+  controller.attachStartupRunningDecorationType(startupRunningDecorationType);
   controller.attachProbeDecorationTypes(probeDecorationTypes);
 
   extensionContext.subscriptions.push(
     controller,
     probeCustomEditorProvider,
-    treeView,
     diagnostics,
     statusBarItem,
     hoverDecorationType,
     databaseTocValueDecorationType,
+    startupRunningDecorationType,
     ...probeDecorationTypes,
   );
   extensionContext.subscriptions.push(
@@ -122,7 +157,10 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
       ADD_RUNTIME_MONITOR_COMMAND,
-      async () => controller.addMonitorInteractive(),
+      async () => {
+        await controller.openRuntimeWidget();
+        await controller.addMonitorInteractive();
+      },
     ),
   );
   extensionContext.subscriptions.push(
@@ -187,6 +225,12 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
+      OPEN_RUNTIME_WIDGET_COMMAND,
+      async () => controller.openRuntimeWidget(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
       OPEN_PROBE_WIDGET_COMMAND,
       async (options) => controller.openProbeWidget(options),
     ),
@@ -204,13 +248,105 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
     ),
   );
   extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      SET_IOC_SHELL_TERMINAL_COMMAND,
+      async () => controller.setIocShellTerminalInteractive(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      RUN_IOC_SHELL_COMMAND,
+      async () => controller.runIocShellCommandInteractive(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      RUN_IOC_SHELL_DBL_COMMAND,
+      async () => controller.sendNamedIocShellCommand("dbl"),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      RUN_IOC_SHELL_DBPR_CURRENT_RECORD_COMMAND,
+      async () => controller.runDbprForActiveRecord(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      START_ACTIVE_STARTUP_IOC_COMMAND,
+      async () => controller.startActiveStartupIoc(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      STOP_ACTIVE_STARTUP_IOC_COMMAND,
+      async () => controller.stopActiveStartupIoc(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      SHOW_ACTIVE_STARTUP_IOC_TERMINAL_COMMAND,
+      async () => controller.showActiveStartupIocTerminal(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_ACTIVE_STARTUP_IOC_COMMANDS_COMMAND,
+      async () => controller.openActiveStartupIocCommands(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_ACTIVE_STARTUP_IOC_VARIABLES_COMMAND,
+      async () => controller.openActiveStartupIocVariables(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_ACTIVE_STARTUP_IOC_ENVIRONMENT_COMMAND,
+      async () => controller.openActiveStartupIocEnvironment(),
+    ),
+  );
+  extensionContext.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       controller.handleActiveEditorChange(editor);
       controller.refreshMonitorHoverDecorationsForEditor(editor);
       controller.refreshDatabaseTocValueDecorationsForEditor(editor);
+      controller.refreshStartupRunningDecorationsForEditor(editor);
       controller.refreshProbeDecorationsForEditor(editor);
     }),
   );
+  extensionContext.subscriptions.push(
+    vscode.window.onDidChangeActiveTerminal((terminal) => {
+      controller.handleActiveTerminalChanged(terminal);
+    }),
+  );
+  extensionContext.subscriptions.push(
+    vscode.window.onDidCloseTerminal((terminal) => {
+      controller.handleTerminalClosed(terminal);
+    }),
+  );
+  if (typeof vscode.window.onDidStartTerminalShellExecution === "function") {
+    extensionContext.subscriptions.push(
+      vscode.window.onDidStartTerminalShellExecution((event) => {
+        controller.handleTerminalShellExecutionStarted(event);
+      }),
+    );
+  }
+  if (typeof vscode.window.onDidChangeTerminalShellIntegration === "function") {
+    extensionContext.subscriptions.push(
+      vscode.window.onDidChangeTerminalShellIntegration((event) => {
+        controller.handleTerminalShellIntegrationChanged(event);
+      }),
+    );
+  }
+  if (typeof vscode.window.onDidEndTerminalShellExecution === "function") {
+    extensionContext.subscriptions.push(
+      vscode.window.onDidEndTerminalShellExecution((event) => {
+        controller.handleTerminalShellExecutionEnded(event);
+      }),
+    );
+  }
   extensionContext.subscriptions.push(
     vscode.window.onDidChangeVisibleTextEditors(() => {
       controller.refreshVisibleMonitorHoverDecorations();
@@ -227,6 +363,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorDiagnosticsForDocument(event.document);
       controller.refreshMonitorHoverDecorationsForDocument(event.document);
       controller.refreshDatabaseTocValueDecorationsForDocument(event.document);
+      controller.refreshStartupRunningDecorationsForDocument(event.document);
       controller.refreshProbeDecorationsForDocument(event.document);
       controller.refreshProbePanels();
     }),
@@ -236,6 +373,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorDiagnosticsForDocument(document);
       controller.refreshMonitorHoverDecorationsForDocument(document);
       controller.refreshDatabaseTocValueDecorationsForDocument(document);
+      controller.refreshStartupRunningDecorationsForDocument(document);
       controller.refreshProbeDecorationsForDocument(document);
       controller.refreshProbePanels();
     }),
@@ -245,6 +383,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.clearMonitorDiagnosticsForDocument(document);
       controller.clearMonitorHoverDecorationsForDocument(document);
       controller.clearDatabaseTocValueDecorationsForDocument(document);
+      controller.clearStartupRunningDecorationsForDocument(document);
       controller.clearProbeDecorationsForDocument(document);
       void controller.handleDocumentClosed(document);
     }),
@@ -286,6 +425,7 @@ class EpicsRuntimeMonitorController {
     this.statusBarItem = undefined;
     this.hoverDecorationType = undefined;
     this.databaseTocValueDecorationType = undefined;
+    this.startupRunningDecorationType = undefined;
     this.probeDecorationTypes = [];
     this.hoverRefreshTimer = undefined;
     this.runtimeWorkspaceFolder = undefined;
@@ -314,9 +454,29 @@ class EpicsRuntimeMonitorController {
         : undefined;
     this.probeSessions = new Map();
     this.probeWebviews = new Map();
+    this.runtimeWidgetPanel = undefined;
+    this.iocRuntimeCommandsPanel = undefined;
+    this.iocRuntimeCommandsPanelState = undefined;
+    this.iocRuntimeVariablesPanel = undefined;
+    this.iocRuntimeVariablesPanelState = undefined;
+    this.iocRuntimeEnvironmentPanel = undefined;
+    this.iocRuntimeEnvironmentPanelState = undefined;
     this.probeWidgets = new Map();
     this.pvlistWidgets = new Map();
     this.monitorWidgets = new Map();
+    this.iocShellTerminal = undefined;
+    this.lastIocShellCommand = "";
+    this.iocStartupTerminalByDocumentPath = new Map();
+    this.iocStartupDocumentPathByTerminal = new Map();
+    this.terminalActiveExecutionCount = new Map();
+    this.terminalLastKnownCwd = new Map();
+    this.startupTerminalOutputByTerminal = new Map();
+    this.iocRuntimeCommandsByTerminal = new Map();
+    this.iocRuntimeCommandHelpByTerminal = new Map();
+    this.iocRuntimeVariablesByTerminal = new Map();
+    this.iocRuntimeVariablesReloadTimer = undefined;
+    this.iocRuntimeEnvironmentByTerminal = new Map();
+    this.iocRuntimeEnvironmentReloadTimer = undefined;
   }
 
   getTreeItem(element) {
@@ -345,6 +505,17 @@ class EpicsRuntimeMonitorController {
       }
     }
     this.probeWebviews.clear();
+    this.runtimeWidgetPanel?.dispose();
+    this.runtimeWidgetPanel = undefined;
+    this.iocRuntimeCommandsPanel?.dispose();
+    this.iocRuntimeCommandsPanel = undefined;
+    this.iocRuntimeCommandsPanelState = undefined;
+    this.iocRuntimeVariablesPanel?.dispose();
+    this.iocRuntimeVariablesPanel = undefined;
+    this.iocRuntimeVariablesPanelState = undefined;
+    this.iocRuntimeEnvironmentPanel?.dispose();
+    this.iocRuntimeEnvironmentPanel = undefined;
+    this.iocRuntimeEnvironmentPanelState = undefined;
     for (const widgetState of this.probeWidgets.values()) {
       widgetState.panel.dispose();
     }
@@ -357,10 +528,2045 @@ class EpicsRuntimeMonitorController {
       widgetState.panel.dispose();
     }
     this.monitorWidgets.clear();
+    this.iocStartupTerminalByDocumentPath.clear();
+    this.iocStartupDocumentPathByTerminal.clear();
+    this.terminalActiveExecutionCount.clear();
+    this.terminalLastKnownCwd.clear();
+    this.startupTerminalOutputByTerminal.clear();
+    this.iocRuntimeCommandsByTerminal.clear();
+    this.iocRuntimeCommandHelpByTerminal.clear();
+    this.iocRuntimeVariablesByTerminal.clear();
+    this.disposeIocRuntimeVariablesReloadTimer();
+    this.iocRuntimeEnvironmentByTerminal.clear();
+    this.disposeIocRuntimeEnvironmentReloadTimer();
     this.runtimeConfigurationPanel?.dispose();
     this.runtimeConfigurationPanel = undefined;
     this.statusBarItem?.dispose();
     this._onDidChangeTreeData.dispose();
+  }
+
+  handleActiveTerminalChanged(terminal) {
+    if (!this.iocShellTerminal && terminal) {
+      this.iocShellTerminal = terminal;
+      this.refresh(this.contextNode);
+    }
+    this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+  }
+
+  handleTerminalClosed(terminal) {
+    this.untrackStartupIocTerminal(terminal);
+    this.terminalActiveExecutionCount.delete(terminal);
+    this.terminalLastKnownCwd.delete(terminal);
+    this.startupTerminalOutputByTerminal.delete(terminal);
+    this.iocRuntimeCommandsByTerminal.delete(terminal);
+    this.iocRuntimeCommandHelpByTerminal.delete(terminal);
+    this.iocRuntimeVariablesByTerminal.delete(terminal);
+    this.iocRuntimeEnvironmentByTerminal.delete(terminal);
+    if (this.iocShellTerminal === terminal) {
+      this.iocShellTerminal = undefined;
+      this.refresh(this.contextNode);
+    }
+    if (this.iocRuntimeCommandsPanelState?.terminal === terminal) {
+      this.iocRuntimeCommandsPanelState = {
+        ...this.iocRuntimeCommandsPanelState,
+        message: "The tracked IOC terminal has closed.",
+        isLoading: false,
+      };
+      void this.postIocRuntimeCommandsState();
+    }
+    if (this.iocRuntimeVariablesPanelState?.terminal === terminal) {
+      this.iocRuntimeVariablesPanelState = {
+        ...this.iocRuntimeVariablesPanelState,
+        message: "The tracked IOC terminal has closed.",
+        isLoading: false,
+      };
+      void this.postIocRuntimeVariablesState();
+    }
+    if (this.iocRuntimeEnvironmentPanelState?.terminal === terminal) {
+      this.iocRuntimeEnvironmentPanelState = {
+        ...this.iocRuntimeEnvironmentPanelState,
+        message: "The tracked IOC terminal has closed.",
+        isLoading: false,
+      };
+      void this.postIocRuntimeEnvironmentState();
+    }
+    this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+  }
+
+  handleTerminalShellIntegrationChanged(event) {
+    const terminal = event?.terminal;
+    const cwdUri = event?.shellIntegration?.cwd;
+    if (terminal && cwdUri?.scheme === "file") {
+      this.terminalLastKnownCwd.set(terminal, normalizeFsPath(cwdUri.fsPath));
+    }
+  }
+
+  handleTerminalShellExecutionStarted(event) {
+    const terminal = event?.terminal;
+    if (!terminal) {
+      return;
+    }
+
+    this.terminalActiveExecutionCount.set(
+      terminal,
+      this.getTerminalActiveExecutionCount(terminal) + 1,
+    );
+    if (event?.execution?.cwd?.scheme === "file") {
+      this.terminalLastKnownCwd.set(
+        terminal,
+        normalizeFsPath(event.execution.cwd.fsPath),
+      );
+    }
+    const documentPath = resolveStartupCommandDocumentPath(
+      event?.execution?.commandLine?.value,
+      event?.execution?.cwd,
+    );
+    if (!documentPath) {
+      return;
+    }
+
+    this.trackStartupIocTerminal(documentPath, event.terminal);
+    if (this.iocRuntimeCommandsPanelState?.startupDocumentPath === documentPath) {
+      this.iocRuntimeCommandsPanelState = {
+        ...this.iocRuntimeCommandsPanelState,
+        terminal: event.terminal,
+        message: "IOC is running.",
+        isLoading: false,
+      };
+      void this.postIocRuntimeCommandsState();
+    }
+    if (this.iocRuntimeVariablesPanelState?.startupDocumentPath === documentPath) {
+      this.iocRuntimeVariablesPanelState = {
+        ...this.iocRuntimeVariablesPanelState,
+        terminal: event.terminal,
+        message: "IOC is running. Loading IOC runtime variables...",
+        isLoading: true,
+      };
+      void this.postIocRuntimeVariablesState();
+      this.scheduleIocRuntimeVariablesPanelReload(1500);
+    }
+    if (this.iocRuntimeEnvironmentPanelState?.startupDocumentPath === documentPath) {
+      this.iocRuntimeEnvironmentPanelState = {
+        ...this.iocRuntimeEnvironmentPanelState,
+        terminal: event.terminal,
+        message: "IOC is running. Loading IOC runtime environment...",
+        isLoading: true,
+      };
+      void this.postIocRuntimeEnvironmentState();
+      this.scheduleIocRuntimeEnvironmentPanelReload(1500);
+    }
+    void this.captureStartupTerminalExecutionOutput(event.terminal, event.execution);
+  }
+
+  handleTerminalShellExecutionEnded(event) {
+    const terminal = event?.terminal;
+    if (!terminal) {
+      return;
+    }
+
+    const nextExecutionCount = Math.max(
+      0,
+      this.getTerminalActiveExecutionCount(terminal) - 1,
+    );
+    if (nextExecutionCount > 0) {
+      this.terminalActiveExecutionCount.set(terminal, nextExecutionCount);
+    } else {
+      this.terminalActiveExecutionCount.delete(terminal);
+    }
+    if (event?.execution?.cwd?.scheme === "file") {
+      this.terminalLastKnownCwd.set(
+        terminal,
+        normalizeFsPath(event.execution.cwd.fsPath),
+      );
+    }
+
+    const trackedDocumentPath = this.iocStartupDocumentPathByTerminal.get(terminal);
+    const endedDocumentPath = resolveStartupCommandDocumentPath(
+      event?.execution?.commandLine?.value,
+      event?.execution?.cwd,
+    );
+    if (trackedDocumentPath && (!endedDocumentPath || trackedDocumentPath === endedDocumentPath)) {
+      this.untrackStartupIocTerminal(terminal);
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      this.refresh(this.contextNode);
+      if (this.iocRuntimeCommandsPanelState?.terminal === terminal) {
+        this.iocRuntimeCommandsPanelState = {
+          ...this.iocRuntimeCommandsPanelState,
+          message: "The tracked IOC process has stopped.",
+          isLoading: false,
+        };
+        void this.postIocRuntimeCommandsState();
+      }
+      if (this.iocRuntimeVariablesPanelState?.terminal === terminal) {
+        this.iocRuntimeVariablesPanelState = {
+          ...this.iocRuntimeVariablesPanelState,
+          message: "The tracked IOC process has stopped.",
+          isLoading: false,
+        };
+        void this.postIocRuntimeVariablesState();
+      }
+      if (this.iocRuntimeEnvironmentPanelState?.terminal === terminal) {
+        this.iocRuntimeEnvironmentPanelState = {
+          ...this.iocRuntimeEnvironmentPanelState,
+          message: "The tracked IOC process has stopped.",
+          isLoading: false,
+        };
+        void this.postIocRuntimeEnvironmentState();
+      }
+    }
+  }
+
+  async setIocShellTerminalInteractive() {
+    const terminal = await this.pickIocShellTerminal();
+    if (!terminal) {
+      return;
+    }
+
+    this.iocShellTerminal = terminal;
+    this.refresh(this.contextNode);
+    vscode.window.setStatusBarMessage(
+      `EPICS IOC terminal: ${terminal.name}`,
+      3000,
+    );
+  }
+
+  async runIocShellCommandInteractive(initialValue = "") {
+    const terminal = await this.resolveIocShellTerminal(true);
+    if (!terminal) {
+      return;
+    }
+
+    const commandText = await vscode.window.showInputBox({
+      prompt: `Send IOC shell command to terminal "${terminal.name}"`,
+      placeHolder: "dbl",
+      value: initialValue || this.lastIocShellCommand || "",
+      ignoreFocusOut: true,
+    });
+    if (commandText === undefined) {
+      return;
+    }
+
+    await this.sendIocShellCommand(commandText);
+  }
+
+  async sendNamedIocShellCommand(commandText) {
+    await this.sendIocShellCommand(commandText);
+  }
+
+  async runDbprForActiveRecord() {
+    const recordName = this.resolveActiveIocShellRecordName();
+    if (!recordName) {
+      vscode.window.showWarningMessage(
+        "No EPICS record could be resolved from the active editor for dbpr.",
+      );
+      return;
+    }
+
+    await this.sendIocShellCommand(`dbpr ${recordName}`);
+  }
+
+  async sendIocShellCommand(commandText, terminalOverride) {
+    const trimmedCommand = String(commandText || "").trim();
+    if (!trimmedCommand) {
+      return false;
+    }
+
+    const terminal =
+      terminalOverride && vscode.window.terminals.includes(terminalOverride)
+        ? terminalOverride
+        : await this.resolveIocShellTerminal(true);
+    if (!terminal) {
+      return false;
+    }
+
+    this.iocShellTerminal = terminal;
+    this.lastIocShellCommand = trimmedCommand;
+    terminal.sendText(trimmedCommand, true);
+    this.refresh(this.contextNode);
+    vscode.window.setStatusBarMessage(`IOC> ${trimmedCommand}`, 2500);
+    return true;
+  }
+
+  async captureStartupTerminalExecutionOutput(terminal, execution) {
+    if (!terminal || !execution || typeof execution.read !== "function") {
+      return;
+    }
+
+    try {
+      for await (const chunk of execution.read()) {
+        this.appendStartupTerminalOutput(terminal, chunk);
+      }
+    } catch (_error) {
+      // Ignore shell-integration output capture failures. IOC control still works.
+    }
+  }
+
+  appendStartupTerminalOutput(terminal, chunk) {
+    if (!terminal || !chunk) {
+      return;
+    }
+
+    const previousText = this.startupTerminalOutputByTerminal.get(terminal) || "";
+    const nextText = `${previousText}${String(chunk)}`;
+    const trimmedText =
+      nextText.length > STARTUP_TERMINAL_OUTPUT_MAX_LENGTH
+        ? nextText.slice(nextText.length - STARTUP_TERMINAL_OUTPUT_MAX_LENGTH)
+        : nextText;
+    this.startupTerminalOutputByTerminal.set(terminal, trimmedText);
+  }
+
+  parseIocRuntimeCommandsFromHelpOutput(outputText) {
+    const sanitizedText = stripAnsiTerminalText(outputText)
+      .replace(/\r/g, "")
+      .replace(/\u0000/g, "");
+    const terminatorIndex = sanitizedText.indexOf("Type 'help <glob>'");
+    const relevantText =
+      terminatorIndex >= 0 ? sanitizedText.slice(0, terminatorIndex) : sanitizedText;
+    const commands = [];
+    const seenCommands = new Set();
+
+    for (const line of relevantText.split("\n")) {
+      for (const token of line.split(/\s+/)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(token)) {
+          continue;
+        }
+        if (seenCommands.has(token)) {
+          continue;
+        }
+        seenCommands.add(token);
+        commands.push(token);
+      }
+    }
+
+    return {
+      commands,
+      isComplete: terminatorIndex >= 0,
+    };
+  }
+
+  async fetchIocRuntimeCommandsForTerminal(terminal) {
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      return [];
+    }
+
+    const cachedCommands = this.iocRuntimeCommandsByTerminal.get(terminal);
+    if (Array.isArray(cachedCommands) && cachedCommands.length) {
+      return cachedCommands;
+    }
+
+    const helpOutput = await this.captureIocShellCommandOutput("help", terminal);
+    if (helpOutput === undefined) {
+      return [];
+    }
+    const parsed = this.parseIocRuntimeCommandsFromHelpOutput(helpOutput);
+    if (parsed.commands.length) {
+      this.iocRuntimeCommandsByTerminal.set(terminal, parsed.commands);
+    }
+    return parsed.commands;
+  }
+
+  parseIocRuntimeCommandHelpOutput(outputText, requestedCommandNames) {
+    const sanitizedText = stripAnsiTerminalText(outputText)
+      .replace(/\r/g, "")
+      .replace(/\u0000/g, "");
+    const normalizedCommandNames = Array.isArray(requestedCommandNames)
+      ? requestedCommandNames.map((name) => String(name || "").trim()).filter(Boolean)
+      : [];
+    const remainingCommandNames = new Set(normalizedCommandNames);
+    const helpByCommand = new Map();
+    let activeCommandName = undefined;
+    let activeLines = [];
+
+    const flushActiveHelp = () => {
+      if (!activeCommandName) {
+        return;
+      }
+      const helpText = activeLines.join("\n").trim();
+      helpByCommand.set(
+        activeCommandName,
+        helpText || `No detailed help is available for ${activeCommandName}.`,
+      );
+      remainingCommandNames.delete(activeCommandName);
+      activeCommandName = undefined;
+      activeLines = [];
+    };
+
+    for (const rawLine of sanitizedText.split("\n")) {
+      const line = String(rawLine || "");
+      const trimmedLine = line.trim();
+      const matchingCommandName = normalizedCommandNames.find((commandName) =>
+        trimmedLine === commandName || trimmedLine.startsWith(`${commandName} `),
+      );
+      if (matchingCommandName) {
+        flushActiveHelp();
+        activeCommandName = matchingCommandName;
+        activeLines = [trimmedLine];
+        continue;
+      }
+      if (activeCommandName) {
+        activeLines.push(line.replace(/\s+$/g, ""));
+      }
+    }
+    flushActiveHelp();
+
+    for (const commandName of remainingCommandNames) {
+      helpByCommand.set(
+        commandName,
+        `No detailed help is available for ${commandName}.`,
+      );
+    }
+
+    return helpByCommand;
+  }
+
+  async fetchIocRuntimeCommandHelpBatch(commandNames, terminal) {
+    const normalizedCommandNames = Array.isArray(commandNames)
+      ? commandNames.map((name) => String(name || "").trim()).filter(Boolean)
+      : [];
+    if (!normalizedCommandNames.length || !terminal || !vscode.window.terminals.includes(terminal)) {
+      return new Map();
+    }
+
+    let helpByCommand = this.iocRuntimeCommandHelpByTerminal.get(terminal);
+    if (!helpByCommand) {
+      helpByCommand = new Map();
+      this.iocRuntimeCommandHelpByTerminal.set(terminal, helpByCommand);
+    }
+
+    const missingCommandNames = normalizedCommandNames.filter(
+      (commandName) => !helpByCommand.has(commandName),
+    );
+    if (missingCommandNames.length) {
+      const helpOutput = await this.captureIocShellCommandOutput(
+        `help ${missingCommandNames.join(" ")}`,
+        terminal,
+      );
+      const parsedHelp =
+        helpOutput === undefined
+          ? new Map(
+              missingCommandNames.map((commandName) => [
+                commandName,
+                `No detailed help is available for ${commandName}.`,
+              ]),
+            )
+          : this.parseIocRuntimeCommandHelpOutput(helpOutput, missingCommandNames);
+      for (const [commandName, helpText] of parsedHelp.entries()) {
+        helpByCommand.set(commandName, helpText);
+      }
+    }
+
+    const result = new Map();
+    for (const commandName of normalizedCommandNames) {
+      result.set(
+        commandName,
+        helpByCommand.get(commandName) ||
+          `No detailed help is available for ${commandName}.`,
+      );
+    }
+    return result;
+  }
+
+  async prefetchIocRuntimeCommandHelpForPanel(commandNames, terminal, startupDocumentPath) {
+    const normalizedCommandNames = Array.isArray(commandNames)
+      ? commandNames.map((name) => String(name || "").trim()).filter(Boolean)
+      : [];
+    if (!normalizedCommandNames.length || !terminal || !vscode.window.terminals.includes(terminal)) {
+      return;
+    }
+
+    const batchSize = 24;
+    for (let index = 0; index < normalizedCommandNames.length; index += batchSize) {
+      const batch = normalizedCommandNames.slice(index, index + batchSize);
+      const helpMap = await this.fetchIocRuntimeCommandHelpBatch(batch, terminal);
+      if (!this.iocRuntimeCommandsPanel?.webview) {
+        return;
+      }
+      const panelState = this.iocRuntimeCommandsPanelState;
+      if (
+        !panelState ||
+        panelState.terminal !== terminal ||
+        panelState.startupDocumentPath !== startupDocumentPath
+      ) {
+        return;
+      }
+      for (const [commandName, helpText] of helpMap.entries()) {
+        await this.iocRuntimeCommandsPanel.webview.postMessage({
+          type: "iocRuntimeCommandHelp",
+          commandName,
+          helpText:
+            helpText || `No detailed help is available for ${commandName}.`,
+        });
+      }
+    }
+  }
+
+  async fetchIocRuntimeCommandHelp(commandName, terminal) {
+    const normalizedCommandName = String(commandName || "").trim();
+    if (!normalizedCommandName || !terminal || !vscode.window.terminals.includes(terminal)) {
+      return undefined;
+    }
+    const helpMap = await this.fetchIocRuntimeCommandHelpBatch(
+      [normalizedCommandName],
+      terminal,
+    );
+    return helpMap.get(normalizedCommandName);
+  }
+
+  parseIocRuntimeVariablesOutput(outputText) {
+    const sanitizedText = stripAnsiTerminalText(outputText)
+      .replace(/\r/g, "")
+      .replace(/\u0000/g, "");
+    const variables = [];
+    const seenVariableNames = new Set();
+
+    for (const rawLine of sanitizedText.split("\n")) {
+      const trimmedLine = String(rawLine || "").trim();
+      if (!trimmedLine || /^epics>/.test(trimmedLine)) {
+        continue;
+      }
+      const match = trimmedLine.match(/^(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!match) {
+        continue;
+      }
+      const variableType = String(match[1] || "").trim();
+      const variableName = String(match[2] || "").trim();
+      const currentValue = String(match[3] || "").trim();
+      if (!variableName || seenVariableNames.has(variableName)) {
+        continue;
+      }
+      seenVariableNames.add(variableName);
+      variables.push({
+        variableType,
+        variableName,
+        currentValue,
+      });
+    }
+
+    return variables;
+  }
+
+  async fetchIocRuntimeVariablesForTerminal(terminal) {
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      return [];
+    }
+
+    const cachedVariables = this.iocRuntimeVariablesByTerminal.get(terminal);
+    if (Array.isArray(cachedVariables) && cachedVariables.length) {
+      return cachedVariables;
+    }
+
+    const variableOutput = await this.captureIocShellCommandOutput("var", terminal);
+    if (variableOutput === undefined) {
+      return [];
+    }
+    const parsedVariables = this.parseIocRuntimeVariablesOutput(variableOutput);
+    if (parsedVariables.length) {
+      this.iocRuntimeVariablesByTerminal.set(terminal, parsedVariables);
+    }
+    return parsedVariables;
+  }
+
+  parseIocRuntimeEnvironmentOutput(outputText) {
+    const sanitizedText = stripAnsiTerminalText(outputText)
+      .replace(/\r/g, "")
+      .replace(/\u0000/g, "");
+    const entries = [];
+    const seenNames = new Set();
+
+    for (const rawLine of sanitizedText.split("\n")) {
+      const trimmedLine = String(rawLine || "").trim();
+      if (!trimmedLine || /^epics>/.test(trimmedLine)) {
+        continue;
+      }
+      const separatorIndex = trimmedLine.indexOf("=");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const variableName = trimmedLine.slice(0, separatorIndex).trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variableName) || seenNames.has(variableName)) {
+        continue;
+      }
+      seenNames.add(variableName);
+      entries.push({
+        variableName,
+        currentValue: trimmedLine.slice(separatorIndex + 1),
+      });
+    }
+
+    return entries;
+  }
+
+  async fetchIocRuntimeEnvironmentForTerminal(terminal) {
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      return [];
+    }
+
+    const cachedEntries = this.iocRuntimeEnvironmentByTerminal.get(terminal);
+    if (Array.isArray(cachedEntries) && cachedEntries.length) {
+      return cachedEntries;
+    }
+
+    const outputText = await this.captureIocShellCommandOutput("epicsEnvShow", terminal);
+    if (outputText === undefined) {
+      return [];
+    }
+    const parsedEntries = this.parseIocRuntimeEnvironmentOutput(outputText);
+    if (parsedEntries.length) {
+      this.iocRuntimeEnvironmentByTerminal.set(terminal, parsedEntries);
+    }
+    return parsedEntries;
+  }
+
+  disposeIocRuntimeVariablesReloadTimer() {
+    if (!this.iocRuntimeVariablesReloadTimer) {
+      return;
+    }
+    clearTimeout(this.iocRuntimeVariablesReloadTimer);
+    this.iocRuntimeVariablesReloadTimer = undefined;
+  }
+
+  scheduleIocRuntimeVariablesPanelReload(delayMs = 1500) {
+    this.disposeIocRuntimeVariablesReloadTimer();
+    this.iocRuntimeVariablesReloadTimer = setTimeout(() => {
+      this.iocRuntimeVariablesReloadTimer = undefined;
+      void this.reloadIocRuntimeVariablesPanel();
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  disposeIocRuntimeEnvironmentReloadTimer() {
+    if (!this.iocRuntimeEnvironmentReloadTimer) {
+      return;
+    }
+    clearTimeout(this.iocRuntimeEnvironmentReloadTimer);
+    this.iocRuntimeEnvironmentReloadTimer = undefined;
+  }
+
+  scheduleIocRuntimeEnvironmentPanelReload(delayMs = 1500) {
+    this.disposeIocRuntimeEnvironmentReloadTimer();
+    this.iocRuntimeEnvironmentReloadTimer = setTimeout(() => {
+      this.iocRuntimeEnvironmentReloadTimer = undefined;
+      void this.reloadIocRuntimeEnvironmentPanel();
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  formatIocShellQuotedString(value) {
+    return `"${String(value ?? "")
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\r/g, "\\r")
+      .replace(/\n/g, "\\n")}"`;
+  }
+
+  async captureIocShellCommandOutput(commandText, terminal) {
+    const trimmedCommand = String(commandText || "").trim();
+    if (!trimmedCommand) {
+      return undefined;
+    }
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      return undefined;
+    }
+
+    const outputFilePath = path.join(
+      os.tmpdir(),
+      `epics-workbench-ioc-output-${Date.now()}-${createNonce()}.txt`,
+    );
+    try {
+      await fs.promises.rm(outputFilePath, { force: true });
+    } catch (_error) {
+      // Ignore cleanup failures before capture.
+    }
+
+    const redirectedCommand = `${trimmedCommand} > ${outputFilePath}`;
+    const sent = await this.sendIocShellCommand(redirectedCommand, terminal);
+    if (!sent) {
+      return undefined;
+    }
+
+    const deadline = Date.now() + IOC_RUNTIME_COMMANDS_FETCH_TIMEOUT_MS;
+    let outputText = "";
+    while (Date.now() < deadline) {
+      try {
+        outputText = await fs.promises.readFile(outputFilePath, "utf8");
+        break;
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+
+    try {
+      await fs.promises.rm(outputFilePath, { force: true });
+    } catch (_error) {
+      // Ignore temp-file cleanup failures after capture.
+    }
+
+    if (outputText === undefined) {
+      return undefined;
+    }
+
+    return outputText;
+  }
+
+  async runIocShellCommandWithCapturedOutput(commandText, terminal) {
+    const trimmedCommand = String(commandText || "").trim();
+    const outputText = await this.captureIocShellCommandOutput(trimmedCommand, terminal);
+    if (outputText === undefined) {
+      return undefined;
+    }
+
+    const document = await vscode.workspace.openTextDocument({
+      language: "plaintext",
+      content: `# ${trimmedCommand}\n\n${outputText || ""}`,
+    });
+    await vscode.window.showTextDocument(document, vscode.ViewColumn.Active, false);
+    return outputText;
+  }
+
+  trackStartupIocTerminal(documentPath, terminal) {
+    const normalizedDocumentPath = normalizeFsPath(documentPath);
+    const existingTerminal = this.iocStartupTerminalByDocumentPath.get(normalizedDocumentPath);
+    if (existingTerminal && existingTerminal !== terminal) {
+      this.iocStartupDocumentPathByTerminal.delete(existingTerminal);
+    }
+
+    const previousDocumentPath = this.iocStartupDocumentPathByTerminal.get(terminal);
+    if (previousDocumentPath && previousDocumentPath !== normalizedDocumentPath) {
+      this.iocStartupTerminalByDocumentPath.delete(previousDocumentPath);
+    }
+
+    this.iocStartupTerminalByDocumentPath.set(normalizedDocumentPath, terminal);
+    this.iocStartupDocumentPathByTerminal.set(terminal, normalizedDocumentPath);
+    this.iocShellTerminal = terminal;
+    this.refresh(this.contextNode);
+    this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+  }
+
+  untrackStartupIocTerminal(terminal) {
+    if (!terminal) {
+      return;
+    }
+
+    const documentPath = this.iocStartupDocumentPathByTerminal.get(terminal);
+    if (documentPath) {
+      this.iocStartupDocumentPathByTerminal.delete(terminal);
+      const currentTerminal = this.iocStartupTerminalByDocumentPath.get(documentPath);
+      if (currentTerminal === terminal) {
+        this.iocStartupTerminalByDocumentPath.delete(documentPath);
+      }
+    }
+  }
+
+  getTerminalActiveExecutionCount(terminal) {
+    return Number(this.terminalActiveExecutionCount.get(terminal) || 0);
+  }
+
+  getTerminalCurrentDirectory(terminal) {
+    const shellIntegrationCwd = terminal?.shellIntegration?.cwd;
+    if (shellIntegrationCwd?.scheme === "file") {
+      return normalizeFsPath(shellIntegrationCwd.fsPath);
+    }
+
+    return this.terminalLastKnownCwd.get(terminal) || "";
+  }
+
+  findReusableStartupIocTerminal(workingDirectory, startupDocumentPath) {
+    const normalizedWorkingDirectory = normalizeFsPath(workingDirectory);
+    const normalizedStartupDocumentPath = normalizeFsPath(startupDocumentPath);
+    const trackedTerminal = this.iocStartupTerminalByDocumentPath.get(normalizedStartupDocumentPath);
+    const trackedTerminals = new Set(this.iocStartupDocumentPathByTerminal.keys());
+
+    for (const terminal of vscode.window.terminals || []) {
+      if (trackedTerminal && terminal === trackedTerminal) {
+        continue;
+      }
+      if (trackedTerminals.has(terminal)) {
+        continue;
+      }
+      if (this.getTerminalActiveExecutionCount(terminal) > 0) {
+        continue;
+      }
+      if (this.getTerminalCurrentDirectory(terminal) !== normalizedWorkingDirectory) {
+        continue;
+      }
+      return terminal;
+    }
+
+    return undefined;
+  }
+
+  async showStartupIocNotification(kind, startupDocumentPath, terminal) {
+    if (!startupDocumentPath || !terminal) {
+      return;
+    }
+
+    const startupFileName = path.basename(startupDocumentPath);
+    const terminalName = terminal.name || "Terminal";
+    const showTerminalAction = "Show Terminal";
+    const message =
+      kind === "started"
+        ? `Started ${startupFileName} in terminal "${terminalName}".`
+        : `Stopped ${startupFileName} in terminal "${terminalName}".`;
+    const selectedAction = await vscode.window.showInformationMessage(
+      message,
+      showTerminalAction,
+    );
+    if (selectedAction === showTerminalAction) {
+      this.iocShellTerminal = terminal;
+      terminal.show(true);
+      this.refresh(this.contextNode);
+    }
+  }
+
+  async resolveIocShellTerminal(promptIfNeeded = true) {
+    if (
+      this.iocShellTerminal &&
+      vscode.window.terminals.includes(this.iocShellTerminal)
+    ) {
+      return this.iocShellTerminal;
+    }
+
+    if (vscode.window.activeTerminal) {
+      this.iocShellTerminal = vscode.window.activeTerminal;
+      this.refresh(this.contextNode);
+      return this.iocShellTerminal;
+    }
+
+    if (vscode.window.terminals.length === 1) {
+      this.iocShellTerminal = vscode.window.terminals[0];
+      this.refresh(this.contextNode);
+      return this.iocShellTerminal;
+    }
+
+    if (!promptIfNeeded) {
+      return undefined;
+    }
+
+    const pickedTerminal = await this.pickIocShellTerminal();
+    if (pickedTerminal) {
+      this.iocShellTerminal = pickedTerminal;
+      this.refresh(this.contextNode);
+    }
+    return pickedTerminal;
+  }
+
+  async pickIocShellTerminal() {
+    const terminals = vscode.window.terminals || [];
+    if (terminals.length === 0) {
+      vscode.window.showWarningMessage(
+        "No VS Code terminal is available. Start the IOC in an integrated terminal first.",
+      );
+      return undefined;
+    }
+
+    if (terminals.length === 1) {
+      return terminals[0];
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      terminals.map((terminal) => ({
+        label: terminal.name,
+        terminal,
+      })),
+      {
+        placeHolder: "Select the IOC shell terminal",
+        ignoreFocusOut: true,
+      },
+    );
+    return selected?.terminal;
+  }
+
+  resolveActiveStartupIocDocument(editor = vscode.window.activeTextEditor) {
+    const document = editor?.document;
+    const documentPath = getIocBootStartupDocumentPath(document);
+    if (!document || !documentPath) {
+      return undefined;
+    }
+    return {
+      document,
+      documentPath,
+    };
+  }
+
+  async startStartupIocForDocumentPath(
+    startupDocumentPath,
+    { showTerminal = true, notify = true } = {},
+  ) {
+    const normalizedStartupDocumentPath = normalizeFsPath(startupDocumentPath);
+    if (!normalizedStartupDocumentPath) {
+      return undefined;
+    }
+
+    const existingTerminal = this.iocStartupTerminalByDocumentPath.get(normalizedStartupDocumentPath);
+    if (existingTerminal && vscode.window.terminals.includes(existingTerminal)) {
+      this.iocShellTerminal = existingTerminal;
+      if (showTerminal) {
+        existingTerminal.show(true);
+      }
+      this.refresh(this.contextNode);
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      if (notify) {
+        vscode.window.showInformationMessage(
+          `IOC is already running for ${path.basename(normalizedStartupDocumentPath)} in terminal "${existingTerminal.name}".`,
+        );
+      }
+      return existingTerminal;
+    }
+
+    const openDocument = vscode.workspace.textDocuments.find(
+      (candidate) =>
+        candidate.uri?.scheme === "file" &&
+        normalizeFsPath(candidate.uri.fsPath) === normalizedStartupDocumentPath,
+    );
+    const startupDocument =
+      openDocument || (await vscode.workspace.openTextDocument(normalizedStartupDocumentPath));
+    if (startupDocument.isDirty) {
+      const saved = await startupDocument.save();
+      if (!saved) {
+        if (notify) {
+          vscode.window.showWarningMessage(
+            "Save the startup file before starting the IOC.",
+          );
+        }
+        return undefined;
+      }
+    }
+
+    const workingDirectory = path.dirname(normalizedStartupDocumentPath);
+    const commandText = `./${path.basename(normalizedStartupDocumentPath)}`;
+    const terminal =
+      this.findReusableStartupIocTerminal(
+        workingDirectory,
+        normalizedStartupDocumentPath,
+      ) ||
+      vscode.window.createTerminal({
+        name: `IOC: ${path.basename(workingDirectory)}`,
+        cwd: workingDirectory,
+      });
+    this.iocRuntimeCommandsByTerminal.delete(terminal);
+    this.iocRuntimeCommandHelpByTerminal.delete(terminal);
+    this.iocRuntimeVariablesByTerminal.delete(terminal);
+    this.iocRuntimeEnvironmentByTerminal.delete(terminal);
+    this.trackStartupIocTerminal(normalizedStartupDocumentPath, terminal);
+    if (showTerminal) {
+      terminal.show(true);
+    }
+    if (terminal.shellIntegration) {
+      try {
+        terminal.shellIntegration.executeCommand(commandText);
+      } catch (error) {
+        terminal.sendText(commandText, true);
+      }
+    } else {
+      terminal.sendText(commandText, true);
+    }
+    vscode.window.setStatusBarMessage(
+      `Starting IOC: ${commandText}`,
+      3000,
+    );
+    if (notify) {
+      void this.showStartupIocNotification(
+        "started",
+        normalizedStartupDocumentPath,
+        terminal,
+      );
+    }
+    return terminal;
+  }
+
+  async startActiveStartupIoc() {
+    const startupTarget = this.resolveActiveStartupIocDocument();
+    if (!startupTarget) {
+      vscode.window.showWarningMessage(
+        "Open an IOC startup file under iocBoot to start the IOC.",
+      );
+      return;
+    }
+
+    await this.startStartupIocForDocumentPath(startupTarget.documentPath);
+  }
+
+  async stopActiveStartupIoc() {
+    const startupTarget = this.resolveActiveStartupIocDocument();
+    if (!startupTarget) {
+      vscode.window.showWarningMessage(
+        "Open an IOC startup file under iocBoot to stop the IOC.",
+      );
+      return;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      vscode.window.showWarningMessage(
+        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+      );
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return;
+    }
+
+    this.iocShellTerminal = terminal;
+    terminal.show(true);
+    terminal.sendText("\u0003", false);
+    this.refresh(this.contextNode);
+    vscode.window.setStatusBarMessage(
+      `Sent interrupt to IOC for ${path.basename(startupTarget.documentPath)}`,
+      3000,
+    );
+    void this.showStartupIocNotification(
+      "stopped",
+      startupTarget.documentPath,
+      terminal,
+    );
+  }
+
+  async showActiveStartupIocTerminal() {
+    const startupTarget = this.resolveActiveStartupIocDocument();
+    if (!startupTarget) {
+      vscode.window.showWarningMessage(
+        "Open an IOC startup file under iocBoot to show its running terminal.",
+      );
+      return;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      vscode.window.showWarningMessage(
+        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+      );
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return;
+    }
+
+    this.iocShellTerminal = terminal;
+    terminal.show(true);
+    this.refresh(this.contextNode);
+    vscode.window.setStatusBarMessage(
+      `Showing IOC terminal "${terminal.name}"`,
+      2500,
+    );
+  }
+
+  resolveActiveIocShellRecordName() {
+    const editor = vscode.window.activeTextEditor;
+    const document = editor?.document;
+    const position = editor?.selection?.active;
+    if (!document || !position) {
+      return undefined;
+    }
+
+    if (isDatabaseRuntimeDocument(document)) {
+      return this.resolveDatabaseIocShellRecordName(document, position);
+    }
+
+    if (isStrictMonitorDocument(document)) {
+      return analyzeStrictMonitorText(document.getText(), this.getDefaultProtocol())
+        .lineReferences[position.line]
+        ?.pvName;
+    }
+
+    if (isProbeDocument(document)) {
+      const lineText = String(document.lineAt(position.line).text || "").trim();
+      if (lineText && !lineText.startsWith("#") && !/\s/.test(lineText)) {
+        return lineText;
+      }
+    }
+
+    if (document.languageId === "startup") {
+      const lineText = String(document.lineAt(position.line).text || "");
+      const match = lineText.match(/dbpf\(\s*"([^"\n]+)"/);
+      if (match?.[1]) {
+        return match[1];
+      }
+    }
+
+    return undefined;
+  }
+
+  resolveDatabaseIocShellRecordName(document, position) {
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+    const macroDefinitions = createDatabaseMonitorMacroDefinitions(
+      this.extractDatabaseTocMacroAssignments?.(text) || new Map(),
+    );
+    const macroExpansionCache = new Map();
+    const expandRecordName = (recordName) =>
+      normalizeDatabaseMonitorPvName(
+        expandDatabaseMonitorValue(
+          recordName,
+          macroDefinitions,
+          macroExpansionCache,
+          [],
+        ),
+        recordName,
+      );
+
+    for (const tocEntry of this.extractDatabaseTocEntries?.(text) || []) {
+      if (offset < tocEntry.nameStart || offset > tocEntry.nameEnd) {
+        continue;
+      }
+      return expandRecordName(tocEntry.recordName);
+    }
+
+    for (const declaration of this.extractRecordDeclarations?.(text) || []) {
+      if (offset < declaration.recordStart || offset > declaration.recordEnd) {
+        continue;
+      }
+      return expandRecordName(declaration.name);
+    }
+
+    return undefined;
+  }
+
+  async openRuntimeWidget() {
+    if (this.runtimeWidgetPanel) {
+      this.runtimeWidgetPanel.reveal(vscode.ViewColumn.Active, false);
+      await this.postRuntimeWidgetState();
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      RUNTIME_WIDGET_VIEW_TYPE,
+      "EPICS Runtime",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      },
+    );
+    this.runtimeWidgetPanel = panel;
+
+    panel.webview.html = buildRuntimeWidgetHtml(
+      panel.webview,
+      this.buildRuntimeWidgetWebviewState(),
+    );
+
+    panel.onDidDispose(() => {
+      if (this.runtimeWidgetPanel === panel) {
+        this.runtimeWidgetPanel = undefined;
+      }
+    });
+
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (!message?.type) {
+        return;
+      }
+
+      if (message.type === "openProjectRuntimeConfiguration") {
+        await this.openProjectRuntimeConfiguration();
+        return;
+      }
+
+      if (message.type === "addRuntimeMonitor") {
+        await this.addMonitorInteractive();
+        return;
+      }
+
+      if (message.type === "restartRuntimeContext") {
+        await this.restartContext();
+        return;
+      }
+
+      if (message.type === "stopRuntimeContext") {
+        await this.stopContext();
+        return;
+      }
+
+      if (message.type === "clearRuntimeMonitors") {
+        await this.clearMonitors();
+        return;
+      }
+
+      if (message.type === "setIocShellTerminal") {
+        await this.setIocShellTerminalInteractive();
+        return;
+      }
+
+      if (message.type === "runIocShellCommand") {
+        await this.runIocShellCommandInteractive();
+        return;
+      }
+
+      if (message.type === "runIocShellDbl") {
+        await this.sendNamedIocShellCommand("dbl");
+        return;
+      }
+
+      if (message.type === "runIocShellDbprCurrentRecord") {
+        await this.runDbprForActiveRecord();
+        return;
+      }
+
+      if (message.type === "removeRuntimeMonitor" && message.key) {
+        const entry = this.monitorEntries.find((candidate) => candidate.key === message.key);
+        if (entry) {
+          await this.removeMonitor(entry);
+        }
+      }
+    });
+
+    await this.postRuntimeWidgetState();
+  }
+
+  buildIocRuntimeCommandsState(panelState = this.iocRuntimeCommandsPanelState) {
+    if (!panelState) {
+      return {
+        startupFileName: "",
+        startupDocumentPath: "",
+        terminalName: "",
+        commands: [],
+        message: "No running IOC startup file is selected.",
+        isLoading: false,
+        isRunning: false,
+      };
+    }
+
+    const trackedTerminal = panelState.startupDocumentPath
+      ? this.iocStartupTerminalByDocumentPath.get(panelState.startupDocumentPath)
+      : undefined;
+    const isRunning =
+      Boolean(panelState.terminal) &&
+      vscode.window.terminals.includes(panelState.terminal) &&
+      trackedTerminal === panelState.terminal;
+
+    return {
+      startupFileName: path.basename(panelState.startupDocumentPath || ""),
+      startupDocumentPath: panelState.startupDocumentPath || "",
+      terminalName: panelState.terminal?.name || "",
+      commands: Array.isArray(panelState.commands) ? panelState.commands : [],
+      message: panelState.message || "",
+      isLoading: Boolean(panelState.isLoading),
+      isRunning,
+    };
+  }
+
+  async postIocRuntimeCommandsState(state = this.buildIocRuntimeCommandsState()) {
+    if (!this.iocRuntimeCommandsPanel?.webview) {
+      return;
+    }
+
+    await this.iocRuntimeCommandsPanel.webview.postMessage({
+      type: "iocRuntimeCommandsState",
+      state,
+    });
+  }
+
+  buildIocRuntimeVariablesState(panelState = this.iocRuntimeVariablesPanelState) {
+    if (!panelState) {
+      return {
+        startupFileName: "",
+        startupDocumentPath: "",
+        terminalName: "",
+        variables: [],
+        message: "No running IOC startup file is selected.",
+        isLoading: false,
+        isRunning: false,
+      };
+    }
+
+    const trackedTerminal = panelState.startupDocumentPath
+      ? this.iocStartupTerminalByDocumentPath.get(panelState.startupDocumentPath)
+      : undefined;
+    const isRunning =
+      Boolean(panelState.terminal) &&
+      vscode.window.terminals.includes(panelState.terminal) &&
+      trackedTerminal === panelState.terminal;
+
+    return {
+      startupFileName: path.basename(panelState.startupDocumentPath || ""),
+      startupDocumentPath: panelState.startupDocumentPath || "",
+      terminalName: panelState.terminal?.name || "",
+      variables: Array.isArray(panelState.variables) ? panelState.variables : [],
+      message: panelState.message || "",
+      isLoading: Boolean(panelState.isLoading),
+      isRunning,
+    };
+  }
+
+  async postIocRuntimeVariablesState(state = this.buildIocRuntimeVariablesState()) {
+    if (!this.iocRuntimeVariablesPanel?.webview) {
+      return;
+    }
+
+    await this.iocRuntimeVariablesPanel.webview.postMessage({
+      type: "iocRuntimeVariablesState",
+      state,
+    });
+  }
+
+  buildIocRuntimeEnvironmentState(panelState = this.iocRuntimeEnvironmentPanelState) {
+    if (!panelState) {
+      return {
+        startupFileName: "",
+        startupDocumentPath: "",
+        terminalName: "",
+        entries: [],
+        message: "No running IOC startup file is selected.",
+        isLoading: false,
+        isRunning: false,
+      };
+    }
+
+    const trackedTerminal = panelState.startupDocumentPath
+      ? this.iocStartupTerminalByDocumentPath.get(panelState.startupDocumentPath)
+      : undefined;
+    const isRunning =
+      Boolean(panelState.terminal) &&
+      vscode.window.terminals.includes(panelState.terminal) &&
+      trackedTerminal === panelState.terminal;
+
+    return {
+      startupFileName: path.basename(panelState.startupDocumentPath || ""),
+      startupDocumentPath: panelState.startupDocumentPath || "",
+      terminalName: panelState.terminal?.name || "",
+      entries: Array.isArray(panelState.entries) ? panelState.entries : [],
+      message: panelState.message || "",
+      isLoading: Boolean(panelState.isLoading),
+      isRunning,
+    };
+  }
+
+  async postIocRuntimeEnvironmentState(state = this.buildIocRuntimeEnvironmentState()) {
+    if (!this.iocRuntimeEnvironmentPanel?.webview) {
+      return;
+    }
+
+    await this.iocRuntimeEnvironmentPanel.webview.postMessage({
+      type: "iocRuntimeEnvironmentState",
+      state,
+    });
+  }
+
+  async reloadIocRuntimeVariablesPanel(panelState = this.iocRuntimeVariablesPanelState) {
+    if (!panelState) {
+      return;
+    }
+
+    const terminal = panelState.terminal;
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      this.iocRuntimeVariablesPanelState = {
+        ...panelState,
+        variables: [],
+        message: "The tracked IOC terminal is no longer running.",
+        isLoading: false,
+      };
+      await this.postIocRuntimeVariablesState();
+      return;
+    }
+
+    this.iocRuntimeVariablesPanelState = {
+      ...panelState,
+      message: "Loading IOC runtime variables...",
+      isLoading: true,
+    };
+    await this.postIocRuntimeVariablesState();
+
+    const variables = await this.fetchIocRuntimeVariablesForTerminal(terminal);
+    const activeState = this.iocRuntimeVariablesPanelState;
+    if (
+      !activeState ||
+      activeState.terminal !== terminal ||
+      activeState.startupDocumentPath !== panelState.startupDocumentPath
+    ) {
+      return;
+    }
+
+    this.iocRuntimeVariablesPanelState = {
+      ...activeState,
+      variables,
+      message: variables.length
+        ? `Loaded ${variables.length} IOC runtime variables from var output.`
+        : "Could not read IOC runtime variables from the running terminal.",
+      isLoading: false,
+    };
+    if (this.iocRuntimeVariablesPanel) {
+      this.iocRuntimeVariablesPanel.title = `IOC Runtime Variables: ${path.basename(activeState.startupDocumentPath || "")}`;
+    }
+    await this.postIocRuntimeVariablesState();
+  }
+
+  async reloadIocRuntimeEnvironmentPanel(panelState = this.iocRuntimeEnvironmentPanelState) {
+    if (!panelState) {
+      return;
+    }
+
+    const terminal = panelState.terminal;
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      this.iocRuntimeEnvironmentPanelState = {
+        ...panelState,
+        entries: [],
+        message: "The tracked IOC terminal is no longer running.",
+        isLoading: false,
+      };
+      await this.postIocRuntimeEnvironmentState();
+      return;
+    }
+
+    this.iocRuntimeEnvironmentPanelState = {
+      ...panelState,
+      message: "Loading IOC runtime environment...",
+      isLoading: true,
+    };
+    await this.postIocRuntimeEnvironmentState();
+
+    const entries = await this.fetchIocRuntimeEnvironmentForTerminal(terminal);
+    const activeState = this.iocRuntimeEnvironmentPanelState;
+    if (
+      !activeState ||
+      activeState.terminal !== terminal ||
+      activeState.startupDocumentPath !== panelState.startupDocumentPath
+    ) {
+      return;
+    }
+
+    this.iocRuntimeEnvironmentPanelState = {
+      ...activeState,
+      entries,
+      message: entries.length
+        ? `Loaded ${entries.length} IOC runtime environment values from epicsEnvShow output.`
+        : "Could not read IOC runtime environment values from the running terminal.",
+      isLoading: false,
+    };
+    if (this.iocRuntimeEnvironmentPanel) {
+      this.iocRuntimeEnvironmentPanel.title = `IOC Runtime Environment: ${path.basename(activeState.startupDocumentPath || "")}`;
+    }
+    await this.postIocRuntimeEnvironmentState();
+  }
+
+  async openActiveStartupIocCommands() {
+    const startupTarget = this.resolveActiveStartupIocDocument();
+    if (!startupTarget) {
+      vscode.window.showWarningMessage(
+        "Open a running IOC startup file under iocBoot to view IOC runtime commands.",
+      );
+      return;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      vscode.window.showWarningMessage(
+        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+      );
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return;
+    }
+
+    if (!this.iocRuntimeCommandsPanel) {
+      const panel = vscode.window.createWebviewPanel(
+        IOC_RUNTIME_COMMANDS_VIEW_TYPE,
+        `IOC Runtime Commands: ${path.basename(startupTarget.documentPath)}`,
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+        },
+      );
+      this.iocRuntimeCommandsPanel = panel;
+      panel.webview.html = buildIocRuntimeCommandsHtml(
+        panel.webview,
+        this.buildIocRuntimeCommandsState({
+          startupDocumentPath: startupTarget.documentPath,
+          terminal,
+          commands: [],
+          message: "Loading IOC runtime commands...",
+          isLoading: true,
+        }),
+      );
+      panel.onDidDispose(() => {
+        if (this.iocRuntimeCommandsPanel === panel) {
+          this.iocRuntimeCommandsPanel = undefined;
+          this.iocRuntimeCommandsPanelState = undefined;
+        }
+      });
+      panel.webview.onDidReceiveMessage(async (message) => {
+        if (!message?.type) {
+          return;
+        }
+
+        if (message.type === "showIocRuntimeCommandsTerminal") {
+          const panelState = this.iocRuntimeCommandsPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeCommandsState({
+              ...this.buildIocRuntimeCommandsState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          this.iocShellTerminal = targetTerminal;
+          targetTerminal.show(true);
+          this.refresh(this.contextNode);
+          return;
+        }
+
+        if (message.type === "stopIocRuntimeCommandsStartup") {
+          const panelState = this.iocRuntimeCommandsPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeCommandsState({
+              ...this.buildIocRuntimeCommandsState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          this.iocShellTerminal = targetTerminal;
+          targetTerminal.sendText("\u0003", false);
+          this.iocRuntimeCommandsPanelState = {
+            ...panelState,
+            message: "Stopping IOC...",
+            isLoading: false,
+          };
+          await this.postIocRuntimeCommandsState();
+          this.refresh(this.contextNode);
+          return;
+        }
+
+        if (message.type === "startIocRuntimeCommandsStartup") {
+          const panelState = this.iocRuntimeCommandsPanelState;
+          const startupDocumentPath = panelState?.startupDocumentPath;
+          if (!startupDocumentPath) {
+            vscode.window.showWarningMessage(
+              "No startup file is associated with this IOC commands page.",
+            );
+            return;
+          }
+
+          this.iocRuntimeCommandsPanelState = {
+            ...panelState,
+            message: "Starting IOC...",
+            isLoading: false,
+          };
+          await this.postIocRuntimeCommandsState();
+          await this.startStartupIocForDocumentPath(startupDocumentPath, {
+            showTerminal: false,
+            notify: true,
+          });
+          return;
+        }
+
+        if (message.type === "requestIocRuntimeCommandHelp" && message.commandName) {
+          const panelState = this.iocRuntimeCommandsPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            return;
+          }
+
+          const commandList = Array.isArray(panelState?.commands) ? panelState.commands : [];
+          const hoveredCommandIndex = commandList.indexOf(message.commandName);
+          const requestedCommandNames =
+            hoveredCommandIndex >= 0
+              ? commandList.slice(
+                  hoveredCommandIndex,
+                  Math.min(hoveredCommandIndex + 8, commandList.length),
+                )
+              : [message.commandName];
+          const helpMap = await this.fetchIocRuntimeCommandHelpBatch(
+            requestedCommandNames,
+            targetTerminal,
+          );
+          const helpText = helpMap.get(message.commandName);
+          if (!this.iocRuntimeCommandsPanel?.webview) {
+            return;
+          }
+          for (const [commandName, commandHelpText] of helpMap.entries()) {
+            await this.iocRuntimeCommandsPanel.webview.postMessage({
+              type: "iocRuntimeCommandHelp",
+              commandName,
+              helpText:
+                commandHelpText ||
+                `No detailed help is available for ${commandName}.`,
+            });
+          }
+          return;
+        }
+
+        if (message.type === "sendIocRuntimeCommand" && message.commandName) {
+          const panelState = this.iocRuntimeCommandsPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeCommandsState({
+              ...this.buildIocRuntimeCommandsState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          const argumentText = String(message.argumentsText || "").trim();
+          const fullCommand = `${message.commandName}(${argumentText})`;
+          if (message.captureOutput) {
+            const outputText = await this.runIocShellCommandWithCapturedOutput(
+              fullCommand,
+              targetTerminal,
+            );
+            if (outputText === undefined) {
+              vscode.window.showWarningMessage(
+                `Could not capture IOC output for ${fullCommand}.`,
+              );
+            }
+            return;
+          }
+
+          await this.sendIocShellCommand(fullCommand, targetTerminal);
+          return;
+        }
+
+        if (message.type === "sendCustomIocRuntimeCommand") {
+          const panelState = this.iocRuntimeCommandsPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeCommandsState({
+              ...this.buildIocRuntimeCommandsState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          const commandText = String(message.commandText || "").trim();
+          if (!commandText) {
+            return;
+          }
+          if (message.captureOutput) {
+            const outputText = await this.runIocShellCommandWithCapturedOutput(
+              commandText,
+              targetTerminal,
+            );
+            if (outputText === undefined) {
+              vscode.window.showWarningMessage(
+                `Could not capture IOC output for ${commandText}.`,
+              );
+            }
+            return;
+          }
+          await this.sendIocShellCommand(commandText, targetTerminal);
+        }
+      });
+    } else {
+      this.iocRuntimeCommandsPanel.reveal(vscode.ViewColumn.Active, false);
+      this.iocRuntimeCommandsPanel.title = `IOC Runtime Commands: ${path.basename(startupTarget.documentPath)}`;
+    }
+
+    this.iocRuntimeCommandsPanelState = {
+      startupDocumentPath: startupTarget.documentPath,
+      terminal,
+      commands: [],
+      message: "Loading IOC runtime commands...",
+      isLoading: true,
+    };
+    await this.postIocRuntimeCommandsState();
+
+    const commands = await this.fetchIocRuntimeCommandsForTerminal(terminal);
+    this.iocRuntimeCommandsPanelState = {
+      startupDocumentPath: startupTarget.documentPath,
+      terminal,
+      commands,
+      message: commands.length
+        ? `Loaded ${commands.length} IOC runtime commands from help output.`
+        : "Could not read IOC command names from the running terminal.",
+      isLoading: false,
+    };
+    this.iocRuntimeCommandsPanel.title = `IOC Runtime Commands: ${path.basename(startupTarget.documentPath)}`;
+    await this.postIocRuntimeCommandsState();
+    void this.prefetchIocRuntimeCommandHelpForPanel(
+      commands,
+      terminal,
+      startupTarget.documentPath,
+    );
+  }
+
+  async openActiveStartupIocVariables() {
+    const startupTarget = this.resolveActiveStartupIocDocument();
+    if (!startupTarget) {
+      vscode.window.showWarningMessage(
+        "Open a running IOC startup file under iocBoot to view IOC runtime variables.",
+      );
+      return;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      vscode.window.showWarningMessage(
+        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+      );
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return;
+    }
+
+    if (!this.iocRuntimeVariablesPanel) {
+      const panel = vscode.window.createWebviewPanel(
+        IOC_RUNTIME_VARIABLES_VIEW_TYPE,
+        `IOC Runtime Variables: ${path.basename(startupTarget.documentPath)}`,
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+        },
+      );
+      this.iocRuntimeVariablesPanel = panel;
+      panel.webview.html = buildIocRuntimeVariablesHtml(
+        panel.webview,
+        this.buildIocRuntimeVariablesState({
+          startupDocumentPath: startupTarget.documentPath,
+          terminal,
+          variables: [],
+          message: "Loading IOC runtime variables...",
+          isLoading: true,
+        }),
+      );
+      panel.onDidDispose(() => {
+        if (this.iocRuntimeVariablesPanel === panel) {
+          this.iocRuntimeVariablesPanel = undefined;
+          this.iocRuntimeVariablesPanelState = undefined;
+        }
+      });
+      panel.webview.onDidReceiveMessage(async (message) => {
+        if (!message?.type) {
+          return;
+        }
+
+        if (message.type === "showIocRuntimeVariablesTerminal") {
+          const panelState = this.iocRuntimeVariablesPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeVariablesState({
+              ...this.buildIocRuntimeVariablesState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          this.iocShellTerminal = targetTerminal;
+          targetTerminal.show(true);
+          this.refresh(this.contextNode);
+          return;
+        }
+
+        if (message.type === "stopIocRuntimeVariablesStartup") {
+          const panelState = this.iocRuntimeVariablesPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeVariablesState({
+              ...this.buildIocRuntimeVariablesState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          this.iocShellTerminal = targetTerminal;
+          targetTerminal.sendText("\u0003", false);
+          this.iocRuntimeVariablesPanelState = {
+            ...panelState,
+            message: "Stopping IOC...",
+            isLoading: false,
+          };
+          await this.postIocRuntimeVariablesState();
+          this.refresh(this.contextNode);
+          return;
+        }
+
+        if (message.type === "startIocRuntimeVariablesStartup") {
+          const panelState = this.iocRuntimeVariablesPanelState;
+          const startupDocumentPath = panelState?.startupDocumentPath;
+          if (!startupDocumentPath) {
+            vscode.window.showWarningMessage(
+              "No startup file is associated with this IOC variables page.",
+            );
+            return;
+          }
+
+          this.iocRuntimeVariablesPanelState = {
+            ...panelState,
+            message: "Starting IOC...",
+            isLoading: false,
+          };
+          await this.postIocRuntimeVariablesState();
+          const startedTerminal = await this.startStartupIocForDocumentPath(
+            startupDocumentPath,
+            {
+              showTerminal: false,
+              notify: true,
+            },
+          );
+          if (startedTerminal) {
+            this.scheduleIocRuntimeVariablesPanelReload(1500);
+          }
+          return;
+        }
+
+        if (message.type === "setIocRuntimeVariable" && message.variableName) {
+          const panelState = this.iocRuntimeVariablesPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeVariablesState({
+              ...this.buildIocRuntimeVariablesState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          const variableName = String(message.variableName || "").trim();
+          const valueText = String(message.valueText || "").trim();
+          if (!variableName || !valueText) {
+            vscode.window.showWarningMessage(
+              `Enter a value before setting ${variableName || "the IOC variable"}.`,
+            );
+            return;
+          }
+
+          await this.sendIocShellCommand(`var ${variableName} ${valueText}`, targetTerminal);
+          const cachedVariables = this.iocRuntimeVariablesByTerminal.get(targetTerminal);
+          if (Array.isArray(cachedVariables)) {
+            this.iocRuntimeVariablesByTerminal.set(
+              targetTerminal,
+              cachedVariables.map((entry) =>
+                entry.variableName === variableName
+                  ? { ...entry, currentValue: valueText }
+                  : entry,
+              ),
+            );
+          }
+          if (panelState && Array.isArray(panelState.variables)) {
+            this.iocRuntimeVariablesPanelState = {
+              ...panelState,
+              variables: panelState.variables.map((entry) =>
+                entry.variableName === variableName
+                  ? { ...entry, currentValue: valueText }
+                  : entry,
+              ),
+              message: `Sent var ${variableName} ${valueText}`,
+              isLoading: false,
+            };
+            await this.postIocRuntimeVariablesState();
+          }
+        }
+      });
+    } else {
+      this.iocRuntimeVariablesPanel.reveal(vscode.ViewColumn.Active, false);
+      this.iocRuntimeVariablesPanel.title = `IOC Runtime Variables: ${path.basename(startupTarget.documentPath)}`;
+    }
+
+    this.iocRuntimeVariablesPanelState = {
+      startupDocumentPath: startupTarget.documentPath,
+      terminal,
+      variables: [],
+      message: "Loading IOC runtime variables...",
+      isLoading: true,
+    };
+    await this.postIocRuntimeVariablesState();
+    await this.reloadIocRuntimeVariablesPanel();
+  }
+
+  async openActiveStartupIocEnvironment() {
+    const startupTarget = this.resolveActiveStartupIocDocument();
+    if (!startupTarget) {
+      vscode.window.showWarningMessage(
+        "Open a running IOC startup file under iocBoot to view IOC runtime environment values.",
+      );
+      return;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      vscode.window.showWarningMessage(
+        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+      );
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return;
+    }
+
+    if (!this.iocRuntimeEnvironmentPanel) {
+      const panel = vscode.window.createWebviewPanel(
+        IOC_RUNTIME_ENVIRONMENT_VIEW_TYPE,
+        `IOC Runtime Environment: ${path.basename(startupTarget.documentPath)}`,
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+        },
+      );
+      this.iocRuntimeEnvironmentPanel = panel;
+      panel.webview.html = buildIocRuntimeEnvironmentHtml(
+        panel.webview,
+        this.buildIocRuntimeEnvironmentState({
+          startupDocumentPath: startupTarget.documentPath,
+          terminal,
+          entries: [],
+          message: "Loading IOC runtime environment...",
+          isLoading: true,
+        }),
+      );
+      panel.onDidDispose(() => {
+        if (this.iocRuntimeEnvironmentPanel === panel) {
+          this.iocRuntimeEnvironmentPanel = undefined;
+          this.iocRuntimeEnvironmentPanelState = undefined;
+        }
+      });
+      panel.webview.onDidReceiveMessage(async (message) => {
+        if (!message?.type) {
+          return;
+        }
+
+        if (message.type === "showIocRuntimeEnvironmentTerminal") {
+          const panelState = this.iocRuntimeEnvironmentPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeEnvironmentState({
+              ...this.buildIocRuntimeEnvironmentState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          this.iocShellTerminal = targetTerminal;
+          targetTerminal.show(true);
+          this.refresh(this.contextNode);
+          return;
+        }
+
+        if (message.type === "stopIocRuntimeEnvironmentStartup") {
+          const panelState = this.iocRuntimeEnvironmentPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeEnvironmentState({
+              ...this.buildIocRuntimeEnvironmentState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          this.iocShellTerminal = targetTerminal;
+          targetTerminal.sendText("\u0003", false);
+          this.iocRuntimeEnvironmentPanelState = {
+            ...panelState,
+            message: "Stopping IOC...",
+            isLoading: false,
+          };
+          await this.postIocRuntimeEnvironmentState();
+          this.refresh(this.contextNode);
+          return;
+        }
+
+        if (message.type === "startIocRuntimeEnvironmentStartup") {
+          const panelState = this.iocRuntimeEnvironmentPanelState;
+          const startupDocumentPath = panelState?.startupDocumentPath;
+          if (!startupDocumentPath) {
+            vscode.window.showWarningMessage(
+              "No startup file is associated with this IOC runtime environment page.",
+            );
+            return;
+          }
+
+          this.iocRuntimeEnvironmentPanelState = {
+            ...panelState,
+            message: "Starting IOC...",
+            isLoading: false,
+          };
+          await this.postIocRuntimeEnvironmentState();
+          const startedTerminal = await this.startStartupIocForDocumentPath(
+            startupDocumentPath,
+            {
+              showTerminal: false,
+              notify: true,
+            },
+          );
+          if (startedTerminal) {
+            this.scheduleIocRuntimeEnvironmentPanelReload(1500);
+          }
+          return;
+        }
+
+        if (message.type === "setIocRuntimeEnvironmentValue" && message.variableName) {
+          const panelState = this.iocRuntimeEnvironmentPanelState;
+          const targetTerminal = panelState?.terminal;
+          if (!targetTerminal || !vscode.window.terminals.includes(targetTerminal)) {
+            vscode.window.showWarningMessage(
+              "The tracked IOC terminal is no longer running.",
+            );
+            await this.postIocRuntimeEnvironmentState({
+              ...this.buildIocRuntimeEnvironmentState(panelState),
+              message: "The tracked IOC terminal is no longer running.",
+            });
+            return;
+          }
+
+          const variableName = String(message.variableName || "").trim();
+          const valueText = String(message.valueText || "");
+          if (!variableName) {
+            return;
+          }
+
+          await this.sendIocShellCommand(
+            `epicsEnvSet ${variableName} ${this.formatIocShellQuotedString(valueText)}`,
+            targetTerminal,
+          );
+          const cachedEntries = this.iocRuntimeEnvironmentByTerminal.get(targetTerminal);
+          if (Array.isArray(cachedEntries)) {
+            this.iocRuntimeEnvironmentByTerminal.set(
+              targetTerminal,
+              cachedEntries.map((entry) =>
+                entry.variableName === variableName
+                  ? { ...entry, currentValue: valueText }
+                  : entry,
+              ),
+            );
+          }
+          if (panelState && Array.isArray(panelState.entries)) {
+            this.iocRuntimeEnvironmentPanelState = {
+              ...panelState,
+              entries: panelState.entries.map((entry) =>
+                entry.variableName === variableName
+                  ? { ...entry, currentValue: valueText }
+                  : entry,
+              ),
+              message: `Sent epicsEnvSet ${variableName} ${this.formatIocShellQuotedString(valueText)}`,
+              isLoading: false,
+            };
+            await this.postIocRuntimeEnvironmentState();
+          }
+        }
+      });
+    } else {
+      this.iocRuntimeEnvironmentPanel.reveal(vscode.ViewColumn.Active, false);
+      this.iocRuntimeEnvironmentPanel.title = `IOC Runtime Environment: ${path.basename(startupTarget.documentPath)}`;
+    }
+
+    this.iocRuntimeEnvironmentPanelState = {
+      startupDocumentPath: startupTarget.documentPath,
+      terminal,
+      entries: [],
+      message: "Loading IOC runtime environment...",
+      isLoading: true,
+    };
+    await this.postIocRuntimeEnvironmentState();
+    await this.reloadIocRuntimeEnvironmentPanel();
   }
 
   attachStatusBar(statusBarItem) {
@@ -377,6 +2583,10 @@ class EpicsRuntimeMonitorController {
 
   attachDatabaseTocValueDecorationType(decorationType) {
     this.databaseTocValueDecorationType = decorationType;
+  }
+
+  attachStartupRunningDecorationType(decorationType) {
+    this.startupRunningDecorationType = decorationType;
   }
 
   attachProbeDecorationTypes(decorationTypes) {
@@ -1221,11 +3431,13 @@ class EpicsRuntimeMonitorController {
   handleActiveEditorChange(editor) {
     if (!this.statusBarItem) {
       this.updateDatabaseEditorContextKeys(editor);
+      this.updateStartupEditorContextKeys(editor);
       return;
     }
 
     const document = editor?.document;
     this.updateDatabaseEditorContextKeys(editor);
+    this.updateStartupEditorContextKeys(editor);
     if (!isRuntimeDocument(document)) {
       this.statusBarItem.hide();
       return;
@@ -1277,6 +3489,7 @@ class EpicsRuntimeMonitorController {
     if (
       !this.hoverDecorationType &&
       !this.databaseTocValueDecorationType &&
+      !this.startupRunningDecorationType &&
       !this.probeDecorationTypes.length
     ) {
       return;
@@ -1287,6 +3500,7 @@ class EpicsRuntimeMonitorController {
     for (const editor of vscode.window.visibleTextEditors) {
       this.refreshMonitorHoverDecorationsForEditor(editor);
       this.refreshDatabaseTocValueDecorationsForEditor(editor);
+      this.refreshStartupRunningDecorationsForEditor(editor);
       this.refreshProbeDecorationsForEditor(editor);
     }
     this.refreshProbePanels();
@@ -1491,6 +3705,30 @@ class EpicsRuntimeMonitorController {
     }
   }
 
+  refreshStartupRunningDecorationsForDocument(document) {
+    if (!this.startupRunningDecorationType || !document?.uri) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.toString() === document.uri.toString()) {
+        this.refreshStartupRunningDecorationsForEditor(editor);
+      }
+    }
+  }
+
+  clearStartupRunningDecorationsForDocument(document) {
+    if (!this.startupRunningDecorationType || !document?.uri) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.toString() === document.uri.toString()) {
+        editor.setDecorations(this.startupRunningDecorationType, []);
+      }
+    }
+  }
+
   refreshProbeDecorationsForDocument(document) {
     if (!isProbeDocument(document) || !document?.uri) {
       return;
@@ -1634,6 +3872,44 @@ class EpicsRuntimeMonitorController {
     }
 
     editor.setDecorations(this.databaseTocValueDecorationType, decorationOptions);
+  }
+
+  refreshStartupRunningDecorationsForEditor(editor) {
+    if (!this.startupRunningDecorationType || !editor) {
+      return;
+    }
+
+    const startupTarget = this.resolveActiveStartupIocDocument(editor);
+    if (!startupTarget) {
+      editor.setDecorations(this.startupRunningDecorationType, []);
+      return;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      editor.setDecorations(this.startupRunningDecorationType, []);
+      return;
+    }
+
+    const decorationOptions = [];
+    const lineCount = Math.max(Number(editor.document.lineCount) || 0, 1);
+    for (
+      let lineIndex = 0;
+      lineIndex < lineCount;
+      lineIndex += STARTUP_RUNNING_WATERMARK_LINE_INTERVAL
+    ) {
+      const line = editor.document.lineAt(Math.min(lineIndex, lineCount - 1));
+      decorationOptions.push({
+        range: new vscode.Range(line.range.start, line.range.start),
+        renderOptions: {
+          after: {
+            contentText: "Running ...",
+          },
+        },
+      });
+    }
+
+    editor.setDecorations(this.startupRunningDecorationType, decorationOptions);
   }
 
   refreshProbeDecorationsForEditor(editor) {
@@ -2595,6 +4871,56 @@ class EpicsRuntimeMonitorController {
     };
   }
 
+  buildRuntimeWidgetWebviewState() {
+    const monitors = this.monitorEntries
+      .filter((entry) => !entry.hidden)
+      .map((entry) => ({
+        key: entry.key,
+        pvName: entry.pvName,
+        protocolText: String(entry.protocol || "").toUpperCase(),
+        status: entry.status,
+        description: buildMonitorDescription(entry),
+        sourceLabel: entry.sourceLabel || "",
+        valueText: entry.valueText || "",
+        updatedText:
+          entry.lastUpdated instanceof Date
+            ? entry.lastUpdated.toLocaleTimeString()
+            : "",
+        errorText: entry.lastError || "",
+      }));
+
+    let message = "";
+    if (this.contextError) {
+      message = this.contextError;
+    } else if (!monitors.length) {
+      message = "No runtime monitors are active. Add one or start runtime for the active file.";
+    }
+
+    return {
+      contextStatus: this.contextStatus,
+      contextDescription: this.getContextDescription(),
+      defaultProtocol: String(this.getDefaultProtocol() || "").toUpperCase(),
+      channelTimeoutText: `${String(this.getChannelCreationTimeoutSeconds() ?? "none")}s`,
+      monitorTimeoutText: `${String(this.getMonitorSubscribeTimeoutSeconds() ?? "none")}s`,
+      iocShellTerminalName: this.iocShellTerminal?.name || "",
+      monitorCount: monitors.length,
+      monitors,
+      message,
+    };
+  }
+
+  async postRuntimeWidgetState() {
+    if (!this.runtimeWidgetPanel?.webview) {
+      return;
+    }
+
+    const payload = this.buildRuntimeWidgetWebviewState();
+    await this.runtimeWidgetPanel.webview.postMessage({
+      type: "runtimeWidgetState",
+      state: payload,
+    });
+  }
+
   async postProbeWidgetState(widgetState) {
     if (!widgetState?.panel?.webview) {
       return;
@@ -3276,6 +5602,7 @@ class EpicsRuntimeMonitorController {
 
   refresh(element) {
     this._onDidChangeTreeData.fire(element);
+    void this.postRuntimeWidgetState();
     this.refreshProbePanels();
     this.refreshPvlistWidgets();
     this.refreshMonitorWidgets();
@@ -3310,19 +5637,23 @@ class EpicsRuntimeMonitorController {
   }
 
   getContextDescription() {
+    const iocTerminalName = this.iocShellTerminal?.name;
     if (this.contextStatus === "connected") {
-      return `${this.monitorEntries.filter((entry) => entry.monitor).length} active`;
+      const activeDescription = `${this.monitorEntries.filter((entry) => entry.monitor).length} active`;
+      return iocTerminalName
+        ? `${activeDescription} | IOC: ${iocTerminalName}`
+        : activeDescription;
     }
 
     if (this.contextStatus === "connecting") {
-      return "connecting";
+      return iocTerminalName ? `connecting | IOC: ${iocTerminalName}` : "connecting";
     }
 
     if (this.contextStatus === "error") {
-      return "error";
+      return iocTerminalName ? `error | IOC: ${iocTerminalName}` : "error";
     }
 
-    return "stopped";
+    return iocTerminalName ? `stopped | IOC: ${iocTerminalName}` : "stopped";
   }
 
   getContextTooltip() {
@@ -3332,6 +5663,9 @@ class EpicsRuntimeMonitorController {
       `Channel timeout: ${String(this.getChannelCreationTimeoutSeconds() ?? "none")}s`,
       `Monitor timeout: ${String(this.getMonitorSubscribeTimeoutSeconds() ?? "none")}s`,
     ];
+    if (this.iocShellTerminal?.name) {
+      lines.push(`IOC shell terminal: ${this.iocShellTerminal.name}`);
+    }
     if (this.contextError) {
       lines.push("", `Error: ${this.contextError}`);
     }
@@ -3438,6 +5772,26 @@ class EpicsRuntimeMonitorController {
       "setContext",
       ACTIVE_DATABASE_MONITORING_RUNNING_CONTEXT_KEY,
       hasToc && isRunning,
+    );
+  }
+
+  updateStartupEditorContextKeys(editor) {
+    const startupTarget = this.resolveActiveStartupIocDocument(editor);
+    const terminal = startupTarget
+      ? this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath)
+      : undefined;
+    const isRunning =
+      Boolean(terminal) && vscode.window.terminals.includes(terminal);
+
+    void vscode.commands.executeCommand(
+      "setContext",
+      ACTIVE_STARTUP_CAN_START_IOC_CONTEXT_KEY,
+      Boolean(startupTarget) && !isRunning,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      ACTIVE_STARTUP_CAN_STOP_IOC_CONTEXT_KEY,
+      Boolean(startupTarget) && isRunning,
     );
   }
 
@@ -4218,6 +6572,96 @@ function isDatabaseRuntimeDocument(document) {
   );
 }
 
+function normalizeFsPath(fsPath) {
+  if (!fsPath) {
+    return "";
+  }
+  return path.resolve(String(fsPath)).replace(/\\/g, "/");
+}
+
+function isIocBootStartupDocumentPath(fsPath) {
+  const normalizedPath = normalizeFsPath(fsPath);
+  if (!normalizedPath) {
+    return false;
+  }
+
+  const extension = path.extname(normalizedPath).toLowerCase();
+  if (extension !== ".cmd" && extension !== ".iocsh") {
+    return false;
+  }
+
+  return /(^|\/)iocBoot(\/|$)/.test(normalizedPath);
+}
+
+function looksLikeIocShellStartupText(text) {
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function getIocBootStartupDocumentPath(document) {
+  if (
+    !document?.uri ||
+    document.uri.scheme !== "file" ||
+    document.languageId !== "startup"
+  ) {
+    return undefined;
+  }
+
+  const documentPath = document.uri.fsPath;
+  if (!isIocBootStartupDocumentPath(documentPath)) {
+    return undefined;
+  }
+
+  if (!looksLikeIocShellStartupText(document.getText())) {
+    return undefined;
+  }
+
+  return normalizeFsPath(documentPath);
+}
+
+function extractCommandLineExecutable(commandLine) {
+  const trimmedCommandLine = String(commandLine || "").trim();
+  if (!trimmedCommandLine) {
+    return "";
+  }
+
+  const match = trimmedCommandLine.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  return match?.[1] || match?.[2] || match?.[3] || "";
+}
+
+function resolveStartupCommandDocumentPath(commandLine, cwdUri) {
+  const executable = extractCommandLineExecutable(commandLine);
+  if (!executable) {
+    return undefined;
+  }
+
+  const executableText = String(executable).trim();
+  const extension = path.extname(executableText).toLowerCase();
+  if (extension !== ".cmd" && extension !== ".iocsh") {
+    return undefined;
+  }
+
+  let candidatePath = executableText;
+  if (!path.isAbsolute(candidatePath)) {
+    if (cwdUri?.scheme !== "file") {
+      return undefined;
+    }
+    candidatePath = path.resolve(cwdUri.fsPath, candidatePath);
+  }
+
+  if (!fs.existsSync(candidatePath) || !isIocBootStartupDocumentPath(candidatePath)) {
+    return undefined;
+  }
+
+  return normalizeFsPath(candidatePath);
+}
+
 function getRuntimeDocumentLabel(document) {
   if (!document) {
     return "Untitled";
@@ -4832,6 +7276,1706 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
       });
 
       render(initialState);
+    </script>
+  </body>
+</html>`;
+}
+
+function buildRuntimeWidgetHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPICS Runtime</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 12px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        background: var(--vscode-editor-background);
+      }
+      .toolbar-left, .toolbar-right {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .toolbar-title {
+        font-weight: 600;
+        margin-right: 8px;
+      }
+      .toolbar-status {
+        color: var(--vscode-descriptionForeground);
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 20px 24px 28px;
+      }
+      .action-button {
+        padding: 6px 12px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 4px;
+        background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+        color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+        cursor: pointer;
+        font: inherit;
+      }
+      .action-button:hover {
+        background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+      }
+      .action-button.primary {
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+      }
+      .action-button.primary:hover {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .section + .section {
+        margin-top: 24px;
+      }
+      .section-title {
+        margin: 0 0 12px;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+      }
+      .summary-card {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-editorHoverWidget-background, var(--vscode-sideBar-background)) 12%);
+      }
+      .summary-label {
+        color: var(--vscode-descriptionForeground);
+        font-size: 0.9rem;
+        margin-bottom: 6px;
+      }
+      .summary-value {
+        font-weight: 600;
+        word-break: break-word;
+      }
+      .message {
+        margin-top: 14px;
+        color: var(--vscode-descriptionForeground);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+      th, td {
+        text-align: left;
+        padding: 10px 10px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        vertical-align: top;
+      }
+      th {
+        color: var(--vscode-descriptionForeground);
+        font-weight: 600;
+      }
+      th:nth-child(1), td:nth-child(1) {
+        width: 22ch;
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      th:nth-child(2), td:nth-child(2) {
+        width: 14ch;
+      }
+      th:nth-child(5), td:nth-child(5) {
+        width: 8ch;
+      }
+      .monitor-meta {
+        color: var(--vscode-descriptionForeground);
+        margin-top: 4px;
+        font-size: 0.9rem;
+      }
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 0.85rem;
+      }
+      .empty {
+        color: var(--vscode-descriptionForeground);
+      }
+      .remove-button {
+        padding: 4px 8px;
+        min-width: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <div class="toolbar-title">EPICS Runtime</div>
+        <div id="statusText" class="toolbar-status"></div>
+      </div>
+      <div class="toolbar-right">
+        <button class="action-button primary" data-action="addRuntimeMonitor">Add Monitor</button>
+        <button class="action-button" data-action="restartRuntimeContext">Restart</button>
+        <button class="action-button" data-action="stopRuntimeContext">Stop</button>
+        <button class="action-button" data-action="clearRuntimeMonitors">Clear</button>
+        <button class="action-button" data-action="openProjectRuntimeConfiguration">Config</button>
+        <button class="action-button" data-action="setIocShellTerminal">Set IOC Terminal</button>
+        <button class="action-button" data-action="runIocShellCommand">IOC Command...</button>
+        <button class="action-button" data-action="runIocShellDbl">dbl</button>
+        <button class="action-button" data-action="runIocShellDbprCurrentRecord">dbpr</button>
+      </div>
+    </div>
+    <div id="content" class="content"></div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const initialState = ${initialStateJson};
+      const content = document.getElementById("content");
+      const statusText = document.getElementById("statusText");
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function render(state) {
+        const payload = state || {};
+        statusText.textContent = payload.contextDescription || payload.contextStatus || "";
+
+        const monitorRows = Array.isArray(payload.monitors) ? payload.monitors : [];
+        const monitorsHtml = monitorRows.length
+          ? '<table><thead><tr><th>PV</th><th>Status</th><th>Value</th><th>Source</th><th></th></tr></thead><tbody>' +
+              monitorRows.map((monitor) => {
+                const badgeText = escapeHtml((monitor.protocolText ? monitor.protocolText + ' ' : '') + (monitor.status || ''));
+                const valueText = monitor.valueText || monitor.errorText || '';
+                const metaLines = [
+                  monitor.description || '',
+                  monitor.updatedText ? ('Updated: ' + monitor.updatedText) : ''
+                ].filter(Boolean);
+                return '<tr>' +
+                  '<td><div>' + escapeHtml(monitor.pvName || '') + '</div>' +
+                    (metaLines.length
+                      ? '<div class="monitor-meta">' + escapeHtml(metaLines.join(' | ')) + '</div>'
+                      : '') +
+                  '</td>' +
+                  '<td><span class="status-badge">' + badgeText + '</span></td>' +
+                  '<td>' + escapeHtml(valueText) + '</td>' +
+                  '<td>' + escapeHtml(monitor.sourceLabel || '') + '</td>' +
+                  '<td><button class="action-button remove-button" data-remove-key="' + escapeHtml(monitor.key || '') + '">Remove</button></td>' +
+                '</tr>';
+              }).join('') +
+            '</tbody></table>'
+          : '<div class="empty">No runtime monitors are active.</div>';
+
+        const messageHtml = payload.message
+          ? '<div class="message">' + escapeHtml(payload.message) + '</div>'
+          : '';
+
+        content.innerHTML =
+          '<div class="section">' +
+            '<div class="summary-grid">' +
+              '<div class="summary-card"><div class="summary-label">Status</div><div class="summary-value">' + escapeHtml(payload.contextStatus || 'stopped') + '</div></div>' +
+              '<div class="summary-card"><div class="summary-label">Default Protocol</div><div class="summary-value">' + escapeHtml(payload.defaultProtocol || '') + '</div></div>' +
+              '<div class="summary-card"><div class="summary-label">Channel Timeout</div><div class="summary-value">' + escapeHtml(payload.channelTimeoutText || '') + '</div></div>' +
+              '<div class="summary-card"><div class="summary-label">Monitor Timeout</div><div class="summary-value">' + escapeHtml(payload.monitorTimeoutText || '') + '</div></div>' +
+              '<div class="summary-card"><div class="summary-label">IOC Terminal</div><div class="summary-value">' + escapeHtml(payload.iocShellTerminalName || '(not set)') + '</div></div>' +
+              '<div class="summary-card"><div class="summary-label">Monitors</div><div class="summary-value">' + escapeHtml(String(payload.monitorCount || 0)) + '</div></div>' +
+            '</div>' +
+            messageHtml +
+          '</div>' +
+          '<div class="section">' +
+            '<div class="section-title">Monitor Entries</div>' +
+            monitorsHtml +
+          '</div>';
+
+        for (const button of content.querySelectorAll('[data-remove-key]')) {
+          button.addEventListener('click', () => {
+            vscode.postMessage({
+              type: 'removeRuntimeMonitor',
+              key: button.dataset.removeKey,
+            });
+          });
+        }
+      }
+
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'runtimeWidgetState') {
+          render(event.data.state);
+        }
+      });
+
+      for (const button of document.querySelectorAll('[data-action]')) {
+        button.addEventListener('click', () => {
+          vscode.postMessage({ type: button.dataset.action });
+        });
+      }
+
+      render(initialState);
+    </script>
+  </body>
+</html>`;
+}
+
+function buildIocRuntimeCommandsHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IOC Runtime Commands</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .header {
+        padding: 16px 20px 14px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+      }
+      .header-top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .title {
+        margin: 0;
+        font-size: 1.35rem;
+        font-weight: 600;
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--vscode-descriptionForeground);
+        line-height: 1.5;
+      }
+      .toolbar {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .toolbar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .filter-input {
+        width: 100%;
+        min-width: 26ch;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .custom-command-bar {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: minmax(28ch, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .custom-command-input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .header-button {
+        padding: 8px 12px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 6px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        cursor: pointer;
+        font: inherit;
+      }
+      .header-button:hover {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .header-button:disabled,
+      .send-button:disabled,
+      .args-input:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 18px 20px 24px;
+      }
+      .message {
+        margin-bottom: 16px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .message.error {
+        color: var(--vscode-errorForeground);
+      }
+      .filter-summary {
+        margin-bottom: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .command-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .command-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorHoverWidget-background, var(--vscode-sideBar-background)) 10%);
+        overflow: hidden;
+      }
+      .command-row {
+        display: grid;
+        grid-template-columns: minmax(18ch, 22ch) minmax(24ch, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px 8px;
+      }
+      .command-name {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+        font-size: 0.98rem;
+        font-weight: 600;
+      }
+      .command-help {
+        padding: 0 12px 12px;
+        color: var(--vscode-descriptionForeground);
+        white-space: pre-wrap;
+        line-height: 1.45;
+        font-size: 0.93rem;
+      }
+      .command-help::before {
+        content: "";
+        display: block;
+        margin-bottom: 8px;
+        border-top: 1px solid var(--vscode-panel-border);
+      }
+      .args-input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .send-button {
+        padding: 8px 14px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 6px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        cursor: pointer;
+        font: inherit;
+      }
+      .send-button:hover {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .capture-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--vscode-descriptionForeground);
+        white-space: nowrap;
+      }
+      .empty {
+        color: var(--vscode-descriptionForeground);
+      }
+      body.stopped .meta,
+      body.stopped .toolbar,
+      body.stopped .content {
+        opacity: 0.45;
+        filter: grayscale(0.25);
+      }
+      .stopped-watermark {
+        display: none;
+        position: fixed;
+        inset: 170px 0 0 0;
+        pointer-events: none;
+        overflow: hidden;
+        z-index: 2;
+      }
+      body.stopped .stopped-watermark {
+        display: block;
+      }
+      .stopped-watermark-grid {
+        position: absolute;
+        inset: 0 -10% 0 -10%;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(18ch, 1fr));
+        gap: 34px 48px;
+        align-content: start;
+        transform: rotate(-18deg);
+      }
+      .stopped-watermark-text {
+        color: transparent;
+        font-size: 3.1rem;
+        font-style: italic;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        -webkit-text-stroke: 1.3px rgba(220, 38, 38, 0.65);
+        user-select: none;
+      }
+      @media (max-width: 900px) {
+        .custom-command-bar {
+          grid-template-columns: 1fr;
+        }
+        .command-row {
+          grid-template-columns: 1fr;
+        }
+        .stopped-watermark-grid {
+          grid-template-columns: repeat(2, minmax(18ch, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stopped-watermark" aria-hidden="true">
+      <div class="stopped-watermark-grid">
+        ${Array.from({ length: 24 }, () => '<div class="stopped-watermark-text">Stopped</div>').join("")}
+      </div>
+    </div>
+    <div class="header">
+      <div class="header-top">
+        <h1 class="title">IOC Runtime Commands</h1>
+        <div class="toolbar-actions">
+          <button id="showTerminalButton" class="header-button">Show Running Terminal</button>
+          <button id="startIocButton" class="header-button">Start IOC</button>
+          <button id="stopIocButton" class="header-button">Stop IOC</button>
+        </div>
+      </div>
+      <div id="meta" class="meta"></div>
+      <div class="toolbar">
+        <input id="filterInput" class="filter-input" type="text" spellcheck="false" placeholder="Filter commands and arguments (space-separated AND terms)" />
+      </div>
+      <div class="custom-command-bar">
+        <input id="customCommandInput" class="custom-command-input" type="text" spellcheck="false" placeholder="Run any command" />
+        <label class="capture-label"><input id="customCommandCapture" type="checkbox" /> Capture output</label>
+        <button id="customCommandSendButton" class="send-button">Send</button>
+      </div>
+    </div>
+    <div class="content">
+      <div id="message" class="message"></div>
+      <div id="filterSummary" class="filter-summary"></div>
+      <div id="commands" class="command-list"></div>
+    </div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const messageNode = document.getElementById("message");
+      const commandsNode = document.getElementById("commands");
+      const metaNode = document.getElementById("meta");
+      const filterInput = document.getElementById("filterInput");
+      const customCommandInput = document.getElementById("customCommandInput");
+      const customCommandCapture = document.getElementById("customCommandCapture");
+      const customCommandSendButton = document.getElementById("customCommandSendButton");
+      const filterSummaryNode = document.getElementById("filterSummary");
+      const showTerminalButton = document.getElementById("showTerminalButton");
+      const startIocButton = document.getElementById("startIocButton");
+      const stopIocButton = document.getElementById("stopIocButton");
+      const initialState = ${initialStateJson};
+      let currentState = initialState || {};
+      let argumentsByCommand = new Map();
+      let captureByCommand = new Map();
+      let helpByCommand = new Map();
+      let pendingHelpCommands = new Set();
+      let customCommandText = "";
+      let customCommandCaptureOutput = false;
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function normalizeFilterTerms(value) {
+        return String(value || "")
+          .toLowerCase()
+          .split(/\\s+/)
+          .map((term) => term.trim())
+          .filter(Boolean);
+      }
+
+      function getFilteredCommands(state) {
+        const payload = state || {};
+        const commandList = Array.isArray(payload.commands) ? payload.commands : [];
+        const filterTerms = normalizeFilterTerms(filterInput.value);
+        if (!filterTerms.length) {
+          return commandList;
+        }
+
+        return commandList.filter((commandName) => {
+          const argumentText = argumentsByCommand.get(commandName) || "";
+          const haystack = (
+            String(commandName || "") + " " + String(argumentText || "")
+          ).toLowerCase();
+          return filterTerms.every((term) => haystack.includes(term));
+        });
+      }
+
+      function sendCommand(commandName) {
+        const input = document.querySelector('[data-command-input="' + CSS.escape(commandName) + '"]');
+        const captureCheckbox = document.querySelector('[data-command-capture="' + CSS.escape(commandName) + '"]');
+        const argumentsText = input instanceof HTMLInputElement ? input.value : "";
+        const captureOutput = captureCheckbox instanceof HTMLInputElement
+          ? captureCheckbox.checked
+          : Boolean(captureByCommand.get(commandName));
+        argumentsByCommand.set(commandName, argumentsText);
+        captureByCommand.set(commandName, captureOutput);
+        vscode.postMessage({
+          type: "sendIocRuntimeCommand",
+          commandName,
+          argumentsText,
+          captureOutput,
+        });
+      }
+
+      function requestCommandHelp(commandName) {
+        if (!commandName || pendingHelpCommands.has(commandName) || helpByCommand.has(commandName)) {
+          return;
+        }
+        if (currentState?.isRunning === false) {
+          return;
+        }
+        pendingHelpCommands.add(commandName);
+        vscode.postMessage({
+          type: "requestIocRuntimeCommandHelp",
+          commandName,
+        });
+      }
+
+      function getCommandHelpText(commandName) {
+        const helpText = helpByCommand.get(commandName);
+        if (helpText) {
+          return helpText;
+        }
+        if (currentState?.isRunning === false) {
+          return "Help is unavailable while the IOC is stopped.";
+        }
+        return "Loading help...";
+      }
+
+      function updateCommandPresentation(commandName) {
+        if (!commandName) {
+          return;
+        }
+        const inputElement = commandsNode.querySelector('[data-command-input="' + CSS.escape(commandName) + '"]');
+        if (inputElement instanceof HTMLInputElement) {
+          inputElement.placeholder = buildArgumentPlaceholder(commandName);
+        }
+        const helpElement = commandsNode.querySelector('[data-command-help="' + CSS.escape(commandName) + '"]');
+        if (helpElement) {
+          helpElement.textContent = getCommandHelpText(commandName);
+        }
+      }
+
+      function extractParameterHints(commandName) {
+        const helpText = helpByCommand.get(commandName);
+        if (!helpText) {
+          return [];
+        }
+        const firstNonEmptyLine = String(helpText)
+          .split(/\\r?\\n/)
+          .map((line) => line.trim())
+          .find(Boolean);
+        if (!firstNonEmptyLine) {
+          return [];
+        }
+        const normalizedPrefix = String(commandName || "").trim() + " ";
+        const signatureText = firstNonEmptyLine.startsWith(normalizedPrefix)
+          ? firstNonEmptyLine.slice(normalizedPrefix.length)
+          : firstNonEmptyLine === String(commandName || "").trim()
+            ? ""
+            : firstNonEmptyLine;
+        const hints = [];
+        const signaturePattern = /'([^']*)'|"([^"]*)"|([^\\s]+)/g;
+        let match;
+        while ((match = signaturePattern.exec(signatureText))) {
+          const value = (match[1] || match[2] || match[3] || "").trim();
+          if (value) {
+            hints.push(value);
+          }
+        }
+        return hints;
+      }
+
+      function countFilledParameters(value) {
+        const text = String(value || "");
+        const segments = [];
+        let current = "";
+        let quote = "";
+        for (const character of text) {
+          if (quote) {
+            current += character;
+            if (character === quote) {
+              quote = "";
+            }
+            continue;
+          }
+          if (character === "'" || character === '"') {
+            quote = character;
+            current += character;
+            continue;
+          }
+          if (character === ",") {
+            segments.push(current);
+            current = "";
+            continue;
+          }
+          current += character;
+        }
+        segments.push(current);
+        return segments.filter((segment) => String(segment || "").trim()).length;
+      }
+
+      function buildArgumentPlaceholder(commandName) {
+        const parameterHints = extractParameterHints(commandName);
+        if (!parameterHints.length) {
+          return currentState?.isRunning === false
+            ? "arguments, separated by commas"
+            : "Loading parameter hints...";
+        }
+        const filledCount = countFilledParameters(argumentsByCommand.get(commandName) || "");
+        const remainingHints = parameterHints.slice(filledCount);
+        return remainingHints.length
+          ? remainingHints.join(", ")
+          : "";
+      }
+
+      function render(state) {
+        currentState = state || {};
+        const payload = currentState;
+        const fullCommandList = Array.isArray(payload.commands) ? payload.commands : [];
+        const commandList = getFilteredCommands(payload);
+        metaNode.innerHTML =
+          '<div>Startup file: <code>' + escapeHtml(payload.startupFileName || "") + '</code></div>' +
+          '<div>Terminal: <code>' + escapeHtml(payload.terminalName || "") + '</code></div>';
+        messageNode.textContent = payload.message || "";
+        document.body.classList.toggle('stopped', payload.isRunning === false);
+        filterInput.disabled = payload.isRunning === false;
+        customCommandInput.disabled = payload.isRunning === false;
+        customCommandCapture.disabled = payload.isRunning === false;
+        customCommandSendButton.disabled = payload.isRunning === false || !String(customCommandText || "").trim();
+        if (document.activeElement !== customCommandInput) {
+          customCommandInput.value = customCommandText;
+        }
+        customCommandCapture.checked = customCommandCaptureOutput;
+        startIocButton.style.display = payload.isRunning === false ? '' : 'none';
+        startIocButton.disabled = payload.isRunning !== false;
+        stopIocButton.disabled = payload.isRunning === false;
+        stopIocButton.style.display = payload.isRunning === false ? 'none' : '';
+        filterSummaryNode.textContent = fullCommandList.length
+          ? ('Showing ' + String(commandList.length) + ' of ' + String(fullCommandList.length) + ' commands.')
+          : '';
+
+        if (!commandList.length) {
+          commandsNode.innerHTML = '<div class="empty">' +
+            escapeHtml(payload.isLoading ? 'Loading IOC command names...' : 'No IOC command names match the current filter.') +
+            '</div>';
+          return;
+        }
+
+        commandsNode.innerHTML = commandList.map((commandName) =>
+          '<div class="command-card">' +
+            '<div class="command-row">' +
+              '<div class="command-name" data-help-command="' + escapeHtml(commandName) + '"><code>' + escapeHtml(commandName) + '</code></div>' +
+              '<input class="args-input" data-command-input="' + escapeHtml(commandName) + '" type="text" spellcheck="false" placeholder="' + escapeHtml(buildArgumentPlaceholder(commandName)) + '" value="' + escapeHtml(argumentsByCommand.get(commandName) || "") + '"' + (payload.isRunning === false ? ' disabled' : '') + ' />' +
+              '<label class="capture-label"><input data-command-capture="' + escapeHtml(commandName) + '" type="checkbox"' + (captureByCommand.get(commandName) ? ' checked' : '') + (payload.isRunning === false ? ' disabled' : '') + ' /> Capture output</label>' +
+              '<button class="send-button" data-send-command="' + escapeHtml(commandName) + '"' + (payload.isRunning === false ? ' disabled' : '') + '>Send</button>' +
+            '</div>' +
+            '<div class="command-help" data-command-help="' + escapeHtml(commandName) + '">' + escapeHtml(getCommandHelpText(commandName)) + '</div>' +
+          '</div>'
+        ).join('');
+      }
+
+      commandsNode.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target.closest('[data-send-command]') : undefined;
+        const commandName = target?.getAttribute('data-send-command');
+        if (!commandName) {
+          return;
+        }
+        sendCommand(commandName);
+      });
+
+      commandsNode.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') {
+          return;
+        }
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const commandName = target?.getAttribute('data-command-input');
+        if (!commandName) {
+          return;
+        }
+        event.preventDefault();
+        sendCommand(commandName);
+      });
+
+      commandsNode.addEventListener('input', (event) => {
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const commandName = target?.getAttribute('data-command-input');
+        if (!commandName) {
+          return;
+        }
+        argumentsByCommand.set(commandName, target.value);
+        updateCommandPresentation(commandName);
+      });
+
+      commandsNode.addEventListener('change', (event) => {
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const commandName = target?.getAttribute('data-command-capture');
+        if (!commandName) {
+          return;
+        }
+        captureByCommand.set(commandName, target.checked);
+      });
+
+      filterInput.addEventListener('input', () => {
+        render(currentState);
+      });
+
+      customCommandInput.addEventListener('input', () => {
+        customCommandText = customCommandInput.value;
+        customCommandSendButton.disabled =
+          currentState?.isRunning === false || !String(customCommandText || "").trim();
+      });
+
+      customCommandCapture.addEventListener('change', () => {
+        customCommandCaptureOutput = Boolean(customCommandCapture.checked);
+      });
+
+      function sendCustomCommand() {
+        const trimmedCommand = String(customCommandInput.value || "").trim();
+        if (!trimmedCommand || currentState?.isRunning === false) {
+          return;
+        }
+        customCommandText = trimmedCommand;
+        vscode.postMessage({
+          type: 'sendCustomIocRuntimeCommand',
+          commandText: trimmedCommand,
+          captureOutput: customCommandCaptureOutput,
+        });
+      }
+
+      customCommandInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') {
+          return;
+        }
+        event.preventDefault();
+        sendCustomCommand();
+      });
+
+      customCommandSendButton.addEventListener('click', () => {
+        sendCustomCommand();
+      });
+
+      showTerminalButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'showIocRuntimeCommandsTerminal' });
+      });
+
+      startIocButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'startIocRuntimeCommandsStartup' });
+      });
+
+      stopIocButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'stopIocRuntimeCommandsStartup' });
+      });
+
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'iocRuntimeCommandsState') {
+          render(event.data.state);
+          return;
+        }
+        if (event.data?.type === 'iocRuntimeCommandHelp' && event.data.commandName) {
+          pendingHelpCommands.delete(event.data.commandName);
+          helpByCommand.set(event.data.commandName, event.data.helpText || 'No detailed help is available.');
+          updateCommandPresentation(event.data.commandName);
+        }
+      });
+
+      try {
+        render(initialState);
+      } catch (error) {
+        messageNode.classList.add('error');
+        messageNode.textContent = 'IOC Runtime Commands page error: ' + String(error && error.message ? error.message : error);
+      }
+    </script>
+  </body>
+</html>`;
+}
+
+function buildIocRuntimeVariablesHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IOC Runtime Variables</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .header {
+        padding: 16px 20px 14px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+      }
+      .header-top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .title {
+        margin: 0;
+        font-size: 1.35rem;
+        font-weight: 600;
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--vscode-descriptionForeground);
+        line-height: 1.5;
+      }
+      .toolbar {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .toolbar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .filter-input {
+        width: 100%;
+        min-width: 26ch;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .header-button,
+      .set-button {
+        padding: 8px 12px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 6px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        cursor: pointer;
+        font: inherit;
+      }
+      .header-button:hover,
+      .set-button:hover {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .header-button:disabled,
+      .set-button:disabled,
+      .value-input:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 18px 20px 24px;
+      }
+      .message {
+        margin-bottom: 16px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .message.error {
+        color: var(--vscode-errorForeground);
+      }
+      .filter-summary {
+        margin-bottom: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .warning-note {
+        margin-bottom: 12px;
+        color: var(--vscode-errorForeground);
+      }
+      .variable-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .variable-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorHoverWidget-background, var(--vscode-sideBar-background)) 10%);
+        overflow: hidden;
+      }
+      .variable-row {
+        display: grid;
+        grid-template-columns: minmax(18ch, 22ch) minmax(24ch, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px 8px;
+      }
+      .variable-name {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+        font-size: 0.98rem;
+        font-weight: 600;
+      }
+      .value-input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .variable-meta {
+        padding: 0 12px 12px;
+        color: var(--vscode-descriptionForeground);
+        white-space: pre-wrap;
+        line-height: 1.45;
+        font-size: 0.93rem;
+      }
+      .variable-meta::before {
+        content: "";
+        display: block;
+        margin-bottom: 8px;
+        border-top: 1px solid var(--vscode-panel-border);
+      }
+      .empty {
+        color: var(--vscode-descriptionForeground);
+      }
+      body.stopped .meta,
+      body.stopped .toolbar,
+      body.stopped .content {
+        opacity: 0.45;
+        filter: grayscale(0.25);
+      }
+      .stopped-watermark {
+        display: none;
+        position: fixed;
+        inset: 170px 0 0 0;
+        pointer-events: none;
+        overflow: hidden;
+        z-index: 2;
+      }
+      body.stopped .stopped-watermark {
+        display: block;
+      }
+      .stopped-watermark-grid {
+        position: absolute;
+        inset: 0 -10% 0 -10%;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(18ch, 1fr));
+        gap: 34px 48px;
+        align-content: start;
+        transform: rotate(-18deg);
+      }
+      .stopped-watermark-text {
+        color: transparent;
+        font-size: 3.1rem;
+        font-style: italic;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        -webkit-text-stroke: 1.3px rgba(220, 38, 38, 0.65);
+        user-select: none;
+      }
+      @media (max-width: 900px) {
+        .variable-row {
+          grid-template-columns: 1fr;
+        }
+        .stopped-watermark-grid {
+          grid-template-columns: repeat(2, minmax(18ch, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stopped-watermark" aria-hidden="true">
+      <div class="stopped-watermark-grid">
+        ${Array.from({ length: 24 }, () => '<div class="stopped-watermark-text">Stopped</div>').join("")}
+      </div>
+    </div>
+    <div class="header">
+      <div class="header-top">
+        <h1 class="title">IOC Runtime Variables</h1>
+        <div class="toolbar-actions">
+          <button id="showTerminalButton" class="header-button">Show Running Terminal</button>
+          <button id="startIocButton" class="header-button">Start IOC</button>
+          <button id="stopIocButton" class="header-button">Stop IOC</button>
+        </div>
+      </div>
+      <div id="meta" class="meta"></div>
+      <div class="toolbar">
+        <input id="filterInput" class="filter-input" type="text" spellcheck="false" placeholder="Filter variables by name, type, or value" />
+      </div>
+    </div>
+    <div class="content">
+      <div id="message" class="message"></div>
+      <div id="filterSummary" class="filter-summary"></div>
+      <div class="warning-note">Note: the current value may not reflect the real value.</div>
+      <div id="variables" class="variable-list"></div>
+    </div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const messageNode = document.getElementById("message");
+      const variablesNode = document.getElementById("variables");
+      const metaNode = document.getElementById("meta");
+      const filterInput = document.getElementById("filterInput");
+      const filterSummaryNode = document.getElementById("filterSummary");
+      const showTerminalButton = document.getElementById("showTerminalButton");
+      const startIocButton = document.getElementById("startIocButton");
+      const stopIocButton = document.getElementById("stopIocButton");
+      const initialState = ${initialStateJson};
+      let currentState = initialState || {};
+      let valuesByVariable = new Map();
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function normalizeFilterTerms(value) {
+        return String(value || "")
+          .toLowerCase()
+          .split(/\\s+/)
+          .map((term) => term.trim())
+          .filter(Boolean);
+      }
+
+      function getFilteredVariables(state) {
+        const payload = state || {};
+        const variableList = Array.isArray(payload.variables) ? payload.variables : [];
+        const filterTerms = normalizeFilterTerms(filterInput.value);
+        if (!filterTerms.length) {
+          return variableList;
+        }
+
+        return variableList.filter((entry) => {
+          const variableName = String(entry?.variableName || "");
+          const variableType = String(entry?.variableType || "");
+          const currentValue = String(entry?.currentValue || "");
+          const draftValue = valuesByVariable.get(variableName) || "";
+          const haystack = (
+            variableName + " " + variableType + " " + currentValue + " " + draftValue
+          ).toLowerCase();
+          return filterTerms.every((term) => haystack.includes(term));
+        });
+      }
+
+      function sendVariable(variableName) {
+        const input = document.querySelector('[data-variable-input="' + CSS.escape(variableName) + '"]');
+        const valueText = input instanceof HTMLInputElement ? input.value.trim() : "";
+        valuesByVariable.delete(variableName);
+        vscode.postMessage({
+          type: "setIocRuntimeVariable",
+          variableName,
+          valueText,
+        });
+      }
+
+      function render(state) {
+        currentState = state || {};
+        const payload = currentState;
+        const fullVariableList = Array.isArray(payload.variables) ? payload.variables : [];
+        const variableList = getFilteredVariables(payload);
+        metaNode.innerHTML =
+          '<div>Startup file: <code>' + escapeHtml(payload.startupFileName || "") + '</code></div>' +
+          '<div>Terminal: <code>' + escapeHtml(payload.terminalName || "") + '</code></div>';
+        messageNode.textContent = payload.message || "";
+        document.body.classList.toggle('stopped', payload.isRunning === false);
+        filterInput.disabled = payload.isRunning === false;
+        startIocButton.style.display = payload.isRunning === false ? '' : 'none';
+        startIocButton.disabled = payload.isRunning !== false;
+        stopIocButton.style.display = payload.isRunning === false ? 'none' : '';
+        stopIocButton.disabled = payload.isRunning === false;
+        filterSummaryNode.textContent = fullVariableList.length
+          ? ('Showing ' + String(variableList.length) + ' of ' + String(fullVariableList.length) + ' variables.')
+          : '';
+
+        if (!variableList.length) {
+          variablesNode.innerHTML = '<div class="empty">' +
+            escapeHtml(payload.isLoading ? 'Loading IOC runtime variables...' : 'No IOC runtime variables match the current filter.') +
+            '</div>';
+          return;
+        }
+
+        for (const entry of fullVariableList) {
+          const variableName = String(entry?.variableName || "");
+          if (!variableName || valuesByVariable.has(variableName)) {
+            continue;
+          }
+          valuesByVariable.set(variableName, String(entry?.currentValue || ""));
+        }
+
+        variablesNode.innerHTML = variableList.map((entry) => {
+          const variableName = String(entry?.variableName || "");
+          const variableType = String(entry?.variableType || "");
+          const currentValue = String(entry?.currentValue || "");
+          return '<div class="variable-card">' +
+            '<div class="variable-row">' +
+              '<div class="variable-name"><code>' + escapeHtml(variableName) + '</code></div>' +
+              '<input class="value-input" data-variable-input="' + escapeHtml(variableName) + '" type="text" spellcheck="false" value="' + escapeHtml(valuesByVariable.get(variableName) || "") + '"' + (payload.isRunning === false ? ' disabled' : '') + ' />' +
+              '<button class="set-button" data-set-variable="' + escapeHtml(variableName) + '"' + (payload.isRunning === false ? ' disabled' : '') + '>Set</button>' +
+            '</div>' +
+            '<div class="variable-meta">Type: <code>' + escapeHtml(variableType || "unknown") + '</code> | Current value: <code>' + escapeHtml(currentValue) + '</code></div>' +
+          '</div>';
+        }).join('');
+      }
+
+      variablesNode.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target.closest('[data-set-variable]') : undefined;
+        const variableName = target?.getAttribute('data-set-variable');
+        if (!variableName) {
+          return;
+        }
+        sendVariable(variableName);
+      });
+
+      variablesNode.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') {
+          return;
+        }
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const variableName = target?.getAttribute('data-variable-input');
+        if (!variableName) {
+          return;
+        }
+        event.preventDefault();
+        sendVariable(variableName);
+      });
+
+      variablesNode.addEventListener('input', (event) => {
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const variableName = target?.getAttribute('data-variable-input');
+        if (!variableName) {
+          return;
+        }
+        valuesByVariable.set(variableName, target.value);
+      });
+
+      filterInput.addEventListener('input', () => {
+        render(currentState);
+      });
+
+      showTerminalButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'showIocRuntimeVariablesTerminal' });
+      });
+
+      startIocButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'startIocRuntimeVariablesStartup' });
+      });
+
+      stopIocButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'stopIocRuntimeVariablesStartup' });
+      });
+
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'iocRuntimeVariablesState') {
+          render(event.data.state);
+        }
+      });
+
+      try {
+        render(initialState);
+      } catch (error) {
+        messageNode.classList.add('error');
+        messageNode.textContent = 'IOC Runtime Variables page error: ' + String(error && error.message ? error.message : error);
+      }
+    </script>
+  </body>
+</html>`;
+}
+
+function buildIocRuntimeEnvironmentHtml(webview, initialState = {}) {
+  const nonce = createNonce();
+  const initialStateJson = JSON.stringify(initialState).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IOC Runtime Environment</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        font-family: var(--vscode-font-family);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .header {
+        padding: 16px 20px 14px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+      }
+      .header-top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .title {
+        margin: 0;
+        font-size: 1.35rem;
+        font-weight: 600;
+      }
+      .meta {
+        margin-top: 8px;
+        color: var(--vscode-descriptionForeground);
+        line-height: 1.5;
+      }
+      .toolbar {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .toolbar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .filter-input {
+        width: 100%;
+        min-width: 26ch;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .header-button,
+      .set-button {
+        padding: 8px 12px;
+        border: 1px solid var(--vscode-button-border, transparent);
+        border-radius: 6px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        cursor: pointer;
+        font: inherit;
+      }
+      .header-button:hover,
+      .set-button:hover {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .header-button:disabled,
+      .set-button:disabled,
+      .value-input:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .content {
+        flex: 1;
+        overflow: auto;
+        padding: 18px 20px 24px;
+      }
+      .message {
+        margin-bottom: 16px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .message.error {
+        color: var(--vscode-errorForeground);
+      }
+      .filter-summary {
+        margin-bottom: 12px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .warning-note {
+        margin-bottom: 12px;
+        color: var(--vscode-errorForeground);
+      }
+      .entry-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .entry-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorHoverWidget-background, var(--vscode-sideBar-background)) 10%);
+        overflow: hidden;
+      }
+      .entry-row {
+        display: grid;
+        grid-template-columns: minmax(18ch, 24ch) minmax(28ch, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px 8px;
+      }
+      .entry-name {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+        font-size: 0.98rem;
+        font-weight: 600;
+      }
+      .value-input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+        border-radius: 6px;
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .entry-meta {
+        padding: 0 12px 12px;
+        color: var(--vscode-descriptionForeground);
+        white-space: pre-wrap;
+        line-height: 1.45;
+        font-size: 0.93rem;
+      }
+      .entry-meta::before {
+        content: "";
+        display: block;
+        margin-bottom: 8px;
+        border-top: 1px solid var(--vscode-panel-border);
+      }
+      .empty {
+        color: var(--vscode-descriptionForeground);
+      }
+      body.stopped .meta,
+      body.stopped .toolbar,
+      body.stopped .content {
+        opacity: 0.45;
+        filter: grayscale(0.25);
+      }
+      .stopped-watermark {
+        display: none;
+        position: fixed;
+        inset: 170px 0 0 0;
+        pointer-events: none;
+        overflow: hidden;
+        z-index: 2;
+      }
+      body.stopped .stopped-watermark {
+        display: block;
+      }
+      .stopped-watermark-grid {
+        position: absolute;
+        inset: 0 -10% 0 -10%;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(18ch, 1fr));
+        gap: 34px 48px;
+        align-content: start;
+        transform: rotate(-18deg);
+      }
+      .stopped-watermark-text {
+        color: transparent;
+        font-size: 3.1rem;
+        font-style: italic;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        -webkit-text-stroke: 1.3px rgba(220, 38, 38, 0.65);
+        user-select: none;
+      }
+      @media (max-width: 900px) {
+        .entry-row {
+          grid-template-columns: 1fr;
+        }
+        .stopped-watermark-grid {
+          grid-template-columns: repeat(2, minmax(18ch, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stopped-watermark" aria-hidden="true">
+      <div class="stopped-watermark-grid">
+        ${Array.from({ length: 24 }, () => '<div class="stopped-watermark-text">Stopped</div>').join("")}
+      </div>
+    </div>
+    <div class="header">
+      <div class="header-top">
+        <h1 class="title">IOC Runtime Environment</h1>
+        <div class="toolbar-actions">
+          <button id="showTerminalButton" class="header-button">Show Running Terminal</button>
+          <button id="startIocButton" class="header-button">Start IOC</button>
+          <button id="stopIocButton" class="header-button">Stop IOC</button>
+        </div>
+      </div>
+      <div id="meta" class="meta"></div>
+      <div class="toolbar">
+        <input id="filterInput" class="filter-input" type="text" spellcheck="false" placeholder="Filter environment variables by name or value" />
+      </div>
+    </div>
+    <div class="content">
+      <div id="message" class="message"></div>
+      <div id="filterSummary" class="filter-summary"></div>
+      <div class="warning-note">Note: the current value may not reflect the real value.</div>
+      <div id="entries" class="entry-list"></div>
+    </div>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const messageNode = document.getElementById("message");
+      const entriesNode = document.getElementById("entries");
+      const metaNode = document.getElementById("meta");
+      const filterInput = document.getElementById("filterInput");
+      const filterSummaryNode = document.getElementById("filterSummary");
+      const showTerminalButton = document.getElementById("showTerminalButton");
+      const startIocButton = document.getElementById("startIocButton");
+      const stopIocButton = document.getElementById("stopIocButton");
+      const initialState = ${initialStateJson};
+      let currentState = initialState || {};
+      let valuesByName = new Map();
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function normalizeFilterTerms(value) {
+        return String(value || "")
+          .toLowerCase()
+          .split(/\\s+/)
+          .map((term) => term.trim())
+          .filter(Boolean);
+      }
+
+      function getFilteredEntries(state) {
+        const payload = state || {};
+        const entryList = Array.isArray(payload.entries) ? payload.entries : [];
+        const filterTerms = normalizeFilterTerms(filterInput.value);
+        if (!filterTerms.length) {
+          return entryList;
+        }
+
+        return entryList.filter((entry) => {
+          const variableName = String(entry?.variableName || "");
+          const currentValue = String(entry?.currentValue || "");
+          const draftValue = valuesByName.get(variableName) || "";
+          const haystack = (
+            variableName + " " + currentValue + " " + draftValue
+          ).toLowerCase();
+          return filterTerms.every((term) => haystack.includes(term));
+        });
+      }
+
+      function sendEntry(variableName) {
+        const input = document.querySelector('[data-entry-input="' + CSS.escape(variableName) + '"]');
+        const valueText = input instanceof HTMLInputElement ? input.value : "";
+        valuesByName.set(variableName, valueText);
+        vscode.postMessage({
+          type: "setIocRuntimeEnvironmentValue",
+          variableName,
+          valueText,
+        });
+      }
+
+      function render(state) {
+        currentState = state || {};
+        const payload = currentState;
+        const fullEntryList = Array.isArray(payload.entries) ? payload.entries : [];
+        const entryList = getFilteredEntries(payload);
+        metaNode.innerHTML =
+          '<div>Startup file: <code>' + escapeHtml(payload.startupFileName || "") + '</code></div>' +
+          '<div>Terminal: <code>' + escapeHtml(payload.terminalName || "") + '</code></div>';
+        messageNode.textContent = payload.message || "";
+        document.body.classList.toggle('stopped', payload.isRunning === false);
+        filterInput.disabled = payload.isRunning === false;
+        startIocButton.style.display = payload.isRunning === false ? '' : 'none';
+        startIocButton.disabled = payload.isRunning !== false;
+        stopIocButton.style.display = payload.isRunning === false ? 'none' : '';
+        stopIocButton.disabled = payload.isRunning === false;
+        filterSummaryNode.textContent = fullEntryList.length
+          ? ('Showing ' + String(entryList.length) + ' of ' + String(fullEntryList.length) + ' environment variables.')
+          : '';
+
+        if (!entryList.length) {
+          entriesNode.innerHTML = '<div class="empty">' +
+            escapeHtml(payload.isLoading ? 'Loading IOC runtime environment...' : 'No IOC runtime environment variables match the current filter.') +
+            '</div>';
+          return;
+        }
+
+        for (const entry of fullEntryList) {
+          const variableName = String(entry?.variableName || "");
+          if (!variableName || valuesByName.has(variableName)) {
+            continue;
+          }
+          valuesByName.set(variableName, String(entry?.currentValue || ""));
+        }
+
+        entriesNode.innerHTML = entryList.map((entry) => {
+          const variableName = String(entry?.variableName || "");
+          const currentValue = String(entry?.currentValue || "");
+          return '<div class="entry-card">' +
+            '<div class="entry-row">' +
+              '<div class="entry-name"><code>' + escapeHtml(variableName) + '</code></div>' +
+              '<input class="value-input" data-entry-input="' + escapeHtml(variableName) + '" type="text" spellcheck="false" value="' + escapeHtml(valuesByName.get(variableName) || "") + '"' + (payload.isRunning === false ? ' disabled' : '') + ' />' +
+              '<button class="set-button" data-set-entry="' + escapeHtml(variableName) + '"' + (payload.isRunning === false ? ' disabled' : '') + '>Set</button>' +
+            '</div>' +
+            '<div class="entry-meta">Current value: <code>' + escapeHtml(currentValue) + '</code></div>' +
+          '</div>';
+        }).join('');
+      }
+
+      entriesNode.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target.closest('[data-set-entry]') : undefined;
+        const variableName = target?.getAttribute('data-set-entry');
+        if (!variableName) {
+          return;
+        }
+        sendEntry(variableName);
+      });
+
+      entriesNode.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') {
+          return;
+        }
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const variableName = target?.getAttribute('data-entry-input');
+        if (!variableName) {
+          return;
+        }
+        event.preventDefault();
+        sendEntry(variableName);
+      });
+
+      entriesNode.addEventListener('input', (event) => {
+        const target = event.target instanceof HTMLInputElement ? event.target : undefined;
+        const variableName = target?.getAttribute('data-entry-input');
+        if (!variableName) {
+          return;
+        }
+        valuesByName.set(variableName, target.value);
+      });
+
+      filterInput.addEventListener('input', () => {
+        render(currentState);
+      });
+
+      showTerminalButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'showIocRuntimeEnvironmentTerminal' });
+      });
+
+      startIocButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'startIocRuntimeEnvironmentStartup' });
+      });
+
+      stopIocButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'stopIocRuntimeEnvironmentStartup' });
+      });
+
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'iocRuntimeEnvironmentState') {
+          render(event.data.state);
+        }
+      });
+
+      try {
+        render(initialState);
+      } catch (error) {
+        messageNode.classList.add('error');
+        messageNode.textContent = 'IOC Runtime Environment page error: ' + String(error && error.message ? error.message : error);
+      }
     </script>
   </body>
 </html>`;
@@ -6867,6 +11011,17 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
     </script>
   </body>
 </html>`;
+}
+
+function stripAnsiTerminalText(value) {
+  return String(value || "").replace(
+    /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g,
+    "",
+  );
+}
+
+function quoteShellArgument(value) {
+  return `'${String(value || "").replace(/'/g, `'\"'\"'`)}'`;
 }
 
 function createNonce() {
