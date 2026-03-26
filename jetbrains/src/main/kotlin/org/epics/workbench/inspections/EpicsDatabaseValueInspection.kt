@@ -6,6 +6,7 @@ import com.intellij.codeInspection.ProblemsHolder
 import com.intellij.codeInspection.ProblemHighlightType
 import com.intellij.psi.PsiElementVisitor
 import com.intellij.psi.PsiFile
+
 class EpicsDatabaseValueInspection : LocalInspectionTool() {
   override fun buildVisitor(
     holder: ProblemsHolder,
@@ -14,16 +15,27 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
   ): PsiElementVisitor {
     return object : PsiElementVisitor() {
       override fun visitFile(file: PsiFile) {
-        if (!isDatabaseFile(file.name)) {
+        val issues = when {
+          isDatabaseFile(file.name) -> EpicsDatabaseValueValidator.collectIssues(file.text)
+          isStartupFile(file.name) -> {
+            val virtualFile = file.virtualFile ?: return
+            EpicsStartupMacroValidator.collectIssues(file.project, virtualFile, file.text)
+          }
+
+          else -> emptyList()
+        }
+        if (issues.isEmpty()) {
           return
         }
 
-        for (issue in EpicsDatabaseValueValidator.collectIssues(file.text)) {
+        for (issue in issues) {
+          val quickFixes = EpicsInspectionQuickFixSupport.buildQuickFixes(file.project, file, issue)
           holder.registerProblem(
             file,
             issue.message,
             ProblemHighlightType.GENERIC_ERROR,
             file.textRange(issue.startOffset, issue.endOffset),
+            *quickFixes,
           )
         }
       }
@@ -33,6 +45,11 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
   private fun isDatabaseFile(fileName: String): Boolean {
     val extension = fileName.substringAfterLast('.', "").lowercase()
     return extension in setOf("db", "vdb", "template")
+  }
+
+  private fun isStartupFile(fileName: String): Boolean {
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    return extension in setOf("cmd", "iocsh") || fileName == "st.cmd"
   }
 }
 

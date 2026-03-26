@@ -4,6 +4,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.epicsBuildModelService
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import java.io.File
 import java.nio.file.Files
@@ -59,12 +60,13 @@ object EpicsPathResolver {
     }
 
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
-    val state = createStartupExecutionState(hostFile, ownerRoot)
+    val state = createStartupExecutionState(project, hostFile, ownerRoot)
     applyStartupStateUntilOffset(text, untilOffset, state)
     return collectDbLoadRecordsCompletionCandidates(state, rawPartial)
   }
 
   internal fun resolveStartupDatabasePath(
+    project: Project,
     hostFile: VirtualFile,
     ownerRoot: Path,
     text: String,
@@ -75,7 +77,7 @@ object EpicsPathResolver {
       return null
     }
 
-    val state = createStartupExecutionState(hostFile, ownerRoot)
+    val state = createStartupExecutionState(project, hostFile, ownerRoot)
     applyStartupStateUntilOffset(text, untilOffset, state)
     val expandedPath = expandEpicsValue(rawPath, state.variables).trim()
     if (expandedPath.isBlank()) {
@@ -121,7 +123,7 @@ object EpicsPathResolver {
       ?: return emptyList()
     val context = getSubstitutionsReferenceAtOffset(text, offset) ?: return emptyList()
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
-    return collectSubstitutionsReferences(hostFile, ownerRoot, context)
+    return collectSubstitutionsReferences(project, hostFile, ownerRoot, context)
   }
 
   internal fun collectStartupPathCompletionCandidates(
@@ -137,7 +139,7 @@ object EpicsPathResolver {
     }
 
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
-    val state = createStartupExecutionState(hostFile, ownerRoot)
+    val state = createStartupExecutionState(project, hostFile, ownerRoot)
     applyStartupStateUntilOffset(text, untilOffset, state)
     return collectPathCompletionCandidates(state, rawPartial, kind)
   }
@@ -154,10 +156,10 @@ object EpicsPathResolver {
 
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     return when {
-      isDatabaseFile(hostFile) -> resolveDatabaseReference(text, offset, ownerRoot, context)
+      isDatabaseFile(hostFile) -> resolveDatabaseReference(project, text, offset, ownerRoot, context)
       isMakefile(hostFile) -> resolveMakefileReference(project, hostFile, ownerRoot, context)
       isStartupFile(hostFile) -> resolveStartupReference(project, hostFile, text, offset, ownerRoot, context)
-      isSubstitutionsFile(hostFile) -> resolveSubstitutionsReference(hostFile, ownerRoot, context)
+      isSubstitutionsFile(hostFile) -> resolveSubstitutionsReference(project, hostFile, ownerRoot, context)
       else -> null
     }
   }
@@ -174,7 +176,7 @@ object EpicsPathResolver {
     ownerRoot: Path,
     initialContext: EpicsReferenceContext,
   ): EpicsResolvedReference? {
-    val state = createStartupExecutionState(hostFile, ownerRoot)
+    val state = createStartupExecutionState(project, hostFile, ownerRoot)
     val lineMatches = collectStartupLineMatches(text)
     for (match in lineMatches) {
       if (match.startOffset > offset) {
@@ -183,6 +185,7 @@ object EpicsPathResolver {
       if (offset in match.rangeStart until match.rangeEnd) {
         return resolvePath(
           project,
+          ownerRoot = ownerRoot,
           currentDirectory = state.currentDirectory,
           searchRoots = state.searchRoots,
           context = match.context,
@@ -193,6 +196,7 @@ object EpicsPathResolver {
     }
     return resolvePath(
       project,
+      ownerRoot = ownerRoot,
       currentDirectory = state.currentDirectory,
       searchRoots = state.searchRoots,
       context = initialContext,
@@ -201,13 +205,14 @@ object EpicsPathResolver {
   }
 
   private fun resolveDatabaseReference(
+    project: Project,
     text: String,
     offset: Int,
     ownerRoot: Path,
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
     return when (context.kind) {
-      EpicsPathKind.PROTOCOL -> resolveStreamProtocolReference(text, offset, ownerRoot, context)
+      EpicsPathKind.PROTOCOL -> resolveStreamProtocolReference(project, text, offset, ownerRoot, context)
       else -> null
     }
   }
@@ -219,7 +224,7 @@ object EpicsPathResolver {
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
     val hostDirectory = hostFile.parent?.toNioPath() ?: ownerRoot
-    val searchRoots = buildSearchRoots(ownerRoot, emptyMap(), emptyMap())
+    val searchRoots = buildSearchRoots(project, ownerRoot, emptyMap(), emptyMap())
 
     if (context.kind == EpicsPathKind.DATABASE) {
       resolveFileCandidate(hostDirectory.resolve(context.rawPath), context)?.let { return it }
@@ -234,6 +239,7 @@ object EpicsPathResolver {
 
     return resolvePath(
       project,
+      ownerRoot = ownerRoot,
       currentDirectory = hostDirectory,
       searchRoots = searchRoots,
       context = context,
@@ -242,21 +248,23 @@ object EpicsPathResolver {
   }
 
   private fun resolveSubstitutionsReference(
+    project: Project,
     hostFile: VirtualFile,
     ownerRoot: Path,
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
-    return collectSubstitutionsReferences(hostFile, ownerRoot, context).firstOrNull()
+    return collectSubstitutionsReferences(project, hostFile, ownerRoot, context).firstOrNull()
   }
 
   private fun resolveStreamProtocolReference(
+    project: Project,
     text: String,
     offset: Int,
     ownerRoot: Path,
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
     val protocolPath = getStreamProtocolReferenceAtOffset(text, offset) ?: return null
-    val searchDirectories = collectStreamProtocolSearchDirectories(ownerRoot)
+    val searchDirectories = collectStreamProtocolSearchDirectories(project, ownerRoot)
     for (searchDirectory in searchDirectories) {
       val candidate = resolveAbsoluteOrRelative(searchDirectory, protocolPath)
       resolveFileCandidate(candidate, context)?.let { return it }
@@ -266,6 +274,7 @@ object EpicsPathResolver {
 
   private fun resolvePath(
     project: Project,
+    ownerRoot: Path,
     currentDirectory: Path,
     searchRoots: List<Path>,
     context: EpicsReferenceContext,
@@ -286,6 +295,16 @@ object EpicsPathResolver {
 
     for (root in searchRoots) {
       searchPreferredDirectories(root, basename, context)?.let { return it }
+    }
+
+    when (context.kind) {
+      EpicsPathKind.DBD -> project.epicsBuildModelService().findAvailableDbd(ownerRoot, basename)?.let { candidate ->
+        resolveFileCandidate(candidate, context)?.let { return it }
+      }
+      EpicsPathKind.LIBRARY -> project.epicsBuildModelService().findAvailableLibrary(ownerRoot, basename)?.let { candidate ->
+        resolveFileCandidate(candidate, context)?.let { return it }
+      }
+      else -> Unit
     }
 
     for (contentRoot in ProjectRootManager.getInstance(project).contentRoots) {
@@ -517,7 +536,7 @@ object EpicsPathResolver {
     }.replace(File.separatorChar, '/')
   }
 
-  private fun createStartupExecutionState(hostFile: VirtualFile, ownerRoot: Path): StartupExecutionState {
+  private fun createStartupExecutionState(project: Project, hostFile: VirtualFile, ownerRoot: Path): StartupExecutionState {
     val releaseVariables = loadReleaseVariables(ownerRoot).toMutableMap()
     val envPathsVariables = loadEnvPathsVariables(hostFile.parent?.toNioPath(), releaseVariables)
     val variables = linkedMapOf<String, String>()
@@ -528,7 +547,7 @@ object EpicsPathResolver {
     return StartupExecutionState(
       currentDirectory = currentDirectory,
       variables = variables,
-      searchRoots = buildSearchRoots(ownerRoot, releaseVariables, envPathsVariables),
+      searchRoots = buildSearchRoots(project, ownerRoot, releaseVariables, envPathsVariables),
     )
   }
 
@@ -600,7 +619,7 @@ object EpicsPathResolver {
     offset: Int,
   ): EpicsReferenceContext? {
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
-    val state = createStartupExecutionState(hostFile, ownerRoot)
+    val state = createStartupExecutionState(project, hostFile, ownerRoot)
     var runningOffset = 0
     for (line in text.split('\n')) {
       findStartupReferenceOnLine(line, runningOffset)?.let { match ->
@@ -805,10 +824,15 @@ object EpicsPathResolver {
   }
 
   private fun buildSearchRoots(
+    project: Project?,
     ownerRoot: Path,
     releaseVariables: Map<String, String>,
     envVariables: Map<String, String>,
   ): List<Path> {
+    project?.let { currentProject ->
+      return currentProject.epicsBuildModelService().collectSearchRoots(ownerRoot, releaseVariables, envVariables)
+    }
+
     val roots = linkedSetOf<Path>()
     roots.add(ownerRoot.normalize())
     (releaseVariables.values + envVariables.values).forEach { value ->
@@ -950,14 +974,15 @@ object EpicsPathResolver {
     return Path.of(project.basePath ?: hostFile.parent?.path ?: ".").normalize()
   }
 
-  private fun collectStreamProtocolSearchDirectories(ownerRoot: Path): List<Path> {
+  private fun collectStreamProtocolSearchDirectories(project: Project, ownerRoot: Path): List<Path> {
     val iocBootDirectory = ownerRoot.resolve("iocBoot")
-    if (!iocBootDirectory.exists() || !iocBootDirectory.isDirectory()) {
-      return emptyList()
-    }
-
     val searchDirectories = linkedSetOf<Path>()
-    val startupFiles = collectStartupFiles(iocBootDirectory)
+    val startupFiles = project.epicsBuildModelService().collectStartupEntryPoints(ownerRoot).ifEmpty {
+      if (!iocBootDirectory.exists() || !iocBootDirectory.isDirectory()) {
+        return emptyList()
+      }
+      collectStartupFiles(iocBootDirectory)
+    }
     for (startupPath in startupFiles) {
       val startupFile = LocalFileSystem.getInstance().findFileByIoFile(startupPath.toFile()) ?: continue
       val text = runCatching { startupFile.inputStream.bufferedReader().use { it.readText() } }.getOrNull() ?: continue
@@ -965,7 +990,7 @@ object EpicsPathResolver {
         continue
       }
 
-      val state = createStartupExecutionState(startupFile, ownerRoot)
+      val state = createStartupExecutionState(project, startupFile, ownerRoot)
       for (line in text.split('\n')) {
         val envMatch = STARTUP_ENV_SET_REGEX.find(line)
         if (envMatch != null) {
@@ -1288,6 +1313,7 @@ object EpicsPathResolver {
   }
 
   private fun collectSubstitutionsReferences(
+    project: Project,
     hostFile: VirtualFile,
     ownerRoot: Path,
     context: EpicsReferenceContext,
@@ -1316,7 +1342,7 @@ object EpicsPathResolver {
 
     candidatePathsForKind(ownerRoot, expandedPath, basename, context.kind).forEach(::addCandidate)
 
-    buildSearchRoots(ownerRoot, releaseVariables, emptyMap())
+    buildSearchRoots(project, ownerRoot, releaseVariables, emptyMap())
       .asSequence()
       .filter { it.normalize() != ownerRoot.normalize() }
       .forEach { searchRoot ->

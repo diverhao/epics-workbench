@@ -8,6 +8,7 @@ internal object EpicsDatabaseValueValidator {
     val startOffset: Int,
     val endOffset: Int,
     val message: String,
+    val code: String? = null,
   )
 
   fun collectIssues(text: String): List<ValidationIssue> {
@@ -29,6 +30,7 @@ internal object EpicsDatabaseValueValidator {
               startOffset = fieldDeclaration.fieldNameStart,
               endOffset = fieldDeclaration.fieldNameEnd,
               message = "Field \"${fieldDeclaration.fieldName}\" is not valid for record type \"${recordDeclaration.recordType}\".",
+              code = "epics.database.invalidFieldName",
             )
           }
         }
@@ -75,6 +77,7 @@ internal object EpicsDatabaseValueValidator {
           startOffset = fieldDeclaration.valueStart,
           endOffset = fieldDeclaration.valueEnd,
           message = "Field \"${fieldDeclaration.fieldName}\" must be one of the menu choices for \"${recordDeclaration.recordType}\".",
+          code = "epics.database.invalidMenuFieldValue",
         )
       }
     }
@@ -100,6 +103,7 @@ internal object EpicsDatabaseValueValidator {
           startOffset = declaration.nameStart,
           endOffset = declaration.nameEnd,
           message = "Duplicate record name \"$recordName\" in this file.",
+          code = "epics.database.duplicateRecordName",
         )
       }
     }

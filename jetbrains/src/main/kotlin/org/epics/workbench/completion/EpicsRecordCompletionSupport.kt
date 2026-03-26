@@ -3,6 +3,8 @@ package org.epics.workbench.completion
 import com.intellij.application.options.CodeStyle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.EpicsBuildModelPathEntry
+import org.epics.workbench.build.epicsBuildModelService
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -13,6 +15,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.io.path.extension
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 import kotlin.io.path.name
@@ -321,11 +324,16 @@ internal object EpicsRecordCompletionSupport {
   private fun loadWorkspaceRecordTypes(project: Project, hostFile: VirtualFile): List<String> {
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     val releaseVariables = loadReleaseVariables(ownerRoot)
-    val searchRoots = buildSearchRoots(ownerRoot, releaseVariables)
+    val buildModel = project.epicsBuildModelService().loadBuildModel(ownerRoot)
+    val searchRoots = buildSearchRoots(project, ownerRoot, releaseVariables)
     val cacheKey = searchRoots.joinToString("|") { it.pathString }
 
     return workspaceRecordTypeCache.computeIfAbsent(cacheKey) {
       val names = linkedSetOf<String>()
+      val buildModelDbdEntries = buildModel?.availableDbds.orEmpty()
+      if (buildModelDbdEntries.isNotEmpty()) {
+        collectRecordTypesFromBuildModelEntries(buildModelDbdEntries, names)
+      }
       for (root in searchRoots) {
         val dbdDirectory = root.resolve("dbd")
         if (!dbdDirectory.exists() || !dbdDirectory.isDirectory()) {
@@ -407,9 +415,14 @@ internal object EpicsRecordCompletionSupport {
   }
 
   private fun buildSearchRoots(
+    project: Project?,
     ownerRoot: Path,
     releaseVariables: Map<String, String>,
   ): List<Path> {
+    project?.let { currentProject ->
+      return currentProject.epicsBuildModelService().collectSearchRoots(ownerRoot, releaseVariables, emptyMap())
+    }
+
     val roots = linkedSetOf<Path>()
     roots.add(ownerRoot.normalize())
     releaseVariables.values.forEach { value ->
@@ -419,6 +432,27 @@ internal object EpicsRecordCompletionSupport {
       }
     }
     return roots.toList()
+  }
+
+  private fun collectRecordTypesFromBuildModelEntries(
+    entries: List<EpicsBuildModelPathEntry>,
+    names: MutableSet<String>,
+  ) {
+    for (entry in entries) {
+      val absolutePath = entry.absolutePath?.let { path ->
+        runCatching { Path.of(path) }.getOrNull()
+      } ?: continue
+      if (!absolutePath.exists() || absolutePath.extension.lowercase() != "dbd") {
+        continue
+      }
+      val text = runCatching { Files.readString(absolutePath) }.getOrNull() ?: continue
+      RECORD_TYPE_REGEX.findAll(text).forEach { match ->
+        val recordType = match.groups[1]?.value?.trim().orEmpty()
+        if (recordType.isNotEmpty()) {
+          names += recordType
+        }
+      }
+    }
   }
 
   private fun resolveExplicitFieldInitialValue(

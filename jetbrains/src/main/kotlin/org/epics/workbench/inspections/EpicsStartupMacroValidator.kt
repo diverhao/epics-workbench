@@ -2,6 +2,7 @@ package org.epics.workbench.inspections
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.epicsBuildModelService
 import org.epics.workbench.navigation.EpicsPathKind
 import org.epics.workbench.navigation.EpicsPathResolver
 import java.nio.charset.Charset
@@ -17,6 +18,13 @@ internal object EpicsStartupMacroValidator {
 
   private data class MacroAssignment(
     val name: String,
+    val nameStart: Int,
+    val nameEnd: Int,
+  )
+
+  private data class StartupRegistrationStatement(
+    val iocName: String,
+    val functionName: String,
     val nameStart: Int,
     val nameEnd: Int,
   )
@@ -51,6 +59,7 @@ internal object EpicsStartupMacroValidator {
           startOffset = statement.pathStart,
           endOffset = statement.pathEnd,
           message = "dbLoadRecords is missing macro assignments for \"${resolved.targetFile.name}\": ${missingMacroNames.joinToString(", ")}.",
+          code = "epics.startup.missingDbLoadRecordsMacros",
         )
       }
 
@@ -62,6 +71,21 @@ internal object EpicsStartupMacroValidator {
           startOffset = assignment.nameStart,
           endOffset = assignment.nameEnd,
           message = "Macro \"${assignment.name}\" is not defined in \"${resolved.targetFile.name}\".",
+        )
+      }
+    }
+
+    val knownIocNames = collectKnownIocNames(project, hostFile)
+    if (knownIocNames.isNotEmpty()) {
+      for (statement in extractStartupRegistrationStatements(text)) {
+        if (statement.iocName in knownIocNames) {
+          continue
+        }
+        issues += EpicsDatabaseValueValidator.ValidationIssue(
+          startOffset = statement.nameStart,
+          endOffset = statement.nameEnd,
+          message = "Unknown IOC registration function \"${statement.functionName}\" for this EPICS application.",
+          code = "epics.startup.unknownIocRegistrationFunction",
         )
       }
     }
@@ -87,6 +111,30 @@ internal object EpicsStartupMacroValidator {
             macrosStart = macrosGroup?.let { lineOffset + it.range.first },
           )
         }
+      }
+
+      lineOffset += line.length + 1
+    }
+
+    return statements
+  }
+
+  private fun extractStartupRegistrationStatements(text: String): List<StartupRegistrationStatement> {
+    val statements = mutableListOf<StartupRegistrationStatement>()
+    var lineOffset = 0
+
+    for (line in text.split('\n')) {
+      val match = REGISTER_RECORD_DEVICE_DRIVER_REGEX.find(line)
+      if (match != null) {
+        val iocName = match.groups[1]?.value.orEmpty()
+        val functionName = "${iocName}_registerRecordDeviceDriver"
+        val nameStart = lineOffset + line.indexOf(functionName)
+        statements += StartupRegistrationStatement(
+          iocName = iocName,
+          functionName = functionName,
+          nameStart = nameStart,
+          nameEnd = nameStart + functionName.length,
+        )
       }
 
       lineOffset += line.length + 1
@@ -254,8 +302,19 @@ internal object EpicsStartupMacroValidator {
     }
   }
 
+  private fun collectKnownIocNames(project: Project, hostFile: VirtualFile): Set<String> {
+    val ownerRoot = EpicsPathResolver.findOwningEpicsRoot(project, hostFile)
+    return project.epicsBuildModelService()
+      .loadBuildModel(ownerRoot)
+      ?.iocs
+      ?.mapTo(linkedSetOf()) { it.name }
+      .orEmpty()
+  }
+
   private val DB_LOAD_RECORDS_REGEX =
     Regex("""^\s*dbLoadRecords\(\s*"([^"\n]+)"(?:\s*,\s*"((?:[^"\\]|\\.)*)")?""")
+  private val REGISTER_RECORD_DEVICE_DRIVER_REGEX =
+    Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)_registerRecordDeviceDriver\s*\(""")
   private val NAMED_ASSIGNMENT_REGEX = Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=""")
   private val DATABASE_MACRO_REGEX =
     Regex("""\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}""")

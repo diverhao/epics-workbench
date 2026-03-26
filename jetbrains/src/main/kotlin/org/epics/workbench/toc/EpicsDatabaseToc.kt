@@ -65,6 +65,12 @@ internal object EpicsDatabaseToc {
     return null
   }
 
+  internal fun extractMacroAssignmentValues(text: String): Map<String, String> {
+    return extractMacroAssignments(text)
+      .filterValues { assignment -> assignment.hasAssignment }
+      .mapValues { (_, assignment) -> assignment.value }
+  }
+
   internal fun extractRuntimeEntries(text: String): List<TocRuntimeEntry> {
     val range = findBlockRange(text) ?: return emptyList()
     val declarations = extractRecordDeclarations(text)

@@ -1214,6 +1214,7 @@ class EpicsDatabaseCompletionContributor : CompletionContributor() {
     ): List<String> {
       val ownerRoot = EpicsPathResolver.findOwningEpicsRoot(project, hostFile)
       val resolved = EpicsPathResolver.resolveStartupDatabasePath(
+        project = project,
         hostFile = hostFile,
         ownerRoot = ownerRoot,
         text = text,

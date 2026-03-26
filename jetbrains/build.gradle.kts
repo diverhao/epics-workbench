@@ -47,6 +47,9 @@ tasks {
     from("../vscode/data") {
       into("data")
     }
+    from("../vscode/scripts/epics-build-model.js") {
+      into("build-model")
+    }
   }
 
   withType<JavaCompile> {

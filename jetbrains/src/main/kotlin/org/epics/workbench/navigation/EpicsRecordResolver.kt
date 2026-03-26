@@ -4,6 +4,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.epicsBuildModelService
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -106,7 +107,7 @@ internal object EpicsRecordResolver {
     val searchDirectories = linkedSetOf<Path>()
 
     hostFile.parent?.toNioPath()?.let(searchDirectories::add)
-    for (root in buildSearchRoots(ownerRoot, releaseVariables, envPathsVariables)) {
+    for (root in buildSearchRoots(project, ownerRoot, releaseVariables, envPathsVariables)) {
       searchDirectories.add(root.resolve("db"))
       searchDirectories.add(root.resolve("Db"))
     }
@@ -153,7 +154,7 @@ internal object EpicsRecordResolver {
     val searchDirectories = linkedSetOf<Path>()
 
     hostFile.parent?.toNioPath()?.let(searchDirectories::add)
-    for (root in buildSearchRoots(ownerRoot, releaseVariables, envPathsVariables)) {
+    for (root in buildSearchRoots(project, ownerRoot, releaseVariables, envPathsVariables)) {
       searchDirectories.add(root.resolve("db"))
       searchDirectories.add(root.resolve("Db"))
     }
@@ -250,7 +251,7 @@ internal object EpicsRecordResolver {
     val state = StartupState(
       currentDirectory = hostFile.parent?.toNioPath() ?: ownerRoot,
       envVariables = envVariables,
-      searchRoots = buildSearchRoots(ownerRoot, releaseVariables, envPathsVariables),
+      searchRoots = buildSearchRoots(project, ownerRoot, releaseVariables, envPathsVariables),
     )
     val definitionsByName = linkedMapOf<String, MutableList<EpicsResolvedRecordDefinition>>()
 
@@ -967,10 +968,15 @@ internal object EpicsRecordResolver {
   }
 
   private fun buildSearchRoots(
+    project: Project?,
     ownerRoot: Path,
     releaseVariables: Map<String, String>,
     envVariables: Map<String, String>,
   ): List<Path> {
+    project?.let { currentProject ->
+      return currentProject.epicsBuildModelService().collectSearchRoots(ownerRoot, releaseVariables, envVariables)
+    }
+
     val roots = linkedSetOf<Path>()
     roots.add(ownerRoot.normalize())
     (releaseVariables.values + envVariables.values).forEach { rawValue ->

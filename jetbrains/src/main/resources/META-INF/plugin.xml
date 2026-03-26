@@ -332,6 +332,18 @@
       description="Open the current EPICS channel target in a file-less Monitor widget"
     />
     <action
+      id="org.epics.workbench.FindEpicsReferencesAction"
+      class="org.epics.workbench.refactor.FindEpicsReferencesAction"
+      text="Find EPICS References"
+      description="Find EPICS references for the symbol under the caret"
+    />
+    <action
+      id="org.epics.workbench.RenameEpicsSymbolAction"
+      class="org.epics.workbench.refactor.RenameEpicsSymbolAction"
+      text="Rename EPICS Symbol"
+      description="Rename the EPICS symbol under the caret across the project"
+    />
+    <action
       id="org.epics.workbench.OpenInChannelGraphAction"
       class="org.epics.workbench.graph.OpenInChannelGraphAction"
       text="Channel Graph"
@@ -382,6 +394,9 @@
       <reference ref="org.epics.workbench.OpenIocRuntimeCommandsAction" />
       <reference ref="org.epics.workbench.OpenIocRuntimeVariablesAction" />
       <reference ref="org.epics.workbench.OpenIocRuntimeEnvironmentAction" />
+      <separator />
+      <reference ref="org.epics.workbench.FindEpicsReferencesAction" />
+      <reference ref="org.epics.workbench.RenameEpicsSymbolAction" />
       <separator />
       <reference ref="org.epics.workbench.OpenInProbeAction" />
       <reference ref="org.epics.workbench.OpenInPvlistAction" />
