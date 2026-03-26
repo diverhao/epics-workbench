@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import java.awt.BorderLayout
 import javax.swing.JComponent
@@ -21,6 +22,8 @@ class EpicsRuntimeProjectConfigurable(
   private lateinit var protocolCombo: ComboBox<EpicsRuntimeProtocol>
   private lateinit var caAutoAddrListCombo: ComboBox<EpicsCaAutoAddrList>
   private lateinit var caAddrListArea: JBTextArea
+  private lateinit var iocStartupShellField: JBTextField
+  private lateinit var iocStartupShellArgsField: JBTextField
 
   override fun getId(): String = "org.epics.workbench.runtime.configuration"
 
@@ -38,6 +41,12 @@ class EpicsRuntimeProjectConfigurable(
       wrapStyleWord = true
       emptyText.text = "One address per line"
     }
+    iocStartupShellField = JBTextField().apply {
+      emptyText.text = "Leave blank to launch ./st.cmd directly"
+    }
+    iocStartupShellArgsField = JBTextField().apply {
+      emptyText.text = "Examples: -lc, -l -c, -c"
+    }
 
     val note = buildString {
       append("Saved to ")
@@ -53,6 +62,8 @@ class EpicsRuntimeProjectConfigurable(
         JScrollPane(caAddrListArea),
         true,
       )
+      .addLabeledComponent("IOC startup shell", iocStartupShellField)
+      .addLabeledComponent("IOC startup shell args", iocStartupShellArgsField)
       .addComponent(
         JPanel(BorderLayout()).apply {
           add(JBLabel(note), BorderLayout.WEST)
@@ -92,6 +103,8 @@ class EpicsRuntimeProjectConfigurable(
     caAutoAddrListCombo.selectedItem = configuration.caAutoAddrList
     caAddrListArea.text = configuration.caAddrList.joinToString("\n")
     caAddrListArea.caretPosition = 0
+    iocStartupShellField.text = configuration.iocStartupShell
+    iocStartupShellArgsField.text = configuration.iocStartupShellArgs
   }
 
   override fun disposeUIResources() {
@@ -107,6 +120,8 @@ class EpicsRuntimeProjectConfigurable(
         .filter(String::isNotEmpty)
         .toList(),
       caAutoAddrList = caAutoAddrListCombo.item ?: EpicsCaAutoAddrList.YES,
+      iocStartupShell = iocStartupShellField.text.trim(),
+      iocStartupShellArgs = iocStartupShellArgsField.text.trim(),
     )
   }
 }

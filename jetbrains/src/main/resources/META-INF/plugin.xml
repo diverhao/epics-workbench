@@ -216,6 +216,7 @@
     <postStartupActivity implementation="org.epics.workbench.inspections.EpicsDatabaseValidationActivity" />
     <postStartupActivity implementation="org.epics.workbench.documentation.EpicsHoverDocumentationActivity" />
     <postStartupActivity implementation="org.epics.workbench.runtime.EpicsMonitorRuntimeActivity" />
+    <postStartupActivity implementation="org.epics.workbench.runtime.EpicsIocStartupWatermarkActivity" />
     <projectConfigurable
       groupId="tools"
       id="org.epics.workbench.runtime.configuration"
@@ -230,6 +231,7 @@
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsPvlistWidgetFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsMonitorWidgetFileEditorProvider" />
     <fileEditorProvider implementation="org.epics.workbench.widget.EpicsChannelGraphFileEditorProvider" />
+    <fileEditorProvider implementation="org.epics.workbench.widget.EpicsIocRuntimePageFileEditorProvider" />
   </extensions>
 
   <actions>
@@ -335,9 +337,52 @@
       text="Channel Graph"
       description="Open the current EPICS record target in a file-less Channel Graph widget"
     />
-    <group id="org.epics.workbench.DatabaseEditorPopupGroup" popup="false">
+    <action
+      id="org.epics.workbench.StartIocAction"
+      class="org.epics.workbench.runtime.StartIocAction"
+      text="Start IOC"
+      description="Start the selected IOC startup script inside EPICS Workbench"
+    />
+    <action
+      id="org.epics.workbench.StopIocAction"
+      class="org.epics.workbench.runtime.StopIocAction"
+      text="Stop IOC"
+      description="Stop the running IOC started from the selected startup file"
+    />
+    <action
+      id="org.epics.workbench.ShowRunningTerminalAction"
+      class="org.epics.workbench.runtime.ShowRunningTerminalAction"
+      text="Show Running Terminal"
+      description="Reveal the running IOC console for this startup file"
+    />
+    <action
+      id="org.epics.workbench.OpenIocRuntimeCommandsAction"
+      class="org.epics.workbench.runtime.OpenIocRuntimeCommandsAction"
+      text="IOC Runtime Commands"
+      description="Open IOC runtime commands for the running startup file"
+    />
+    <action
+      id="org.epics.workbench.OpenIocRuntimeVariablesAction"
+      class="org.epics.workbench.runtime.OpenIocRuntimeVariablesAction"
+      text="IOC Runtime Variables"
+      description="Open IOC runtime variables for the running startup file"
+    />
+    <action
+      id="org.epics.workbench.OpenIocRuntimeEnvironmentAction"
+      class="org.epics.workbench.runtime.OpenIocRuntimeEnvironmentAction"
+      text="IOC Runtime Environment"
+      description="Open IOC runtime environment variables for the running startup file"
+    />
+    <group id="org.epics.workbench.EditorPopupGroup" popup="false">
       <reference ref="org.epics.workbench.UpdateDatabaseTocAction" />
       <reference ref="org.epics.workbench.ToggleMonitorChannelsAction" />
+      <reference ref="org.epics.workbench.StartIocAction" />
+      <reference ref="org.epics.workbench.StopIocAction" />
+      <reference ref="org.epics.workbench.ShowRunningTerminalAction" />
+      <reference ref="org.epics.workbench.OpenIocRuntimeCommandsAction" />
+      <reference ref="org.epics.workbench.OpenIocRuntimeVariablesAction" />
+      <reference ref="org.epics.workbench.OpenIocRuntimeEnvironmentAction" />
+      <separator />
       <reference ref="org.epics.workbench.OpenInProbeAction" />
       <reference ref="org.epics.workbench.OpenInPvlistAction" />
       <reference ref="org.epics.workbench.OpenInMonitorAction" />
@@ -352,9 +397,16 @@
       <separator />
       <add-to-group group-id="EditorPopupMenu" anchor="first" />
     </group>
-    <group id="org.epics.workbench.DatabaseProjectPopupGroup" popup="false">
+    <group id="org.epics.workbench.ProjectPopupGroup" popup="false">
       <reference ref="org.epics.workbench.UpdateDatabaseTocAction" />
       <reference ref="org.epics.workbench.ToggleMonitorChannelsAction" />
+      <reference ref="org.epics.workbench.StartIocAction" />
+      <reference ref="org.epics.workbench.StopIocAction" />
+      <reference ref="org.epics.workbench.ShowRunningTerminalAction" />
+      <reference ref="org.epics.workbench.OpenIocRuntimeCommandsAction" />
+      <reference ref="org.epics.workbench.OpenIocRuntimeVariablesAction" />
+      <reference ref="org.epics.workbench.OpenIocRuntimeEnvironmentAction" />
+      <separator />
       <reference ref="org.epics.workbench.OpenInProbeAction" />
       <reference ref="org.epics.workbench.OpenInPvlistAction" />
       <reference ref="org.epics.workbench.OpenInMonitorAction" />

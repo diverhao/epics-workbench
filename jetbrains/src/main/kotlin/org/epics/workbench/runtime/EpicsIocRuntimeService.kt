@@ -1,0 +1,520 @@
+package org.epics.workbench.runtime
+
+import com.intellij.execution.executors.DefaultRunExecutor
+import com.intellij.execution.process.ColoredProcessHandler
+import com.intellij.execution.filters.TextConsoleBuilderFactory
+import com.intellij.execution.process.ProcessEvent
+import com.intellij.execution.process.ProcessListener
+import com.intellij.execution.ui.ConsoleView
+import com.intellij.execution.ui.RunContentDescriptor
+import com.intellij.execution.ui.RunContentManager
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileTypes.PlainTextFileType
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.testFramework.LightVirtualFile
+import com.intellij.util.messages.Topic
+import com.intellij.util.execution.ParametersListUtil
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.attribute.FileTime
+import java.util.concurrent.atomic.AtomicReference
+
+interface EpicsIocRuntimeStateListener {
+  fun startupStateChanged(startupPath: String, running: Boolean)
+
+  companion object {
+    @JvmField
+    val TOPIC: Topic<EpicsIocRuntimeStateListener> = Topic.create(
+      "EPICS IOC runtime state",
+      EpicsIocRuntimeStateListener::class.java,
+    )
+  }
+}
+
+data class EpicsIocRuntimeVariable(
+  val type: String,
+  val name: String,
+  val value: String,
+)
+
+data class EpicsIocRuntimeEnvironmentEntry(
+  val name: String,
+  val value: String,
+)
+
+@Service(Service.Level.PROJECT)
+class EpicsIocRuntimeService(
+  private val project: Project,
+) : Disposable {
+  private val sessionsByStartupPath = linkedMapOf<String, IocProcessSession>()
+  private val sessionLock = Any()
+  private val configurationService = project.service<EpicsRuntimeProjectConfigurationService>()
+
+  fun isRunning(startupFile: VirtualFile): Boolean {
+    val startupPath = normalizeStartupPath(startupFile) ?: return false
+    synchronized(sessionLock) {
+      return sessionsByStartupPath[startupPath]?.isRunning == true
+    }
+  }
+
+  fun getConsoleTitle(startupFile: VirtualFile): String? {
+    val startupPath = normalizeStartupPath(startupFile) ?: return null
+    synchronized(sessionLock) {
+      return sessionsByStartupPath[startupPath]?.consoleTitle
+    }
+  }
+
+  fun startIoc(startupFile: VirtualFile): Result<Unit> {
+    val startupPath = normalizeStartupPath(startupFile)
+      ?: return Result.failure(IllegalArgumentException("Unsupported IOC startup file."))
+    synchronized(sessionLock) {
+      val existing = sessionsByStartupPath[startupPath]
+      if (existing != null && existing.isRunning) {
+        showConsole(existing)
+        return Result.success(Unit)
+      }
+    }
+
+    val workingDirectory = Path.of(startupFile.path).parent
+      ?: return Result.failure(IllegalStateException("Startup file does not have a parent directory."))
+    val commandLine = buildStartupCommandLine(startupFile)
+
+    val process = runCatching {
+      ProcessBuilder(commandLine)
+        .directory(workingDirectory.toFile())
+        .redirectErrorStream(true)
+        .start()
+    }.getOrElse { error ->
+      return Result.failure(error)
+    }
+
+    val commandPresentation = commandLine.joinToString(" ")
+    val handler = ColoredProcessHandler(process, commandPresentation, StandardCharsets.UTF_8)
+    val console = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
+    console.attachToProcess(handler)
+
+    val consoleTitle = buildConsoleTitle(startupFile)
+    val descriptor = RunContentDescriptor(console, handler, console.component, consoleTitle)
+
+    val session = IocProcessSession(
+      startupPath = startupPath,
+      startupName = startupFile.name,
+      workingDirectory = workingDirectory,
+      consoleTitle = consoleTitle,
+      process = process,
+      processHandler = handler,
+      console = console,
+      descriptor = descriptor,
+    )
+
+    handler.addProcessListener(
+      object : ProcessListener {
+        override fun processTerminated(event: ProcessEvent) {
+          onProcessTerminated(session.startupPath)
+        }
+      },
+    )
+
+    synchronized(sessionLock) {
+      sessionsByStartupPath[startupPath] = session
+    }
+
+    handler.startNotify()
+    showConsole(session)
+    notifyStartupStateChanged(startupPath, true)
+    notifyConsoleEvent(
+      startupFile.name,
+      consoleTitle,
+      "Started ${startupFile.name} in \"$consoleTitle\".",
+      session,
+    )
+    return Result.success(Unit)
+  }
+
+  fun stopIoc(startupFile: VirtualFile) {
+    val startupPath = normalizeStartupPath(startupFile) ?: return
+    val session = synchronized(sessionLock) { sessionsByStartupPath[startupPath] } ?: return
+    session.processHandler.destroyProcess()
+    notifyConsoleEvent(
+      startupFile.name,
+      session.consoleTitle,
+      "Stopped ${startupFile.name} in \"${session.consoleTitle}\".",
+      session,
+    )
+  }
+
+  fun showRunningConsole(startupFile: VirtualFile) {
+    val startupPath = normalizeStartupPath(startupFile) ?: return
+    val session = synchronized(sessionLock) { sessionsByStartupPath[startupPath] } ?: return
+    showConsole(session)
+  }
+
+  fun getCommandNames(startupFile: VirtualFile): List<String> {
+    val session = getRequiredSession(startupFile)
+    session.commandNames.get()?.let { return it }
+    val output = captureRawCommand(session, "help")
+    val commands = parseCommandNames(output)
+    session.commandNames.compareAndSet(null, commands)
+    return session.commandNames.get().orEmpty()
+  }
+
+  fun getCommandHelp(startupFile: VirtualFile, commandNames: List<String>): Map<String, String> {
+    if (commandNames.isEmpty()) {
+      return emptyMap()
+    }
+    val session = getRequiredSession(startupFile)
+    val result = linkedMapOf<String, String>()
+    synchronized(session.commandLock) {
+      commandNames.forEach { commandName ->
+        session.commandHelp[commandName]?.let { helpText ->
+          result[commandName] = helpText
+        }
+      }
+      val missing = commandNames.filterNot { result.containsKey(it) }
+      missing.chunked(HELP_BATCH_SIZE).forEach { batch ->
+        val output = captureRawCommandLocked(session, "help ${batch.joinToString(" ")}")
+        parseCommandHelp(batch, output).forEach { (commandName, helpText) ->
+          session.commandHelp[commandName] = helpText
+          result[commandName] = helpText
+        }
+      }
+    }
+    return commandNames.associateWith { result[it].orEmpty() }
+  }
+
+  fun listRuntimeVariables(startupFile: VirtualFile): List<EpicsIocRuntimeVariable> {
+    val output = captureCommandOutput(startupFile, "var")
+    return parseRuntimeVariables(output)
+  }
+
+  fun setRuntimeVariable(startupFile: VirtualFile, variableName: String, value: String) {
+    sendCommandText(startupFile, "var $variableName $value")
+  }
+
+  fun listRuntimeEnvironment(startupFile: VirtualFile): List<EpicsIocRuntimeEnvironmentEntry> {
+    val output = captureCommandOutput(startupFile, "epicsEnvShow")
+    return parseRuntimeEnvironment(output)
+  }
+
+  fun setRuntimeEnvironment(startupFile: VirtualFile, name: String, value: String) {
+    val escaped = value.replace("\"", "\\\"")
+    sendCommandText(startupFile, "epicsEnvSet $name \"$escaped\"")
+  }
+
+  fun sendCommandText(startupFile: VirtualFile, commandText: String) {
+    val session = getRequiredSession(startupFile)
+    synchronized(session.commandLock) {
+      sendLine(session, commandText)
+    }
+  }
+
+  fun captureCommandOutput(startupFile: VirtualFile, commandText: String): String {
+    val session = getRequiredSession(startupFile)
+    return captureRawCommand(session, commandText)
+  }
+
+  fun openCapturedOutput(startupFile: VirtualFile, titlePrefix: String, commandText: String, output: String) {
+    val content = buildString {
+      append("# ")
+      append(commandText)
+      appendLine()
+      appendLine()
+      append(output.trimEnd())
+      appendLine()
+    }
+    val suffix = titlePrefix.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+    val file = LightVirtualFile(
+      "epics-${suffix.ifEmpty { "ioc" }}-${startupFile.name}.txt",
+      PlainTextFileType.INSTANCE,
+      content,
+    )
+    ApplicationManager.getApplication().invokeLater {
+      FileEditorManager.getInstance(project).openFile(file, true, true)
+    }
+  }
+
+  override fun dispose() {
+    val sessions = synchronized(sessionLock) {
+      sessionsByStartupPath.values.toList().also { sessionsByStartupPath.clear() }
+    }
+    sessions.forEach { session ->
+      runCatching { session.processHandler.destroyProcess() }
+      Disposer.dispose(session.console)
+    }
+  }
+
+  private fun getRequiredSession(startupFile: VirtualFile): IocProcessSession {
+    val startupPath = normalizeStartupPath(startupFile)
+      ?: throw IllegalStateException("Unsupported IOC startup file.")
+    return synchronized(sessionLock) {
+      sessionsByStartupPath[startupPath]
+    }?.takeIf { it.isRunning }
+      ?: throw IllegalStateException("${startupFile.name} is not running in EPICS Workbench.")
+  }
+
+  private fun captureRawCommand(session: IocProcessSession, commandText: String): String {
+    synchronized(session.commandLock) {
+      return captureRawCommandLocked(session, commandText)
+    }
+  }
+
+  private fun captureRawCommandLocked(session: IocProcessSession, commandText: String): String {
+    val tempFile = Files.createTempFile(TEMP_FILE_PREFIX, ".txt")
+    val output = runCatching {
+      Files.deleteIfExists(tempFile)
+      sendLine(session, "$commandText > ${tempFile.toAbsolutePath()}")
+      waitForCapturedOutput(tempFile)
+      sanitizeCapturedOutput(Files.readString(tempFile))
+    }.also {
+      runCatching { Files.deleteIfExists(tempFile) }
+    }
+    return output.getOrThrow()
+  }
+
+  private fun waitForCapturedOutput(tempFile: Path) {
+    val deadline = System.currentTimeMillis() + CAPTURE_TIMEOUT_MS
+    var lastSize = -1L
+    var lastModified: FileTime? = null
+    var stableReads = 0
+
+    while (System.currentTimeMillis() < deadline) {
+      if (Files.exists(tempFile)) {
+        val currentSize = runCatching { Files.size(tempFile) }.getOrDefault(-1L)
+        val currentModified = runCatching { Files.getLastModifiedTime(tempFile) }.getOrNull()
+        if (currentSize >= 0L && currentModified != null) {
+          if (currentSize == lastSize && currentModified == lastModified) {
+            stableReads += 1
+            if (stableReads >= 4) {
+              return
+            }
+          } else {
+            stableReads = 0
+            lastSize = currentSize
+            lastModified = currentModified
+          }
+        }
+      }
+      Thread.sleep(CAPTURE_POLL_INTERVAL_MS)
+    }
+    throw IllegalStateException("Timed out waiting for IOC output.")
+  }
+
+  private fun sendLine(session: IocProcessSession, line: String) {
+    val writer = session.outputWriter
+    writer.write(line)
+    writer.newLine()
+    writer.flush()
+  }
+
+  private fun onProcessTerminated(startupPath: String) {
+    val session = synchronized(sessionLock) {
+      sessionsByStartupPath.remove(startupPath)
+    } ?: return
+    notifyStartupStateChanged(startupPath, false)
+    session.commandNames.set(null)
+    session.commandHelp.clear()
+  }
+
+  private fun notifyStartupStateChanged(startupPath: String, running: Boolean) {
+    project.messageBus.syncPublisher(EpicsIocRuntimeStateListener.TOPIC)
+      .startupStateChanged(startupPath, running)
+  }
+
+  private fun showConsole(session: IocProcessSession) {
+    RunContentManager.getInstance(project).showRunContent(
+      DefaultRunExecutor.getRunExecutorInstance(),
+      session.descriptor,
+    )
+  }
+
+  private fun notifyConsoleEvent(
+    startupName: String,
+    consoleTitle: String,
+    message: String,
+    session: IocProcessSession,
+  ) {
+    NotificationGroupManager.getInstance()
+      .getNotificationGroup(NOTIFICATION_GROUP_ID)
+      .createNotification(
+        startupName,
+        "$message Console: $consoleTitle",
+        NotificationType.INFORMATION,
+      )
+      .addAction(
+        NotificationAction.createSimpleExpiring("Show Console") {
+          showConsole(session)
+        },
+      )
+      .notify(project)
+  }
+
+  private fun normalizeStartupPath(startupFile: VirtualFile): String? {
+    if (!isIocBootStartupFile(startupFile)) {
+      return null
+    }
+    return Path.of(startupFile.path).normalize().toString()
+  }
+
+  private fun buildConsoleTitle(startupFile: VirtualFile): String {
+    val parentName = startupFile.parent?.name?.takeIf(String::isNotBlank) ?: startupFile.nameWithoutExtension
+    return "IOC: $parentName"
+  }
+
+  private fun buildStartupCommandLine(startupFile: VirtualFile): List<String> {
+    val configuration = configurationService.loadConfiguration()
+    val startupCommand = "./${startupFile.name}"
+    val shellPath = configuration.iocStartupShell.trim()
+    if (shellPath.isEmpty()) {
+      return listOf(startupCommand)
+    }
+    val shellArgs = ParametersListUtil.parse(configuration.iocStartupShellArgs.trim()).toMutableList()
+    shellArgs += startupCommand
+    return listOf(shellPath) + shellArgs
+  }
+
+  private data class IocProcessSession(
+    val startupPath: String,
+    val startupName: String,
+    val workingDirectory: Path,
+    val consoleTitle: String,
+    val process: Process,
+    val processHandler: ColoredProcessHandler,
+    val console: ConsoleView,
+    val descriptor: RunContentDescriptor,
+  ) {
+    val outputWriter = process.outputWriter(StandardCharsets.UTF_8)
+    val commandLock = Any()
+    val commandNames = AtomicReference<List<String>?>(null)
+    val commandHelp = linkedMapOf<String, String>()
+
+    val isRunning: Boolean
+      get() = process.isAlive
+  }
+
+  companion object {
+    private const val NOTIFICATION_GROUP_ID = "EPICS Workbench Notifications"
+    private const val TEMP_FILE_PREFIX = "epics-workbench-ioc-output-"
+    private const val CAPTURE_TIMEOUT_MS = 8_000L
+    private const val CAPTURE_POLL_INTERVAL_MS = 50L
+    private const val HELP_BATCH_SIZE = 24
+    private val ANSI_ESCAPE_REGEX = Regex("""\u001B\[[0-9;?]*[ -/]*[@-~]""")
+
+    fun isStartupFile(file: VirtualFile?): Boolean {
+      val target = file ?: return false
+      val extension = target.extension?.lowercase()
+      return extension == "cmd" || extension == "iocsh" || target.name == "st.cmd"
+    }
+
+    fun isIocBootStartupFile(file: VirtualFile?): Boolean {
+      val target = file ?: return false
+      if (!isStartupFile(target)) {
+        return false
+      }
+      return Path.of(target.path).normalize().any { pathPart -> pathPart.toString() == "iocBoot" }
+    }
+
+    fun parseCommandNames(output: String): List<String> {
+      val commands = linkedSetOf<String>()
+      for (rawLine in output.lineSequence()) {
+        val trimmed = rawLine.trim()
+        if (trimmed.isEmpty()) {
+          continue
+        }
+        if (trimmed.startsWith("Type 'help")) {
+          break
+        }
+        val line = trimmed.removePrefix("#").trim()
+        line.split(Regex("\\s+"))
+          .filter { token -> COMMAND_NAME_REGEX.matches(token) }
+          .forEach(commands::add)
+      }
+      return commands.toList()
+    }
+
+    fun parseCommandHelp(commandNames: List<String>, output: String): Map<String, String> {
+      val requested = commandNames.toSet()
+      val result = linkedMapOf<String, String>()
+      var currentCommand: String? = null
+      var currentBlock = mutableListOf<String>()
+
+      fun flush() {
+        val commandName = currentCommand ?: return
+        val text = currentBlock.joinToString("\n").trim()
+        if (text.isNotEmpty()) {
+          result[commandName] = text
+        }
+      }
+
+      output.lineSequence().forEach { rawLine ->
+        val line = rawLine.trimEnd()
+        if (line.isBlank()) {
+          if (currentCommand != null) {
+            currentBlock.add("")
+          }
+          return@forEach
+        }
+        val headerCandidate = line.trim().substringBefore(' ')
+        if (headerCandidate in requested && !line.startsWith("Example:")) {
+          flush()
+          currentCommand = headerCandidate
+          currentBlock = mutableListOf(line.trim())
+        } else if (currentCommand != null) {
+          currentBlock.add(line.trim())
+        }
+      }
+      flush()
+      return result
+    }
+
+    fun parseRuntimeVariables(output: String): List<EpicsIocRuntimeVariable> {
+      return output.lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .mapNotNull { line ->
+          VARIABLE_LINE_REGEX.matchEntire(line)?.let { match ->
+            EpicsIocRuntimeVariable(
+              type = match.groupValues[1].trim(),
+              name = match.groupValues[2].trim(),
+              value = match.groupValues[3].trim(),
+            )
+          }
+        }
+        .toList()
+    }
+
+    fun parseRuntimeEnvironment(output: String): List<EpicsIocRuntimeEnvironmentEntry> {
+      return output.lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .mapNotNull { line ->
+          val equalsIndex = line.indexOf('=')
+          if (equalsIndex <= 0) {
+            null
+          } else {
+            EpicsIocRuntimeEnvironmentEntry(
+              name = line.substring(0, equalsIndex).trim(),
+              value = line.substring(equalsIndex + 1),
+            )
+          }
+        }
+        .toList()
+    }
+
+    private fun sanitizeCapturedOutput(text: String): String {
+      return ANSI_ESCAPE_REGEX.replace(text, "")
+    }
+
+    private val COMMAND_NAME_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
+    private val VARIABLE_LINE_REGEX = Regex("""^(.*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$""")
+  }
+}

@@ -17,6 +17,8 @@ data class EpicsRuntimeProjectConfiguration(
   val protocol: EpicsRuntimeProtocol = EpicsRuntimeProtocol.CA,
   val caAddrList: List<String> = emptyList(),
   val caAutoAddrList: EpicsCaAutoAddrList = EpicsCaAutoAddrList.YES,
+  val iocStartupShell: String = detectDefaultIocStartupShell(),
+  val iocStartupShellArgs: String = defaultIocStartupShellArgs(detectDefaultIocStartupShell()),
 )
 
 enum class EpicsRuntimeProtocol(
@@ -81,6 +83,8 @@ class EpicsRuntimeProjectConfigurationService(
           protocol = configuration.protocol.takeIf { it == EpicsRuntimeProtocol.PVA }?.serializedValue,
           caAddrList = configuration.caAddrList,
           caAutoAddrList = configuration.caAutoAddrList.serializedValue,
+          iocStartupShell = configuration.iocStartupShell,
+          iocStartupShellArgs = configuration.iocStartupShellArgs,
         ),
       ),
     )
@@ -109,6 +113,10 @@ class EpicsRuntimeProjectConfigurationService(
         protocol = EpicsRuntimeProtocol.fromSerializedValue(file.protocol),
         caAddrList = file.caAddrList.orEmpty().map(String::trim).filter(String::isNotEmpty),
         caAutoAddrList = EpicsCaAutoAddrList.fromSerializedValue(file.caAutoAddrList),
+        iocStartupShell = file.iocStartupShell?.trim().orEmpty().ifEmpty { detectDefaultIocStartupShell() },
+        iocStartupShellArgs = file.iocStartupShellArgs?.trim().orEmpty().ifEmpty {
+          defaultIocStartupShellArgs(file.iocStartupShell?.trim().orEmpty().ifEmpty { detectDefaultIocStartupShell() })
+        },
       )
     }
   }
@@ -121,4 +129,19 @@ private data class EpicsRuntimeProjectConfigurationFile(
   val caAddrList: List<String>? = null,
   @SerialName("EPICS_CA_AUTO_ADDR_LIST")
   val caAutoAddrList: String? = null,
+  val iocStartupShell: String? = null,
+  val iocStartupShellArgs: String? = null,
 )
+
+private fun detectDefaultIocStartupShell(): String {
+  return System.getenv("SHELL")?.trim().orEmpty()
+}
+
+private fun defaultIocStartupShellArgs(shellPath: String): String {
+  val shellName = shellPath.substringAfterLast('/').lowercase()
+  return when (shellName) {
+    "bash", "zsh", "sh", "ksh", "fish" -> "-lc"
+    "csh", "tcsh" -> "-c"
+    else -> "-lc"
+  }
+}

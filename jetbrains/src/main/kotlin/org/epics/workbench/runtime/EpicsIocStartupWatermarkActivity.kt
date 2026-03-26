@@ -1,0 +1,137 @@
+package org.epics.workbench.runtime
+
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.colors.EditorFontType
+import com.intellij.openapi.editor.event.EditorFactoryEvent
+import com.intellij.openapi.editor.event.EditorFactoryListener
+import com.intellij.openapi.editor.markup.CustomHighlighterRenderer
+import com.intellij.openapi.editor.markup.HighlighterLayer
+import com.intellij.openapi.editor.markup.HighlighterTargetArea
+import com.intellij.openapi.editor.markup.RangeHighlighter
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.components.service
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.startup.ProjectActivity
+import com.intellij.openapi.util.Key
+import com.intellij.ui.JBColor
+import java.awt.Color
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.RenderingHints
+
+class EpicsIocStartupWatermarkActivity : ProjectActivity {
+  override suspend fun execute(project: Project) {
+    val listener = EpicsIocStartupWatermarkListener(project)
+    EditorFactory.getInstance().addEditorFactoryListener(listener, project)
+    project.messageBus.connect(project).subscribe(EpicsIocRuntimeStateListener.TOPIC, listener)
+    listener.refreshOpenEditors()
+  }
+}
+
+private class EpicsIocStartupWatermarkListener(
+  private val project: Project,
+) : EditorFactoryListener, EpicsIocRuntimeStateListener {
+  private val runtimeService = project.service<EpicsIocRuntimeService>()
+
+  override fun editorCreated(event: EditorFactoryEvent) {
+    if (event.editor.project == project) {
+      updateEditor(event.editor)
+    }
+  }
+
+  override fun editorReleased(event: EditorFactoryEvent) {
+    clearWatermark(event.editor)
+  }
+
+  override fun startupStateChanged(startupPath: String, running: Boolean) {
+    refreshOpenEditors()
+  }
+
+  fun refreshOpenEditors() {
+    for (editor in EditorFactory.getInstance().allEditors) {
+      if (editor.project == project) {
+        updateEditor(editor)
+      }
+    }
+  }
+
+  private fun updateEditor(editor: Editor) {
+    val file = FileDocumentManager.getInstance().getFile(editor.document)
+    if (file == null || !EpicsIocRuntimeService.isIocBootStartupFile(file) || !runtimeService.isRunning(file)) {
+      clearWatermark(editor)
+      return
+    }
+
+    if (editor.getUserData(WATERMARK_HIGHLIGHTER_KEY)?.isValid == true) {
+      return
+    }
+
+    val highlighter = editor.markupModel.addRangeHighlighter(
+      0,
+      editor.document.textLength,
+      HighlighterLayer.CARET_ROW + 1,
+      null,
+      HighlighterTargetArea.LINES_IN_RANGE,
+    )
+    highlighter.setCustomRenderer(RunningWatermarkRenderer())
+    editor.putUserData(WATERMARK_HIGHLIGHTER_KEY, highlighter)
+  }
+
+  private fun clearWatermark(editor: Editor) {
+    editor.getUserData(WATERMARK_HIGHLIGHTER_KEY)?.let { highlighter ->
+      if (highlighter.isValid) {
+        editor.markupModel.removeHighlighter(highlighter)
+      }
+    }
+    editor.putUserData(WATERMARK_HIGHLIGHTER_KEY, null)
+  }
+
+  companion object {
+    private val WATERMARK_HIGHLIGHTER_KEY = Key.create<RangeHighlighter>(
+      "org.epics.workbench.runtime.iocStartupWatermarkHighlighter",
+    )
+  }
+}
+
+private class RunningWatermarkRenderer : CustomHighlighterRenderer {
+  override fun paint(editor: Editor, highlighter: RangeHighlighter, graphics: Graphics) {
+    if (editor.isDisposed || !highlighter.isValid) {
+      return
+    }
+
+    val g2 = graphics.create() as Graphics2D
+    try {
+      g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+      g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+      val visibleArea = editor.scrollingModel.visibleArea
+      val font = getWatermarkFont(editor)
+      g2.font = font
+      g2.color = JBColor(Color(210, 70, 70, 58), Color(255, 96, 96, 54))
+      val metrics = editor.contentComponent.getFontMetrics(font)
+      val text = WATERMARK_TEXT
+      val textWidth = metrics.stringWidth(text)
+      val centerX = visibleArea.x + (visibleArea.width - textWidth) / 2
+      var y = visibleArea.y + TOP_PADDING
+      while (y < visibleArea.y + visibleArea.height + metrics.height) {
+        g2.drawString(text, centerX, y)
+        y += ROW_SPACING
+      }
+    } finally {
+      g2.dispose()
+    }
+  }
+
+  private fun getWatermarkFont(editor: Editor): Font {
+    return editor.colorsScheme
+      .getFont(EditorFontType.BOLD)
+      .deriveFont(Font.BOLD, 42f)
+  }
+
+  companion object {
+    private const val WATERMARK_TEXT = "Running ..."
+    private const val TOP_PADDING = 110
+    private const val ROW_SPACING = 150
+  }
+}
