@@ -8,3 +8,4 @@ coverage/
 *.vsix
 *.log
 .DS_Store
+/vendor/tdm/

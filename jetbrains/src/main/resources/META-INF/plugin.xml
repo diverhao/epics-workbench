@@ -220,6 +220,7 @@
     <projectConfigurable
       groupId="tools"
       id="org.epics.workbench.runtime.configuration"
+      displayName="EPICS Workbench"
       instance="org.epics.workbench.runtime.EpicsRuntimeProjectConfigurable"
     />
     <toolWindow

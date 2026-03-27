@@ -7,6 +7,9 @@
     "publisher": "",
     "name": "epics-workbench",
     "main": "./src/extension.js",
+    "scripts": {
+        "sync:tdm-vendor": "node ./scripts/sync-vendored-tdm.js"
+    },
     "icon": "images/epics_workbench_logo.png",
     "engines": {
         "vscode": "^1.100.0"
@@ -232,6 +235,11 @@
                     "when": "editorLangId == startup && epicsWorkbench.activeStartupCanStopIoc",
                     "group": "navigation",
                     "command": "vscode-epics.stopActiveStartupIoc"
+                },
+                {
+                    "when": "resourceExtname == .tdl || resourceExtname == .edl || resourceExtname == .bob || resourceExtname == .stp || resourceExtname == .plt",
+                    "group": "navigation",
+                    "command": "vscode-epics.openInTdm"
                 }
             ],
             "commandPalette": [
@@ -354,6 +362,10 @@
                 {
                     "when": "editorLangId == substitutions",
                     "command": "vscode-epics.copyAsExpandedDb"
+                },
+                {
+                    "when": "resourceExtname == .tdl || resourceExtname == .edl || resourceExtname == .bob || resourceExtname == .stp || resourceExtname == .plt",
+                    "command": "vscode-epics.openInTdm"
                 }
             ],
             "explorer/context": [
@@ -361,6 +373,11 @@
                     "when": "resourceExtname == .xlsx || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .cmd || resourceExtname == .iocsh || resourceExtname == .sub || resourceExtname == .subs || resourceExtname == .substitutions || resourceExtname == .pvlist || resourceExtname == .probe || resourceExtname == .st || (epicsWorkbench.isEpicsProject && !explorerResourceIsFolder)",
                     "group": "navigation@30",
                     "command": "vscode-epics.importDatabaseFromExcel"
+                },
+                {
+                    "when": "resourceExtname == .tdl || resourceExtname == .edl || resourceExtname == .bob || resourceExtname == .stp || resourceExtname == .plt",
+                    "group": "navigation@31",
+                    "command": "vscode-epics.openInTdm"
                 }
             ]
         },
@@ -508,6 +525,28 @@
                     }
                 ],
                 "priority": "default"
+            },
+            {
+                "viewType": "epicsWorkbench.tdmEditor",
+                "displayName": "TDM Display",
+                "selector": [
+                    {
+                        "filenamePattern": "*.tdl"
+                    },
+                    {
+                        "filenamePattern": "*.edl"
+                    },
+                    {
+                        "filenamePattern": "*.bob"
+                    },
+                    {
+                        "filenamePattern": "*.stp"
+                    },
+                    {
+                        "filenamePattern": "*.plt"
+                    }
+                ],
+                "priority": "default"
             }
         ],
         "configurationDefaults": {
@@ -570,6 +609,41 @@
                         "type": "string"
                     },
                     "description": "Environment variable overrides passed to the epics-tca runtime context, for example EPICS_CA_ADDR_LIST or EPICS_PVA_ADDR_LIST."
+                },
+                "epicsWorkbench.tdm.rootPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to a local TDM checkout or installation root used by `externalBinary` mode. If empty, EPICS Workbench tries TDM_ROOT and a sibling ../tdm folder automatically."
+                },
+                "epicsWorkbench.tdm.runtimeMode": {
+                    "type": "string",
+                    "enum": [
+                        "vendoredSource",
+                        "externalBinary"
+                    ],
+                    "default": "vendoredSource",
+                    "description": "How EPICS Workbench launches TDM. `vendoredSource` runs the copied runtime under `vscode/vendor/tdm`; `externalBinary` uses a separately built TDM executable."
+                },
+                "epicsWorkbench.tdm.executablePath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional path to a runnable TDM executable used by `externalBinary` mode. Use this when the default packaged or Electron-based TDM launch path cannot be discovered automatically."
+                },
+                "epicsWorkbench.tdm.profilesPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional path to the TDM profiles.json file. If empty, EPICS Workbench uses ~/.tdm/profiles.json."
+                },
+                "epicsWorkbench.tdm.profile": {
+                    "type": "string",
+                    "default": "",
+                    "description": "TDM profile name to use for the embedded display runtime. If empty, EPICS Workbench picks the first non-'For All Profiles' profile from the configured profiles file."
+                },
+                "epicsWorkbench.tdm.httpServerPort": {
+                    "type": "number",
+                    "default": 0,
+                    "minimum": 0,
+                    "description": "Web-mode port for the TDM subprocess. Set to 0 to let EPICS Workbench choose a free local port automatically."
                 }
             }
         },
@@ -768,6 +842,12 @@
                 "command": "vscode-epics.openActiveStartupIocEnvironment",
                 "category": "EPICS",
                 "icon": "$(gear)"
+            },
+            {
+                "title": "Open in TDM",
+                "command": "vscode-epics.openInTdm",
+                "category": "EPICS",
+                "icon": "$(device-desktop)"
             }
         ]
     },
@@ -785,10 +865,12 @@
         "onLanguage:probe",
         "onLanguage:database definition",
         "onCustomEditor:epicsWorkbench.probeEditor",
+        "onCustomEditor:epicsWorkbench.tdmEditor",
         "onLanguage:makefile",
         "onCommand:vscode-epics.copyAsMonitorFile",
         "onCommand:vscode-epics.copyAsExpandedDb",
         "onCommand:vscode-epics.exportDatabaseToExcel",
+        "onCommand:vscode-epics.openInTdm",
         "onCommand:vscode-epics.openInProbe",
         "onCommand:vscode-epics.openInChannelGraph",
         "onCommand:vscode-epics.openInMonitor",
@@ -814,7 +896,8 @@
         "onCommand:vscode-epics.openActiveStartupIocEnvironment"
     ],
     "dependencies": {
-        "epics-tca": "^1.1.33"
+        "epics-tca": "^1.1.33",
+        "ws": "^8.18.3"
     },
     "__metadata": {
         "publisherId": "",

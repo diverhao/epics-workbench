@@ -30,6 +30,7 @@ const {
   getCaRuntimeDisplayValue,
   getPvaRuntimeDisplayValue,
 } = require("./runtimeMonitor");
+const { registerTdmIntegration } = require("./tdmIntegration");
 
 const LANGUAGE_IDS = {
   database: "database",
@@ -288,6 +289,7 @@ function activate(context) {
     getFieldNamesForRecordType: getRuntimeProbeFieldNamesForRecordType,
     getFieldTypeForRecordType: getRuntimeProbeFieldTypeForRecordType,
   });
+  registerTdmIntegration(context);
   const staticData = loadStaticData(context.extensionPath);
   recordTemplateFields = new Map(staticData.recordTemplateFields || []);
   recordTemplateStaticData = {
