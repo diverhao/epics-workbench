@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" role="img" aria-label="EPICS Workbench">
+  <rect x="2" y="2" width="36" height="36" rx="9" fill="#18344F"/>
+  <path d="M10 24.5h20" stroke="#D89A48" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M13 24.5v6.5M27 24.5v6.5" stroke="#D89A48" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M11.5 31h17" stroke="#D89A48" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="20" cy="15" r="9" fill="none" stroke="#BEEB8E" stroke-width="2"/>
+  <path d="M11 15h18M20 6a17 17 0 0 0 0 18M20 6a17 17 0 0 1 0 18M14 9.5c2.1 1.2 4 1.8 6 1.8s3.9-.6 6-1.8M14 20.5c2.1-1.2 4-1.8 6-1.8s3.9.6 6 1.8" fill="none" stroke="#66D2F3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="31" cy="9" r="2.2" fill="#BEEB8E"/>
+  <circle cx="33.5" cy="14" r="1.6" fill="#66D2F3"/>
+</svg>

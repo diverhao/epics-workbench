@@ -1,0 +1,11 @@
+
+file test02.template {
+    { SYS=val, SUBSYS=1 }
+    { SYS=val, SUBSYS=2 }
+}
+
+file test02.template {
+    pattern { SYS,   SUBSYS }
+            { "val", "3" }
+            { val,   4 }
+}

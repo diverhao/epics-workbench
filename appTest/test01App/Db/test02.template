@@ -1,0 +1,14 @@
+
+record(calc, "$(SYS)$(SUBSYS)1") {
+    field(VAL, "33")
+    field(INPA, "$(SYS)$(SUBSYS)1")
+    field(CALC, "A>1000?0:A+1")
+    field(SCAN, "1 second")
+}
+
+record(calc, "$(SYS)$(SUBSYS)2") {
+    field(VAL, "22")
+    field(INPA, "$(SYS)$(SUBSYS)1")
+    field(CALC, "A>1000?0:A+1")
+    field(SCAN, "1 second")
+}

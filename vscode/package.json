@@ -6,6 +6,7 @@
     },
     "publisher": "",
     "name": "epics-workbench",
+    "license": "MIT",
     "main": "./src/extension.js",
     "scripts": {
         "sync:tdm-vendor": "node ./scripts/sync-vendored-tdm.js"

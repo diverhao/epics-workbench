@@ -44,6 +44,9 @@ intellijPlatform {
 
 tasks {
   processResources {
+    from("LICENSE") {
+      into("META-INF")
+    }
     from("../vscode/data") {
       into("data")
     }

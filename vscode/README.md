@@ -2,6 +2,8 @@
 
 This document describes what the VS Code extension can do today and how to use it in practice.
 
+This work is sponsored by Oak Ridge National Laboratory.
+
 The examples below use the sample project in `appTest/`.
 
 ## What The Extension Understands

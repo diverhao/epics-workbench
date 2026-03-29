@@ -1,0 +1,4 @@
+device(ai,INST_IO,DevAdd10,"Add10")
+registrar(helloRegistrar)
+
+

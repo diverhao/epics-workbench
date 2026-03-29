@@ -1,0 +1,18 @@
+record(ai,"val2") {
+	field(DTYP,"Soft Channel")
+	field(UDF,"0")
+	field(FLNK,"val3")
+}
+record(ai,"val3") {
+	field(DTYP,"Soft Channel")
+	field(UDF,"0")
+	field(INP,"val2 NPP NMS")
+}
+record(calc,"val1") {
+	field(SCAN,"1 second")
+	field(UDF,"0")
+	field(FLNK,"val2")
+	field(VAL,"286")
+	field(CALC,"A>1000?0:A+1")
+	field(INPA,"val1 NPP NMS")
+}
