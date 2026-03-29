@@ -1,6 +1,7 @@
 package org.epics.workbench.database
 
 import com.intellij.application.options.CodeStyle
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
@@ -29,27 +30,22 @@ class FormatDatabaseFileAction : DumbAwareAction() {
     event.presentation.isEnabledAndVisible =
       event.project != null && (
         file?.let(::isDatabaseFile) == true ||
+          isStartupFile(file) ||
+          isMakefile(file) ||
           isDbdFile(file) ||
           isProtocolFile(file) ||
           EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) ||
           isPvlistFile(file)
       )
-    event.presentation.text = if (
-      isDbdFile(file) ||
-      isProtocolFile(file) ||
-      EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) ||
-      isPvlistFile(file)
-    ) {
-      "Format File"
-    } else {
-      "Format DB File"
-    }
+    event.presentation.text = "Format File"
   }
 
   override fun actionPerformed(event: AnActionEvent) {
     val project = event.project ?: return
     val file = getTargetFile(event) ?: return
     if (!isDatabaseFile(file) &&
+      !isStartupFile(file) &&
+      !isMakefile(file) &&
       !isDbdFile(file) &&
       !isProtocolFile(file) &&
       !EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) &&
@@ -63,6 +59,8 @@ class FormatDatabaseFileAction : DumbAwareAction() {
     val originalText = document.text
     val formattedText = when {
       isDatabaseFile(file) -> EpicsTextFormatter.formatDatabaseText(originalText, getIndentUnit(psiFile))
+      isStartupFile(file) -> EpicsTextFormatter.formatStartupText(originalText)
+      isMakefile(file) -> EpicsTextFormatter.formatMakefileText(originalText)
       isDbdFile(file) -> EpicsTextFormatter.formatDatabaseText(originalText, getIndentUnit(psiFile))
       isProtocolFile(file) -> EpicsTextFormatter.formatProtocolText(originalText, getIndentUnit(psiFile))
       isPvlistFile(file) -> EpicsTextFormatter.formatMonitorText(originalText)
@@ -90,7 +88,7 @@ class FormatDatabaseFileAction : DumbAwareAction() {
   }
 
   private companion object {
-    private const val COMMAND_NAME = "Format DB File"
+    private const val COMMAND_NAME = "Format File"
     private const val DEFAULT_INDENT_SIZE = 4
   }
 }
@@ -122,7 +120,7 @@ class CopyAllRecordNamesAction : DumbAwareAction() {
   }
 
   private companion object {
-    private const val TITLE = "Copy All Record Names"
+    private const val TITLE = "Copy Record Names"
   }
 }
 
@@ -169,12 +167,20 @@ private fun isDatabaseFile(file: VirtualFile): Boolean {
   return file.extension?.lowercase() in setOf("db", "vdb", "template")
 }
 
+private fun isStartupFile(file: VirtualFile?): Boolean {
+  return file?.extension?.lowercase() in setOf("cmd", "iocsh")
+}
+
 private fun isPvlistFile(file: VirtualFile?): Boolean {
   return file?.extension?.lowercase() == "pvlist"
 }
 
 private fun isDbdFile(file: VirtualFile?): Boolean {
   return file?.extension?.lowercase() == "dbd"
+}
+
+private fun isMakefile(file: VirtualFile?): Boolean {
+  return file?.name == "Makefile"
 }
 
 private fun isProtocolFile(file: VirtualFile?): Boolean {
@@ -186,11 +192,13 @@ private fun getTargetDocument(file: VirtualFile): Document? {
 }
 
 private fun readCurrentText(file: VirtualFile): String? {
-  val document = getTargetDocument(file)
-  if (document != null) {
-    return document.text
+  return ReadAction.compute<String?, RuntimeException> {
+    val document = FileDocumentManager.getInstance().getCachedDocument(file)
+    if (document != null) {
+      return@compute document.text
+    }
+    runCatching { String(file.contentsToByteArray(), file.charset) }.getOrNull()
   }
-  return runCatching { String(file.contentsToByteArray(), file.charset) }.getOrNull()
 }
 
 private fun hasTableOfContents(file: VirtualFile): Boolean {

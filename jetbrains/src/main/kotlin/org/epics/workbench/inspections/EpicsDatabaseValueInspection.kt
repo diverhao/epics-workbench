@@ -2,8 +2,8 @@ package org.epics.workbench.inspections
 
 import com.intellij.codeInspection.LocalInspectionTool
 import com.intellij.codeInspection.LocalInspectionToolSession
-import com.intellij.codeInspection.ProblemsHolder
 import com.intellij.codeInspection.ProblemHighlightType
+import com.intellij.codeInspection.ProblemsHolder
 import com.intellij.psi.PsiElementVisitor
 import com.intellij.psi.PsiFile
 
@@ -16,7 +16,15 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
     return object : PsiElementVisitor() {
       override fun visitFile(file: PsiFile) {
         val issues = when {
-          isDatabaseFile(file.name) -> EpicsDatabaseValueValidator.collectIssues(file.text)
+          isDatabaseFile(file.name) -> {
+            val virtualFile = file.virtualFile ?: return
+            EpicsDatabaseValueValidator.collectIssues(file.text) +
+              EpicsMakefileInclusionValidator.collectIssues(virtualFile, file.text)
+          }
+          isSubstitutionsFile(file.name) -> {
+            val virtualFile = file.virtualFile ?: return
+            EpicsMakefileInclusionValidator.collectIssues(virtualFile, file.text)
+          }
           isStartupFile(file.name) -> {
             val virtualFile = file.virtualFile ?: return
             EpicsStartupMacroValidator.collectIssues(file.project, virtualFile, file.text)
@@ -33,7 +41,11 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
           holder.registerProblem(
             file,
             issue.message,
-            ProblemHighlightType.GENERIC_ERROR,
+            if (issue.severity == EpicsDatabaseValueValidator.ValidationSeverity.WARNING) {
+              ProblemHighlightType.WARNING
+            } else {
+              ProblemHighlightType.GENERIC_ERROR
+            },
             file.textRange(issue.startOffset, issue.endOffset),
             *quickFixes,
           )
@@ -50,6 +62,11 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
   private fun isStartupFile(fileName: String): Boolean {
     val extension = fileName.substringAfterLast('.', "").lowercase()
     return extension in setOf("cmd", "iocsh") || fileName == "st.cmd"
+  }
+
+  private fun isSubstitutionsFile(fileName: String): Boolean {
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    return extension in setOf("substitutions", "sub", "subs")
   }
 }
 

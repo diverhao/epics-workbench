@@ -6,7 +6,9 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.projectHasEpicsRoot
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
+import org.epics.workbench.navigation.EpicsResolvedRecordDefinition
 import org.epics.workbench.navigation.EpicsRecordResolver
 import org.epics.workbench.substitutions.EpicsSubstitutionsExpansionSupport
 import org.epics.workbench.toc.EpicsDatabaseToc
@@ -18,14 +20,15 @@ class OpenInProbeAction : DumbAwareAction() {
   override fun update(event: AnActionEvent) {
     val project = event.project
     val file = getTargetFile(event)
-    val editor = event.getData(CommonDataKeys.EDITOR)
-    val enabled = project != null &&
-      file != null &&
-      (
-        (editor != null && (isDatabaseFile(file) || isStartupFile(file) || isPvlistFile(file) || isDbdFile(file) || isProtocolFile(file))) ||
-          (editor == null && (isPvlistFile(file) || isDbdFile(file) || isProtocolFile(file))) ||
-          EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
-      )
+    val enabled = project != null && file != null && (
+      projectHasEpicsRoot(project) ||
+        isDatabaseFile(file) ||
+        isStartupFile(file) ||
+        isPvlistFile(file) ||
+        isDbdFile(file) ||
+        isProtocolFile(file) ||
+        EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)
+    )
     event.presentation.isEnabledAndVisible = enabled
   }
 
@@ -79,100 +82,85 @@ class OpenInProbeAction : DumbAwareAction() {
     offset: Int,
   ): ProbeTarget? {
     EpicsDatabaseToc.findRuntimeEntryAtOffset(text, offset)?.let { tocEntry ->
-      val macroAssignments = EpicsDatabaseToc.extractRuntimeMacroAssignments(text)
-      return ProbeTarget(
-        recordName = expandProbeRecordName(tocEntry.recordName, macroAssignments),
-      )
+      val recordName = resolveProbeRecordNameFromDatabaseText(text, tocEntry.recordName) ?: return null
+      return ProbeTarget(recordName = recordName)
     }
 
     EpicsRecordCompletionSupport.extractRecordDeclarations(text)
       .firstOrNull { declaration -> offset in declaration.nameStart until declaration.nameEnd }
       ?.let { declaration ->
-        val macroAssignments = EpicsDatabaseToc.extractRuntimeMacroAssignments(text)
-        return ProbeTarget(
-          recordName = expandProbeRecordName(declaration.name, macroAssignments),
-        )
+        val recordName = resolveProbeRecordNameFromDatabaseText(text, declaration.name) ?: return null
+        return ProbeTarget(recordName = recordName)
       }
 
     EpicsRecordResolver.resolveRecordDefinition(project, file, offset)?.let { definition ->
-      return ProbeTarget(definition.recordName)
+      val recordName = resolveProbeRecordNameFromDefinition(definition) ?: return null
+      return ProbeTarget(recordName)
     }
 
     return null
   }
 
-  private fun expandProbeRecordName(
+  private fun resolveProbeRecordNameFromDefinition(
+    definition: EpicsResolvedRecordDefinition,
+  ): String? {
+    return resolveProbeRecordNameFromDatabaseText(
+      definition.targetFile.inputStream.bufferedReader().use { it.readText() },
+      definition.recordName,
+    )
+  }
+
+  private fun resolveProbeRecordNameFromDatabaseText(
+    text: String,
     recordName: String,
-    macroAssignments: Map<String, EpicsDatabaseToc.MacroAssignment>,
-  ): String {
-    val resolvedMacros = linkedMapOf<String, String>()
-    macroAssignments.forEach { (name, assignment) ->
-      if (assignment.hasAssignment) {
-        resolvedMacros[name] = assignment.value
+  ): String? {
+    val normalizedRecordName = recordName.trim()
+    if (normalizedRecordName.isEmpty()) {
+      return null
+    }
+    if (!containsEpicsMacroReference(normalizedRecordName)) {
+      return normalizedRecordName
+    }
+
+    val resolved = expandAssignedMacros(
+      normalizedRecordName,
+      EpicsDatabaseToc.extractMacroAssignmentValues(text),
+      linkedSetOf(),
+    ) ?: return null
+    return resolved.takeUnless(::containsEpicsMacroReference)
+  }
+
+  private fun expandAssignedMacros(
+    value: String,
+    macroValues: Map<String, String>,
+    stack: Set<String>,
+  ): String? {
+    var unresolved = false
+    val expanded = MACRO_REFERENCE_REGEX.replace(value) { match ->
+      val macroName = match.groups[1]?.value
+        ?: match.groups[3]?.value
+        ?: match.groups[5]?.value
+        ?: ""
+      if (macroName.isBlank() || !macroValues.containsKey(macroName) || macroName in stack) {
+        unresolved = true
+        return@replace match.value
+      }
+
+      val nextStack = linkedSetOf<String>().apply {
+        addAll(stack)
+        add(macroName)
+      }
+      expandAssignedMacros(macroValues[macroName].orEmpty(), macroValues, nextStack) ?: run {
+        unresolved = true
+        match.value
       }
     }
-    val cache = mutableMapOf<String, String>()
-    return expandMacroText(recordName, resolvedMacros, cache, emptyList()).trim()
-      .ifEmpty { recordName.trim() }
+
+    return if (unresolved) null else expanded
   }
 
-  private fun expandMacroText(
-    text: String,
-    macroValues: Map<String, String>,
-    cache: MutableMap<String, String>,
-    stack: List<String>,
-  ): String {
-    val source = text
-    val builder = StringBuilder()
-    var cursor = 0
-
-    for (match in MACRO_REFERENCE_REGEX.findAll(source)) {
-      builder.append(source, cursor, match.range.first)
-      val originalText = match.value
-      val macroName = match.groups[1]?.value ?: match.groups[3]?.value.orEmpty()
-      val defaultValue = match.groups[2]?.value
-      builder.append(
-        resolveMacroValue(
-          macroName = macroName,
-          defaultValue = defaultValue,
-          originalText = originalText,
-          macroValues = macroValues,
-          cache = cache,
-          stack = stack,
-        ),
-      )
-      cursor = match.range.last + 1
-    }
-
-    builder.append(source.substring(cursor))
-    return builder.toString()
-  }
-
-  private fun resolveMacroValue(
-    macroName: String,
-    defaultValue: String?,
-    originalText: String,
-    macroValues: Map<String, String>,
-    cache: MutableMap<String, String>,
-    stack: List<String>,
-  ): String {
-    val cacheKey = "$macroName\u0000${defaultValue.orEmpty()}\u0000$originalText"
-    cache[cacheKey]?.let { return it }
-
-    val resolved = when {
-      macroName in stack -> originalText
-      macroValues.containsKey(macroName) -> expandMacroText(
-        macroValues[macroName].orEmpty(),
-        macroValues,
-        cache,
-        stack + macroName,
-      )
-      defaultValue != null -> expandMacroText(defaultValue, macroValues, cache, stack)
-      else -> originalText
-    }
-
-    cache[cacheKey] = resolved
-    return resolved
+  private fun containsEpicsMacroReference(value: String): Boolean {
+    return Regex("""\$\(|\$\{|\$[A-Za-z_]""").containsMatchIn(value)
   }
 
   private fun isDatabaseFile(file: VirtualFile): Boolean {
@@ -213,7 +201,7 @@ class OpenInProbeAction : DumbAwareAction() {
   )
 
   private companion object {
-    private val MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")
+    private val MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)""")
     private val MACRO_ASSIGNMENT_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*\s*=.*$""")
   }
 }

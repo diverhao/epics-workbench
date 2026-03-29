@@ -113,6 +113,13 @@ private class EpicsWidgetFileEditor(
       applyChannelName()
     }
     probePanel.refreshFromService()
+    installEpicsWidgetPopupMenu(
+      project = project,
+      component = component,
+      channelsProvider = { listOf(currentRecordName).filter(String::isNotBlank) },
+      primaryChannelProvider = { currentRecordName.takeIf(String::isNotBlank) },
+      sourceLabelProvider = { EpicsWidgetVirtualFile.TAB_TITLE },
+    )
   }
 
   override fun getComponent(): JComponent = component

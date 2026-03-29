@@ -29,6 +29,9 @@ const RUN_IOC_SHELL_DBPR_CURRENT_RECORD_COMMAND =
   "vscode-epics.runIocShellDbprCurrentRecord";
 const START_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.startActiveStartupIoc";
 const STOP_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.stopActiveStartupIoc";
+const MANAGE_PROJECT_STARTUP_IOC_COMMAND = "vscode-epics.manageProjectStartupIoc";
+const START_PROJECT_STARTUP_IOC_COMMAND = "vscode-epics.startProjectStartupIoc";
+const STOP_PROJECT_STARTUP_IOC_COMMAND = "vscode-epics.stopProjectStartupIoc";
 const SHOW_ACTIVE_STARTUP_IOC_TERMINAL_COMMAND =
   "vscode-epics.showActiveStartupIocTerminal";
 const OPEN_ACTIVE_STARTUP_IOC_COMMANDS_COMMAND =
@@ -80,6 +83,27 @@ const ACTIVE_STARTUP_CAN_START_IOC_CONTEXT_KEY =
   "epicsWorkbench.activeStartupCanStartIoc";
 const ACTIVE_STARTUP_CAN_STOP_IOC_CONTEXT_KEY =
   "epicsWorkbench.activeStartupCanStopIoc";
+const STARTUP_IOC_PICKER_START_BUTTON = {
+  iconPath: new vscode.ThemeIcon("play"),
+  tooltip: "Start",
+};
+const STARTUP_IOC_PICKER_STOP_BUTTON = {
+  iconPath: new vscode.ThemeIcon("stop-circle"),
+  tooltip: "Stop",
+};
+const STARTUP_IOC_PICKER_BRING_TO_FRONT_BUTTON = {
+  iconPath: new vscode.ThemeIcon("arrow-up"),
+  tooltip: "Bring to Front",
+};
+const STARTUP_IOC_PICKER_OPEN_FILE_BUTTON = {
+  iconPath: new vscode.ThemeIcon("go-to-file"),
+  tooltip: "Open File",
+};
+const EPICS_PROJECT_MARKER_SEGMENTS = [
+  ["Makefile"],
+  ["configure", "RELEASE"],
+  ["configure", "RULES_TOP"],
+];
 function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   const controller = new EpicsRuntimeMonitorController(databaseHelpers);
   const probeCustomEditorProvider = new EpicsProbeCustomEditorProvider(controller);
@@ -285,6 +309,24 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
+      MANAGE_PROJECT_STARTUP_IOC_COMMAND,
+      async (resourceUri) => controller.showProjectStartupIocPicker(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      START_PROJECT_STARTUP_IOC_COMMAND,
+      async (resourceUri) => controller.startProjectStartupIoc(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      STOP_PROJECT_STARTUP_IOC_COMMAND,
+      async (resourceUri) => controller.stopProjectStartupIoc(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
       SHOW_ACTIVE_STARTUP_IOC_TERMINAL_COMMAND,
       async () => controller.showActiveStartupIocTerminal(),
     ),
@@ -464,6 +506,7 @@ class EpicsRuntimeMonitorController {
     this.probeWidgets = new Map();
     this.pvlistWidgets = new Map();
     this.monitorWidgets = new Map();
+    this.activeWidgetMenuContext = undefined;
     this.iocShellTerminal = undefined;
     this.lastIocShellCommand = "";
     this.iocStartupTerminalByDocumentPath = new Map();
@@ -1377,6 +1420,553 @@ class EpicsRuntimeMonitorController {
     return selected?.terminal;
   }
 
+  async openStartupDocumentPath(startupDocumentPath, preserveFocus = true) {
+    if (!startupDocumentPath) {
+      return undefined;
+    }
+
+    const document = await vscode.workspace.openTextDocument(startupDocumentPath);
+    await vscode.window.showTextDocument(document, {
+      preview: false,
+      preserveFocus,
+    });
+    return document;
+  }
+
+  registerWidgetMenuContext(panel, kind, state) {
+    if (!panel) {
+      return;
+    }
+
+    const updateContext = (isActive) => {
+      if (!isActive) {
+        if (this.activeWidgetMenuContext?.panel === panel) {
+          this.activeWidgetMenuContext = undefined;
+        }
+        return;
+      }
+
+      this.activeWidgetMenuContext = {
+        panel,
+        kind,
+        state,
+      };
+    };
+
+    updateContext(panel.active);
+    panel.onDidChangeViewState((event) => {
+      updateContext(event.webviewPanel.active);
+    });
+    panel.onDidDispose(() => {
+      if (this.activeWidgetMenuContext?.panel === panel) {
+        this.activeWidgetMenuContext = undefined;
+      }
+    });
+  }
+
+  getActiveWidgetMenuContext() {
+    const context = this.activeWidgetMenuContext;
+    if (!context?.panel || context.panel.visible === false) {
+      return undefined;
+    }
+    return context;
+  }
+
+  getProbeWidgetCommandOptionsFromActiveWidget() {
+    const context = this.getActiveWidgetMenuContext();
+    if (!context) {
+      return undefined;
+    }
+
+    if (context.kind === "probe") {
+      return {
+        recordName: String(context.state?.recordName || "").trim(),
+      };
+    }
+
+    if (context.kind === "pvlist") {
+      const rows = Array.isArray(context.state?.rows) ? context.state.rows : [];
+      const firstChannelName = rows
+        .map((row) => String(row?.channelName || "").trim())
+        .find(Boolean);
+      return {
+        recordName: firstChannelName || "",
+      };
+    }
+
+    if (context.kind === "monitor") {
+      const firstChannelName = (context.state?.channelRows || [])
+        .map((row) => String(row?.channelName || "").trim())
+        .find(Boolean);
+      return {
+        recordName: firstChannelName || "",
+      };
+    }
+
+    return undefined;
+  }
+
+  getPvlistWidgetCommandOptionsFromActiveWidget() {
+    const context = this.getActiveWidgetMenuContext();
+    if (!context) {
+      return undefined;
+    }
+
+    if (context.kind === "probe") {
+      const recordName = String(context.state?.recordName || "").trim();
+      return {
+        sourceKind: "pvlist",
+        sourceLabel: context.state?.panel?.title || "EPICS Probe",
+        sourceText: recordName ? `${recordName}\n` : "",
+      };
+    }
+
+    if (context.kind === "pvlist") {
+      const sourceModel = context.state?.sourceModel;
+      return {
+        sourceKind: "pvlist",
+        sourceLabel: sourceModel?.sourceLabel || context.state?.panel?.title || "EPICS PvList",
+        sourceDocumentUri: sourceModel?.sourceDocumentUri || "",
+        sourceText: buildPvlistWidgetFileText(
+          sourceModel,
+          context.state?.macroValues,
+        ),
+      };
+    }
+
+    if (context.kind === "monitor") {
+      const channelNames = (context.state?.channelRows || [])
+        .map((row) => String(row?.channelName || "").trim())
+        .filter(Boolean);
+      return {
+        sourceKind: "pvlist",
+        sourceLabel: context.state?.sourceLabel || context.state?.panel?.title || "EPICS Monitor",
+        sourceText: channelNames.join("\n"),
+      };
+    }
+
+    return undefined;
+  }
+
+  getMonitorWidgetCommandOptionsFromActiveWidget() {
+    const context = this.getActiveWidgetMenuContext();
+    if (!context) {
+      return undefined;
+    }
+
+    if (context.kind === "probe") {
+      const recordName = String(context.state?.recordName || "").trim();
+      return {
+        sourceLabel: context.state?.panel?.title || "EPICS Probe",
+        initialChannels: recordName ? [recordName] : [],
+      };
+    }
+
+    if (context.kind === "pvlist") {
+      const channelNames = (context.state?.rows || [])
+        .map((row) => String(row?.channelName || "").trim())
+        .filter(Boolean);
+      return {
+        sourceLabel: context.state?.sourceModel?.sourceLabel || context.state?.panel?.title || "EPICS PvList",
+        initialChannels: channelNames,
+      };
+    }
+
+    if (context.kind === "monitor") {
+      const channelNames = (context.state?.channelRows || [])
+        .map((row) => String(row?.channelName || "").trim())
+        .filter(Boolean);
+      return {
+        sourceLabel: context.state?.sourceLabel || context.state?.panel?.title || "EPICS Monitor",
+        initialChannels: channelNames,
+      };
+    }
+
+    return undefined;
+  }
+
+  getTrackedStartupIocTerminal(startupDocumentPath) {
+    const normalizedStartupDocumentPath = normalizeFsPath(startupDocumentPath);
+    if (!normalizedStartupDocumentPath) {
+      return undefined;
+    }
+
+    const terminal = this.iocStartupTerminalByDocumentPath.get(normalizedStartupDocumentPath);
+    if (terminal && vscode.window.terminals.includes(terminal)) {
+      return terminal;
+    }
+
+    if (terminal) {
+      this.untrackStartupIocTerminal(terminal);
+    }
+    return undefined;
+  }
+
+  getCandidateRunningStartupIocTerminals(startupDocumentPath) {
+    const normalizedStartupDocumentPath = normalizeFsPath(startupDocumentPath);
+    if (!normalizedStartupDocumentPath) {
+      return [];
+    }
+
+    const trackedTerminal = this.getTrackedStartupIocTerminal(normalizedStartupDocumentPath);
+    if (trackedTerminal) {
+      return [trackedTerminal];
+    }
+
+    const workingDirectory = normalizeFsPath(path.dirname(normalizedStartupDocumentPath));
+    return (vscode.window.terminals || []).filter((terminal) =>
+      this.getTerminalActiveExecutionCount(terminal) > 0 &&
+      this.getTerminalCurrentDirectory(terminal) === workingDirectory,
+    );
+  }
+
+  async resolveRunningStartupIocTerminal(
+    startupDocumentPath,
+    {
+      promptIfAmbiguous = false,
+      placeHolder = "Select the running IOC terminal",
+    } = {},
+  ) {
+    const candidates = this.getCandidateRunningStartupIocTerminals(startupDocumentPath);
+    if (!candidates.length) {
+      return undefined;
+    }
+
+    if (candidates.length === 1 || !promptIfAmbiguous) {
+      const terminal = candidates[0];
+      this.trackStartupIocTerminal(startupDocumentPath, terminal);
+      return terminal;
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      candidates.map((terminal) => ({
+        label: terminal.name || "Terminal",
+        description: this.getTerminalCurrentDirectory(terminal),
+        terminal,
+      })),
+      {
+        placeHolder,
+        ignoreFocusOut: true,
+      },
+    );
+    if (!selected?.terminal) {
+      return undefined;
+    }
+
+    this.trackStartupIocTerminal(startupDocumentPath, selected.terminal);
+    return selected.terminal;
+  }
+
+  async resolveEpicsProjectRootPath(resourceUri) {
+    const resourceFsPath = getCommandResourceFsPath(resourceUri);
+    const containingRootPath = findContainingEpicsProjectRootPath(
+      resourceFsPath || vscode.window.activeTextEditor?.document?.uri?.fsPath,
+    );
+    if (containingRootPath) {
+      return containingRootPath;
+    }
+
+    const candidateRootPaths = getWorkspaceEpicsProjectRootPaths();
+    if (candidateRootPaths.length === 1) {
+      return candidateRootPaths[0];
+    }
+    if (!candidateRootPaths.length) {
+      return undefined;
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      candidateRootPaths.map((candidateRootPath) => ({
+        label: path.basename(candidateRootPath),
+        description: candidateRootPath,
+        rootPath: candidateRootPath,
+      })),
+      {
+        placeHolder: "Select the EPICS project for IOC startup commands",
+        ignoreFocusOut: true,
+      },
+    );
+    return selected?.rootPath;
+  }
+
+  async resolveProjectStartupDocumentPaths(resourceUri) {
+    const projectRootPath = await this.resolveEpicsProjectRootPath(resourceUri);
+    if (!projectRootPath) {
+      vscode.window.showWarningMessage(
+        "No EPICS project root is available for IOC startup commands.",
+      );
+      return undefined;
+    }
+
+    const startupDocumentPaths = findProjectStcmdLikeFilePaths(projectRootPath);
+    if (!startupDocumentPaths.length) {
+      vscode.window.showWarningMessage(
+        `No st.cmd-like files were found under ${path.join(projectRootPath, "iocBoot")}.`,
+      );
+      return undefined;
+    }
+
+    return {
+      projectRootPath,
+      startupDocumentPaths,
+    };
+  }
+
+  createProjectStartupIocQuickPickItems(projectRootPath, startupDocumentPaths) {
+    return startupDocumentPaths.map((startupDocumentPath) => {
+      const runningTerminal = this.getCandidateRunningStartupIocTerminals(startupDocumentPath)[0];
+      return {
+        label: getIocBootDisplayPath(projectRootPath, startupDocumentPath),
+        description: runningTerminal ? "Running" : "",
+        detail: runningTerminal
+          ? `Terminal: ${runningTerminal.name || "Terminal"}`
+          : "Not running",
+        buttons: runningTerminal
+          ? [
+            STARTUP_IOC_PICKER_OPEN_FILE_BUTTON,
+            STARTUP_IOC_PICKER_BRING_TO_FRONT_BUTTON,
+            STARTUP_IOC_PICKER_STOP_BUTTON,
+          ]
+          : [
+            STARTUP_IOC_PICKER_OPEN_FILE_BUTTON,
+            STARTUP_IOC_PICKER_START_BUTTON,
+            STARTUP_IOC_PICKER_STOP_BUTTON,
+          ],
+        startupDocumentPath,
+      };
+    });
+  }
+
+  async bringStartupIocToFront(
+    startupDocumentPath,
+    {
+      promptIfAmbiguous = true,
+      notifyIfMissing = true,
+    } = {},
+  ) {
+    await this.openStartupDocumentPath(startupDocumentPath, true);
+    const terminal = await this.resolveRunningStartupIocTerminal(
+      startupDocumentPath,
+      {
+        promptIfAmbiguous,
+        placeHolder: `Select the running IOC terminal for ${path.basename(startupDocumentPath)}`,
+      },
+    );
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      if (notifyIfMissing) {
+        vscode.window.showInformationMessage(
+          `IOC is not running for ${path.basename(startupDocumentPath)}.`,
+        );
+      }
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return undefined;
+    }
+
+    this.iocShellTerminal = terminal;
+    terminal.show(true);
+    this.refresh(this.contextNode);
+    return terminal;
+  }
+
+  async stopStartupIocForDocumentPath(
+    startupDocumentPath,
+    {
+      promptIfAmbiguous = true,
+      notifyIfMissing = true,
+    } = {},
+  ) {
+    await this.openStartupDocumentPath(startupDocumentPath, true);
+    const terminal = await this.resolveRunningStartupIocTerminal(
+      startupDocumentPath,
+      {
+        promptIfAmbiguous,
+        placeHolder: `Select the running IOC terminal for ${path.basename(startupDocumentPath)}`,
+      },
+    );
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      if (notifyIfMissing) {
+        vscode.window.showInformationMessage(
+          `IOC is not running for ${path.basename(startupDocumentPath)}.`,
+        );
+      }
+      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+      return undefined;
+    }
+
+    this.iocShellTerminal = terminal;
+    terminal.show(true);
+    terminal.sendText("\u0003", false);
+    this.untrackStartupIocTerminal(terminal);
+    this.terminalActiveExecutionCount.delete(terminal);
+    this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
+    this.refresh(this.contextNode);
+    vscode.window.setStatusBarMessage(
+      `Sent interrupt to IOC for ${path.basename(startupDocumentPath)}`,
+      3000,
+    );
+    return terminal;
+  }
+
+  async startOrBringStartupIocToFront(
+    startupDocumentPath,
+    {
+      notify = false,
+    } = {},
+  ) {
+    const runningTerminal = await this.bringStartupIocToFront(
+      startupDocumentPath,
+      {
+        promptIfAmbiguous: true,
+        notifyIfMissing: false,
+      },
+    );
+    if (runningTerminal) {
+      return runningTerminal;
+    }
+
+    const startedTerminal = await this.startStartupIocForDocumentPath(
+      startupDocumentPath,
+      {
+        showTerminal: true,
+        notify,
+      },
+    );
+    if (!startedTerminal) {
+      return undefined;
+    }
+
+    await this.openStartupDocumentPath(startupDocumentPath, true);
+    return startedTerminal;
+  }
+
+  async showProjectStartupIocPicker(resourceUri) {
+    const resolvedProjectStartupPaths =
+      await this.resolveProjectStartupDocumentPaths(resourceUri);
+    if (!resolvedProjectStartupPaths) {
+      return;
+    }
+
+    const { projectRootPath, startupDocumentPaths } = resolvedProjectStartupPaths;
+    const quickPick = vscode.window.createQuickPick();
+    let isDisposed = false;
+
+    const refreshItems = () => {
+      if (isDisposed) {
+        return;
+      }
+      quickPick.items = this.createProjectStartupIocQuickPickItems(
+        projectRootPath,
+        startupDocumentPaths,
+      );
+    };
+
+    const runPickerAction = async (callback) => {
+      if (isDisposed) {
+        return;
+      }
+      quickPick.busy = true;
+      quickPick.enabled = false;
+      try {
+        await callback();
+      } finally {
+        if (!isDisposed) {
+          refreshItems();
+          quickPick.busy = false;
+          quickPick.enabled = true;
+        }
+      }
+    };
+
+    quickPick.title = "EPICS IOC Start/Stop";
+    quickPick.placeholder = "Use the item buttons to open the startup file, start the IOC, stop it, or bring its terminal to front";
+    quickPick.ignoreFocusOut = false;
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    refreshItems();
+
+    const hideDisposable = quickPick.onDidHide(() => {
+      isDisposed = true;
+      hideDisposable.dispose();
+      acceptDisposable.dispose();
+      selectionDisposable.dispose();
+      triggerButtonDisposable.dispose();
+      quickPick.dispose();
+    });
+    const acceptDisposable = quickPick.onDidAccept(() => {});
+    const selectionDisposable = quickPick.onDidChangeSelection(() => {});
+    const triggerButtonDisposable = quickPick.onDidTriggerItemButton(async (event) => {
+      const startupDocumentPath = event.item?.startupDocumentPath;
+      if (!startupDocumentPath) {
+        return;
+      }
+
+      if (event.button === STARTUP_IOC_PICKER_OPEN_FILE_BUTTON) {
+        await this.openStartupDocumentPath(startupDocumentPath, false);
+        return;
+      }
+
+      await runPickerAction(async () => {
+        if (event.button === STARTUP_IOC_PICKER_START_BUTTON) {
+          await this.startOrBringStartupIocToFront(startupDocumentPath);
+          return;
+        }
+        if (event.button === STARTUP_IOC_PICKER_BRING_TO_FRONT_BUTTON) {
+          await this.bringStartupIocToFront(startupDocumentPath);
+          return;
+        }
+        if (event.button === STARTUP_IOC_PICKER_STOP_BUTTON) {
+          await this.stopStartupIocForDocumentPath(startupDocumentPath);
+        }
+      });
+    });
+
+    quickPick.show();
+  }
+
+  async pickProjectStartupScript(resourceUri, actionLabel) {
+    const resolvedProjectStartupPaths =
+      await this.resolveProjectStartupDocumentPaths(resourceUri);
+    if (!resolvedProjectStartupPaths) {
+      return undefined;
+    }
+
+    const { startupDocumentPaths } = resolvedProjectStartupPaths;
+
+    const selected = await vscode.window.showQuickPick(
+      startupDocumentPaths.map((startupDocumentPath) => {
+        const runningTerminal = this.getCandidateRunningStartupIocTerminals(startupDocumentPath)[0];
+        return {
+          label: startupDocumentPath,
+          description: runningTerminal ? "Running" : "",
+          detail: runningTerminal ? `Terminal: ${runningTerminal.name || "Terminal"}` : "",
+          startupDocumentPath,
+        };
+      }),
+      {
+        placeHolder: `Select the IOC startup file to ${actionLabel}`,
+        ignoreFocusOut: true,
+      },
+    );
+    return selected?.startupDocumentPath;
+  }
+
+  async startProjectStartupIoc(resourceUri) {
+    const startupDocumentPath = await this.pickProjectStartupScript(resourceUri, "start");
+    if (!startupDocumentPath) {
+      return;
+    }
+
+    await this.startOrBringStartupIocToFront(startupDocumentPath);
+  }
+
+  async stopProjectStartupIoc(resourceUri) {
+    const startupDocumentPath = await this.pickProjectStartupScript(resourceUri, "stop");
+    if (!startupDocumentPath) {
+      return;
+    }
+
+    await this.stopStartupIocForDocumentPath(startupDocumentPath);
+  }
+
   resolveActiveStartupIocDocument(editor = vscode.window.activeTextEditor) {
     const document = editor?.document;
     const documentPath = getIocBootStartupDocumentPath(document);
@@ -1484,7 +2074,9 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
-    await this.startStartupIocForDocumentPath(startupTarget.documentPath);
+    await this.startOrBringStartupIocToFront(startupTarget.documentPath, {
+      notify: true,
+    });
   }
 
   async stopActiveStartupIoc() {
@@ -1496,28 +2088,14 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
-    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
-    if (!terminal || !vscode.window.terminals.includes(terminal)) {
-      vscode.window.showWarningMessage(
-        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+    const terminal = await this.stopStartupIocForDocumentPath(startupTarget.documentPath);
+    if (terminal) {
+      void this.showStartupIocNotification(
+        "stopped",
+        startupTarget.documentPath,
+        terminal,
       );
-      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
-      return;
     }
-
-    this.iocShellTerminal = terminal;
-    terminal.show(true);
-    terminal.sendText("\u0003", false);
-    this.refresh(this.contextNode);
-    vscode.window.setStatusBarMessage(
-      `Sent interrupt to IOC for ${path.basename(startupTarget.documentPath)}`,
-      3000,
-    );
-    void this.showStartupIocNotification(
-      "stopped",
-      startupTarget.documentPath,
-      terminal,
-    );
   }
 
   async showActiveStartupIocTerminal() {
@@ -1529,22 +2107,13 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
-    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
-    if (!terminal || !vscode.window.terminals.includes(terminal)) {
-      vscode.window.showWarningMessage(
-        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
+    const terminal = await this.bringStartupIocToFront(startupTarget.documentPath);
+    if (terminal) {
+      vscode.window.setStatusBarMessage(
+        `Showing IOC terminal "${terminal.name}"`,
+        2500,
       );
-      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
-      return;
     }
-
-    this.iocShellTerminal = terminal;
-    terminal.show(true);
-    this.refresh(this.contextNode);
-    vscode.window.setStatusBarMessage(
-      `Showing IOC terminal "${terminal.name}"`,
-      2500,
-    );
   }
 
   resolveActiveIocShellRecordName() {
@@ -2684,6 +3253,7 @@ class EpicsRuntimeMonitorController {
       panel,
     };
     this.probeWidgets.set(sourceUri, widgetState);
+    this.registerWidgetMenuContext(panel, "probe", widgetState);
 
     panel.webview.html = buildProbeWidgetHtml(
       panel.webview,
@@ -2796,6 +3366,7 @@ class EpicsRuntimeMonitorController {
       this.getDefaultProtocol(),
     ).rows;
     this.pvlistWidgets.set(sourceUri, widgetState);
+    this.registerWidgetMenuContext(panel, "pvlist", widgetState);
 
     panel.webview.html = buildPvlistWidgetHtml(
       panel.webview,
@@ -2863,6 +3434,7 @@ class EpicsRuntimeMonitorController {
       lastError: "",
     };
     this.monitorWidgets.set(sourceUri, widgetState);
+    this.registerWidgetMenuContext(panel, "monitor", widgetState);
 
     for (const channelName of initialChannels) {
       this.addMonitorWidgetRow(widgetState, channelName);
@@ -5777,11 +6349,9 @@ class EpicsRuntimeMonitorController {
 
   updateStartupEditorContextKeys(editor) {
     const startupTarget = this.resolveActiveStartupIocDocument(editor);
-    const terminal = startupTarget
-      ? this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath)
-      : undefined;
     const isRunning =
-      Boolean(terminal) && vscode.window.terminals.includes(terminal);
+      Boolean(startupTarget) &&
+      this.getCandidateRunningStartupIocTerminals(startupTarget.documentPath).length > 0;
 
     void vscode.commands.executeCommand(
       "setContext",
@@ -6579,46 +7149,245 @@ function normalizeFsPath(fsPath) {
   return path.resolve(String(fsPath)).replace(/\\/g, "/");
 }
 
-function isIocBootStartupDocumentPath(fsPath) {
+function isPathUnderIocBoot(fsPath) {
   const normalizedPath = normalizeFsPath(fsPath);
   if (!normalizedPath) {
-    return false;
-  }
-
-  const extension = path.extname(normalizedPath).toLowerCase();
-  if (extension !== ".cmd" && extension !== ".iocsh") {
     return false;
   }
 
   return /(^|\/)iocBoot(\/|$)/.test(normalizedPath);
 }
 
-function looksLikeIocShellStartupText(text) {
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
+function hasExecutablePermission(fsPath) {
+  try {
+    fs.accessSync(fsPath, fs.constants.X_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function readFirstLineFromFile(fsPath) {
+  try {
+    const text = fs.readFileSync(fsPath, "utf8");
+    return String(text || "").split(/\r?\n/, 1)[0] || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function extractShebangExecutable(text) {
+  const firstLine = String(text || "").split(/\r?\n/, 1)[0] || "";
+  if (!firstLine.startsWith("#!")) {
+    return "";
+  }
+
+  return extractCommandLineExecutable(firstLine.slice(2).trim());
+}
+
+function resolveExistingExecutablePath(executableText, baseDirectory = "") {
+  const normalizedExecutable = String(executableText || "").trim();
+  if (!normalizedExecutable) {
+    return undefined;
+  }
+
+  const hasPathSeparator =
+    normalizedExecutable.includes("/") || normalizedExecutable.includes("\\");
+  if (path.isAbsolute(normalizedExecutable)) {
+    return fs.existsSync(normalizedExecutable) ? normalizedExecutable : undefined;
+  }
+
+  if (hasPathSeparator) {
+    const candidatePath = baseDirectory
+      ? path.resolve(baseDirectory, normalizedExecutable)
+      : path.resolve(normalizedExecutable);
+    return fs.existsSync(candidatePath) ? candidatePath : undefined;
+  }
+
+  const pathEntries = String(process.env.PATH || "")
+    .split(path.delimiter)
+    .filter(Boolean);
+  for (const pathEntry of pathEntries) {
+    const candidatePath = path.join(pathEntry, normalizedExecutable);
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return undefined;
+}
+
+function isStcmdLikeFilePath(fsPath, documentText) {
+  const normalizedPath = normalizeFsPath(fsPath);
+  if (!normalizedPath || !fs.existsSync(normalizedPath)) {
+    return false;
+  }
+
+  let stats;
+  try {
+    stats = fs.statSync(normalizedPath);
+  } catch (error) {
+    return false;
+  }
+  if (!stats.isFile()) {
+    return false;
+  }
+
+  if (!isPathUnderIocBoot(normalizedPath) || !hasExecutablePermission(normalizedPath)) {
+    return false;
+  }
+
+  const shebangExecutable = extractShebangExecutable(
+    documentText === undefined ? readFirstLineFromFile(normalizedPath) : documentText,
+  );
+  if (!shebangExecutable) {
+    return false;
+  }
+
+  return Boolean(
+    resolveExistingExecutablePath(shebangExecutable, path.dirname(normalizedPath)),
+  );
+}
+
+function getIocBootRelativeDisplayPath(projectRootPath, startupDocumentPath) {
+  const iocBootRootPath = normalizeFsPath(path.join(projectRootPath, "iocBoot"));
+  const relativePath = path.relative(iocBootRootPath, startupDocumentPath).replace(/\\/g, "/");
+  return relativePath.replace(/^(\.\.\/)+/, "");
+}
+
+function getIocBootDisplayPath(projectRootPath, startupDocumentPath) {
+  const relativePath = getIocBootRelativeDisplayPath(projectRootPath, startupDocumentPath);
+  return relativePath ? `iocBoot/${relativePath}` : "iocBoot";
+}
+
+function getCommandResourceFsPath(resourceUri) {
+  const candidateUri =
+    resourceUri?.scheme
+      ? resourceUri
+      : Array.isArray(resourceUri) && resourceUri[0]?.scheme
+        ? resourceUri[0]
+        : undefined;
+  return candidateUri?.scheme === "file" ? normalizeFsPath(candidateUri.fsPath) : "";
+}
+
+function isExistingFile(filePath) {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch (error) {
+    return false;
+  }
+}
+
+function isFsPathEpicsProjectRoot(rootPath) {
+  if (!rootPath || !fs.existsSync(rootPath)) {
+    return false;
+  }
+
+  try {
+    if (!fs.statSync(rootPath).isDirectory()) {
+      return false;
+    }
+  } catch (error) {
+    return false;
+  }
+
+  return EPICS_PROJECT_MARKER_SEGMENTS.every((pathSegments) =>
+    isExistingFile(path.join(rootPath, ...pathSegments)),
+  );
+}
+
+function findContainingEpicsProjectRootPath(filePath) {
+  if (!filePath) {
+    return undefined;
+  }
+
+  let currentPath = normalizeFsPath(filePath);
+  try {
+    if (fs.statSync(currentPath).isFile()) {
+      currentPath = normalizeFsPath(path.dirname(currentPath));
+    }
+  } catch (error) {
+    return undefined;
+  }
+
+  while (currentPath) {
+    if (isFsPathEpicsProjectRoot(currentPath)) {
+      return currentPath;
+    }
+
+    const parentPath = normalizeFsPath(path.dirname(currentPath));
+    if (parentPath === currentPath) {
+      return undefined;
+    }
+    currentPath = parentPath;
+  }
+
+  return undefined;
+}
+
+function getWorkspaceEpicsProjectRootPaths() {
+  const roots = new Set();
+  for (const workspaceFolder of vscode.workspace.workspaceFolders || []) {
+    const containingRootPath = findContainingEpicsProjectRootPath(workspaceFolder.uri?.fsPath);
+    if (containingRootPath) {
+      roots.add(containingRootPath);
       continue;
     }
-    return true;
+
+    const workspaceRootPath = normalizeFsPath(workspaceFolder.uri?.fsPath);
+    if (isFsPathEpicsProjectRoot(workspaceRootPath)) {
+      roots.add(workspaceRootPath);
+    }
   }
-  return false;
+  return [...roots].sort((left, right) => left.localeCompare(right));
+}
+
+function findProjectStcmdLikeFilePaths(projectRootPath) {
+  const iocBootRootPath = normalizeFsPath(path.join(projectRootPath, "iocBoot"));
+  if (!iocBootRootPath || !fs.existsSync(iocBootRootPath)) {
+    return [];
+  }
+
+  const startupDocumentPaths = [];
+  const pendingDirectories = [iocBootRootPath];
+  while (pendingDirectories.length > 0) {
+    const currentDirectory = pendingDirectories.pop();
+    let directoryEntries = [];
+    try {
+      directoryEntries = fs.readdirSync(currentDirectory, { withFileTypes: true });
+    } catch (error) {
+      continue;
+    }
+
+    for (const directoryEntry of directoryEntries) {
+      const entryPath = path.join(currentDirectory, directoryEntry.name);
+      if (directoryEntry.isDirectory()) {
+        pendingDirectories.push(entryPath);
+        continue;
+      }
+      if (!directoryEntry.isFile()) {
+        continue;
+      }
+      if (isStcmdLikeFilePath(entryPath)) {
+        startupDocumentPaths.push(normalizeFsPath(entryPath));
+      }
+    }
+  }
+
+  return startupDocumentPaths.sort((left, right) =>
+    getIocBootRelativeDisplayPath(projectRootPath, left).localeCompare(
+      getIocBootRelativeDisplayPath(projectRootPath, right),
+    ),
+  );
 }
 
 function getIocBootStartupDocumentPath(document) {
-  if (
-    !document?.uri ||
-    document.uri.scheme !== "file" ||
-    document.languageId !== "startup"
-  ) {
+  if (!document?.uri || document.uri.scheme !== "file") {
     return undefined;
   }
 
   const documentPath = document.uri.fsPath;
-  if (!isIocBootStartupDocumentPath(documentPath)) {
-    return undefined;
-  }
-
-  if (!looksLikeIocShellStartupText(document.getText())) {
+  if (!isStcmdLikeFilePath(documentPath, document.getText())) {
     return undefined;
   }
 
@@ -6642,11 +7411,6 @@ function resolveStartupCommandDocumentPath(commandLine, cwdUri) {
   }
 
   const executableText = String(executable).trim();
-  const extension = path.extname(executableText).toLowerCase();
-  if (extension !== ".cmd" && extension !== ".iocsh") {
-    return undefined;
-  }
-
   let candidatePath = executableText;
   if (!path.isAbsolute(candidatePath)) {
     if (cwdUri?.scheme !== "file") {
@@ -6655,7 +7419,7 @@ function resolveStartupCommandDocumentPath(commandLine, cwdUri) {
     candidatePath = path.resolve(cwdUri.fsPath, candidatePath);
   }
 
-  if (!fs.existsSync(candidatePath) || !isIocBootStartupDocumentPath(candidatePath)) {
+  if (!isStcmdLikeFilePath(candidatePath)) {
     return undefined;
   }
 

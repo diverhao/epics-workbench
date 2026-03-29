@@ -25,84 +25,100 @@ class ExportDatabaseToExcelAction : DumbAwareAction() {
     event.presentation.isEnabledAndVisible =
       event.project != null &&
       file != null &&
-      (isDatabaseFile(file.extension) || EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file))
+      canExportDatabaseFile(file)
   }
 
   override fun actionPerformed(event: AnActionEvent) {
     val project = event.project ?: return
     val file = getTargetFile(event) ?: return
-    if (!isDatabaseFile(file.extension) && !EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)) {
+    if (!canExportDatabaseFile(file)) {
       return
     }
 
-    val sourcePath = Path.of(file.path)
-    val sourceText = if (EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)) {
-      val expandedResult = EpicsSubstitutionsExpansionSupport.expandToDatabaseText(project, file)
-      expandedResult.expandedText ?: run {
-        Messages.showErrorDialog(project, expandedResult.issues.joinToString("\n"), TITLE)
-        return
-      }
-    } else {
-      runCatching { Files.readString(sourcePath) }.getOrElse { error ->
-        Messages.showErrorDialog(project, error.message ?: "Failed to read ${file.name}.", TITLE)
-        return
-      }
-    }
-
-    val descriptor = FileSaverDescriptor(TITLE, "Export the database as an Excel workbook.", "xlsx")
-    val saver = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
-    val defaultName = "${sourcePath.fileName.toString().substringBeforeLast('.')}.xlsx"
-    val targetWrapper = saver.save(sourcePath.parent, defaultName) ?: return
-    val targetPath = targetWrapper.file.toPath()
-
-    val workbookBytes = EpicsDatabaseExcelExporter.buildWorkbook(sourceText)
-    runCatching {
-      Files.write(targetPath, workbookBytes)
-      LocalFileSystem.getInstance().refreshNioFiles(listOf(targetPath))
-    }.onFailure { error ->
-      Messages.showErrorDialog(project, error.message ?: "Failed to write ${targetPath.fileName}.", TITLE)
-      return
-    }
-
-    NotificationGroupManager.getInstance()
-      .getNotificationGroup(NOTIFICATION_GROUP_ID)
-      .createNotification(
-        "Saved to ${targetPath.fileName}.",
-        targetPath.toString(),
-        NotificationType.INFORMATION,
-      )
-      .addAction(
-        NotificationAction.createSimpleExpiring("Open") {
-          ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-              if (Desktop.isDesktopSupported()) {
-                Desktop.getDesktop().open(targetPath.toFile())
-              } else {
-                throw IllegalStateException("Desktop open is not supported on this platform.")
-              }
-            }.onFailure { error ->
-              ApplicationManager.getApplication().invokeLater {
-                Messages.showErrorDialog(
-                  project,
-                  error.message ?: "Failed to open ${targetPath.fileName}.",
-                  TITLE,
-                )
-              }
-            }
-          }
-        },
-      )
-      .notify(project)
+    exportDatabaseFileToExcel(project, file)
   }
 
   private fun getTargetFile(event: AnActionEvent) = event.getData(CommonDataKeys.VIRTUAL_FILE)
     ?: event.getData(CommonDataKeys.PSI_FILE)?.virtualFile
 
-  private fun isDatabaseFile(extension: String?): Boolean = extension?.lowercase() in DATABASE_EXTENSIONS
-
   private companion object {
-    private const val TITLE = "Export to Excel"
-    private const val NOTIFICATION_GROUP_ID = "EPICS Workbench Notifications"
-    private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")
+    private const val TITLE = EXPORT_TO_EXCEL_TITLE
   }
 }
+
+internal fun canExportDatabaseFile(file: com.intellij.openapi.vfs.VirtualFile?): Boolean {
+  return file != null &&
+    (file.extension?.lowercase() in DATABASE_EXTENSIONS || EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file))
+}
+
+internal fun exportDatabaseFileToExcel(
+  project: com.intellij.openapi.project.Project,
+  file: com.intellij.openapi.vfs.VirtualFile,
+) {
+  if (!canExportDatabaseFile(file)) {
+    return
+  }
+
+  val sourcePath = Path.of(file.path)
+  val sourceText = if (EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)) {
+    val expandedResult = EpicsSubstitutionsExpansionSupport.expandToDatabaseText(project, file)
+    expandedResult.expandedText ?: run {
+      Messages.showErrorDialog(project, expandedResult.issues.joinToString("\n"), EXPORT_TO_EXCEL_TITLE)
+      return
+    }
+  } else {
+    runCatching { Files.readString(sourcePath) }.getOrElse { error ->
+      Messages.showErrorDialog(project, error.message ?: "Failed to read ${file.name}.", EXPORT_TO_EXCEL_TITLE)
+      return
+    }
+  }
+
+  val descriptor = FileSaverDescriptor(EXPORT_TO_EXCEL_TITLE, "Export the database as an Excel workbook.", "xlsx")
+  val saver = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
+  val defaultName = "${sourcePath.fileName.toString().substringBeforeLast('.')}.xlsx"
+  val targetWrapper = saver.save(sourcePath.parent, defaultName) ?: return
+  val targetPath = targetWrapper.file.toPath()
+
+  val workbookBytes = EpicsDatabaseExcelExporter.buildWorkbook(sourceText)
+  runCatching {
+    Files.write(targetPath, workbookBytes)
+    LocalFileSystem.getInstance().refreshNioFiles(listOf(targetPath))
+  }.onFailure { error ->
+    Messages.showErrorDialog(project, error.message ?: "Failed to write ${targetPath.fileName}.", EXPORT_TO_EXCEL_TITLE)
+    return
+  }
+
+  NotificationGroupManager.getInstance()
+    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+    .createNotification(
+      "Saved to ${targetPath.fileName}.",
+      targetPath.toString(),
+      NotificationType.INFORMATION,
+    )
+    .addAction(
+      NotificationAction.createSimpleExpiring("Open") {
+        ApplicationManager.getApplication().executeOnPooledThread {
+          runCatching {
+            if (Desktop.isDesktopSupported()) {
+              Desktop.getDesktop().open(targetPath.toFile())
+            } else {
+              throw IllegalStateException("Desktop open is not supported on this platform.")
+            }
+          }.onFailure { error ->
+            ApplicationManager.getApplication().invokeLater {
+              Messages.showErrorDialog(
+                project,
+                error.message ?: "Failed to open ${targetPath.fileName}.",
+                EXPORT_TO_EXCEL_TITLE,
+              )
+            }
+          }
+        }
+      },
+    )
+    .notify(project)
+}
+
+private const val EXPORT_TO_EXCEL_TITLE = "Export Database to Excel"
+private const val NOTIFICATION_GROUP_ID = "EPICS Workbench Notifications"
+private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")

@@ -7,9 +7,9 @@ import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.projectHasEpicsRoot
 import java.nio.file.Path
 
 class ImportDatabaseFromExcelAction : DumbAwareAction() {
@@ -18,18 +18,13 @@ class ImportDatabaseFromExcelAction : DumbAwareAction() {
   override fun update(event: AnActionEvent) {
     val project = event.project
     val file = getTargetFile(event)
-    val isProtocolFile = file?.extension.equals("proto", ignoreCase = true)
     event.presentation.isEnabledAndVisible =
-      project != null && !isProtocolFile && (
+      project != null && (
+        projectHasEpicsRoot(project) ||
         isExcelFile(file) ||
-          isEpicsFile(file) ||
-          isEpicsProject(project)
+          isEpicsFile(file)
       )
-    event.presentation.text = if (file?.extension?.lowercase() in setOf("pvlist", "dbd")) {
-      "Import Excel"
-    } else {
-      "Import Excel as EPICS DB"
-    }
+    event.presentation.text = TITLE
   }
 
   override fun actionPerformed(event: AnActionEvent) {
@@ -56,17 +51,10 @@ class ImportDatabaseFromExcelAction : DumbAwareAction() {
     return file.extension?.lowercase() in EPICS_EXTENSIONS || file.name == "st.cmd"
   }
 
-  private fun isEpicsProject(project: Project): Boolean {
-    return ProjectRootManager.getInstance(project).contentRoots.any { root ->
-      root.findFileByRelativePath("configure/RELEASE") != null ||
-        root.findFileByRelativePath("configure/RELEASE.local") != null
-    }
-  }
-
   private fun promptImportWorkbook(project: Project) {
     val descriptor = FileChooserDescriptorFactory
       .createSingleFileDescriptor("xlsx")
-      .withTitle("Import Excel as EPICS DB")
+      .withTitle(TITLE)
     FileChooser.chooseFile(descriptor, project, null) { file ->
       importWorkbook(project, Path.of(file.path))
     }
@@ -97,7 +85,7 @@ class ImportDatabaseFromExcelAction : DumbAwareAction() {
   }
 
   private companion object {
-    private const val TITLE = "Import Excel as EPICS DB"
+    private const val TITLE = "Import Excel as Database"
     private val EPICS_EXTENSIONS = setOf(
       "db",
       "vdb",

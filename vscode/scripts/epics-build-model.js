@@ -635,6 +635,7 @@ function buildProjectDbdEntries({ rootPath, runtimeArtifacts, releaseRoots, root
   }
 
   scanDbdDirectoryEntries(entries, path.join(rootPath, "dbd"), rootRelativePath || ".");
+  scanLocalMakefileDirectoryDbdEntries(entries, rootPath, rootRelativePath || ".");
 
   for (const releaseRoot of releaseRoots) {
     scanDbdDirectoryEntries(
@@ -645,6 +646,68 @@ function buildProjectDbdEntries({ rootPath, runtimeArtifacts, releaseRoots, root
   }
 
   return entries;
+}
+
+function scanLocalMakefileDirectoryDbdEntries(entries, rootPath, sourceLabel) {
+  const normalizedRootPath = normalizeFsPath(rootPath);
+  if (!normalizedRootPath || !isExistingDirectory(normalizedRootPath)) {
+    return;
+  }
+
+  const pendingDirectories = [normalizedRootPath];
+  while (pendingDirectories.length > 0) {
+    const directoryPath = pendingDirectories.pop();
+    let directoryEntries;
+    try {
+      directoryEntries = fs.readdirSync(directoryPath, { withFileTypes: true });
+    } catch (error) {
+      continue;
+    }
+
+    const hasMakefile = directoryEntries.some(
+      (entry) => entry.isFile() && entry.name === "Makefile",
+    );
+    if (hasMakefile) {
+      for (const entry of directoryEntries) {
+        if (
+          !entry.isFile() ||
+          path.extname(entry.name).toLowerCase() !== ".dbd" ||
+          entries.has(entry.name)
+        ) {
+          continue;
+        }
+
+        const absolutePath = normalizeFsPath(path.join(directoryPath, entry.name));
+        const relativeDirectory = normalizePath(
+          path.relative(normalizedRootPath, directoryPath),
+        );
+        const detailDirectory =
+          relativeDirectory && relativeDirectory !== "."
+            ? `${sourceLabel}/${relativeDirectory}`
+            : sourceLabel;
+        entries.set(entry.name, {
+          name: entry.name,
+          detail: `${detailDirectory}/${entry.name}`,
+          documentation: `Found beside Makefile in ${detailDirectory}`,
+          absolutePath,
+        });
+      }
+    }
+
+    for (const entry of directoryEntries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (
+        IGNORED_DIRECTORY_NAMES.has(entry.name) ||
+        entry.name === "dbd" ||
+        /^O(?:\.|$)/.test(entry.name)
+      ) {
+        continue;
+      }
+      pendingDirectories.push(normalizeFsPath(path.join(directoryPath, entry.name)));
+    }
+  }
 }
 
 function buildProjectLibEntries({ rootPath, releaseRoots, rootRelativePath }) {

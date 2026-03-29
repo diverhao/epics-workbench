@@ -4,11 +4,17 @@ import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import java.util.ArrayDeque
 
 internal object EpicsDatabaseValueValidator {
+  internal enum class ValidationSeverity {
+    ERROR,
+    WARNING,
+  }
+
   internal data class ValidationIssue(
     val startOffset: Int,
     val endOffset: Int,
     val message: String,
     val code: String? = null,
+    val severity: ValidationSeverity = ValidationSeverity.ERROR,
   )
 
   fun collectIssues(text: String): List<ValidationIssue> {

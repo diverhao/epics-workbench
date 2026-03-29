@@ -23,6 +23,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
 import com.intellij.util.messages.Topic
 import com.intellij.util.execution.ParametersListUtil
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -143,8 +144,13 @@ class EpicsIocRuntimeService(
 
   fun stopIoc(startupFile: VirtualFile) {
     val startupPath = normalizeStartupPath(startupFile) ?: return
-    val session = synchronized(sessionLock) { sessionsByStartupPath[startupPath] } ?: return
+    val session = synchronized(sessionLock) {
+      sessionsByStartupPath.remove(startupPath)
+    } ?: return
     session.processHandler.destroyProcess()
+    notifyStartupStateChanged(startupPath, false)
+    session.commandNames.set(null)
+    session.commandHelp.clear()
     notifyConsoleEvent(
       startupFile.name,
       session.consoleTitle,
@@ -371,6 +377,9 @@ class EpicsIocRuntimeService(
   }
 
   private fun buildStartupCommandLine(startupFile: VirtualFile): List<String> {
+    val startupPath = Path.of(startupFile.path).normalize()
+    resolveStartupShebangCommandLine(startupPath)?.let { return it }
+
     val configuration = configurationService.loadConfiguration()
     val startupCommand = "./${startupFile.name}"
     val shellPath = configuration.iocStartupShell.trim()
@@ -380,6 +389,68 @@ class EpicsIocRuntimeService(
     val shellArgs = ParametersListUtil.parse(configuration.iocStartupShellArgs.trim()).toMutableList()
     shellArgs += startupCommand
     return listOf(shellPath) + shellArgs
+  }
+
+  private fun resolveStartupShebangCommandLine(startupPath: Path): List<String>? {
+    val firstLine = runCatching {
+      Files.newBufferedReader(startupPath).use { reader -> reader.readLine().orEmpty() }
+    }.getOrDefault("")
+    if (!firstLine.startsWith("#!")) {
+      return null
+    }
+
+    val shebangCommand = firstLine.removePrefix("#!").trim()
+    if (shebangCommand.isEmpty()) {
+      return null
+    }
+
+    val shebangParts = ParametersListUtil.parse(shebangCommand)
+      .map(String::trim)
+      .filter(String::isNotEmpty)
+    if (shebangParts.isEmpty()) {
+      return null
+    }
+
+    val executablePath = resolveExistingExecutablePath(
+      executableText = shebangParts.first(),
+      baseDirectory = startupPath.parent,
+    ) ?: return null
+
+    return buildList {
+      add(executablePath.toString())
+      addAll(shebangParts.drop(1))
+      add(startupPath.toString())
+    }
+  }
+
+  private fun resolveExistingExecutablePath(executableText: String, baseDirectory: Path?): Path? {
+    val normalizedExecutable = executableText.trim()
+    if (normalizedExecutable.isEmpty()) {
+      return null
+    }
+
+    if (normalizedExecutable.contains('/') || normalizedExecutable.contains('\\')) {
+      val candidatePath = if (Path.of(normalizedExecutable).isAbsolute) {
+        Path.of(normalizedExecutable)
+      } else {
+        (baseDirectory ?: Path.of("")).resolve(normalizedExecutable)
+      }.normalize()
+      return candidatePath.takeIf(Files::exists)
+    }
+
+    val pathEntries = System.getenv("PATH")
+      .orEmpty()
+      .split(File.pathSeparatorChar)
+      .map(String::trim)
+      .filter(String::isNotEmpty)
+    for (pathEntry in pathEntries) {
+      val candidatePath = Path.of(pathEntry, normalizedExecutable).normalize()
+      if (Files.exists(candidatePath)) {
+        return candidatePath
+      }
+    }
+
+    return null
   }
 
   private data class IocProcessSession(

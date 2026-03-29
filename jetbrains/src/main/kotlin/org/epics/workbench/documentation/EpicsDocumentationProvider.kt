@@ -11,6 +11,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.impl.FakePsiElement
 import com.intellij.psi.tree.IElementType
+import org.epics.workbench.build.EpicsBuildModelService
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import org.epics.workbench.highlighting.EpicsHighlightingKeys
 import org.epics.workbench.highlighting.EpicsLexingProfile
@@ -26,6 +27,13 @@ import java.awt.Color
 import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.io.path.exists
+import kotlin.io.path.isDirectory
+import kotlin.io.path.isRegularFile
+import kotlin.io.path.name
+import kotlin.io.path.pathString
 
 class EpicsDocumentationProvider : AbstractDocumentationProvider() {
   override fun getCustomDocumentationElement(
@@ -69,6 +77,19 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       if (hostFile.extension?.lowercase() in DATABASE_EXTENSIONS) {
         val text = readText(hostFile)
         if (text != null) {
+          findDatabaseFieldValueContext(text, offset)
+            ?.takeIf { it.fieldName == "DTYP" }
+            ?.let { context ->
+              val matches = resolveDtypDeviceHoverMatches(project, hostFile, context)
+              if (matches.isNotEmpty()) {
+                val referenceKey = buildDtypReferenceKey(hostFile, context, matches)
+                return EpicsDocumentationPreview(
+                  referenceKey,
+                  buildDtypDeviceDocumentation(context, matches),
+                )
+              }
+            }
+
           EpicsRecordCompletionSupport.findMenuFieldValueContext(text, offset)?.let { context ->
             val referenceKey = "${hostFile.path}:menu:${context.recordName}:${context.fieldName}:${context.valueStart}:${context.valueEnd}"
             return EpicsDocumentationPreview(referenceKey, buildMenuFieldDocumentation(hostFile, context))
@@ -120,6 +141,48 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         }
 
       return null
+    }
+
+    private fun buildDtypReferenceKey(
+      hostFile: VirtualFile,
+      context: DatabaseFieldValueContext,
+      matches: List<DbdDeviceHoverMatch>,
+    ): String {
+      return matches.joinToString(
+        separator = "|",
+        prefix = "${hostFile.path}:dtyp:${context.recordName}:${context.recordType}:${context.value}:",
+      ) { match ->
+        "${match.absolutePath.pathString}:${match.startOffset}:${match.supportName}"
+      }
+    }
+
+    private fun buildDtypDeviceDocumentation(
+      context: DatabaseFieldValueContext,
+      matches: List<DbdDeviceHoverMatch>,
+    ): String {
+      return buildString {
+        append("<html><body>")
+        append("<h3>").append(escape("EPICS DTYP device support")).append("</h3>")
+        append(paragraph("Record", context.recordName))
+        append(paragraph("Type", context.recordType))
+        append(paragraph("Field", context.fieldName))
+        append(paragraph("Current value", context.value))
+
+        matches.take(5).forEachIndexed { index, match ->
+          append("<hr/>")
+          append("<h4>").append(escape("${index + 1}. ${match.supportName}")).append("</h4>")
+          append(pathParagraph("DBD", match.absolutePath.pathString, match.startOffset))
+          append(paragraph("Line", match.line.toString()))
+          append(paragraph("Link type", match.linkType))
+          append(paragraph("Search root", match.searchLabel))
+          appendPreview("device(...)", match.declarationText)
+        }
+
+        if (matches.size > 5) {
+          append(paragraph("Omitted", "${matches.size - 5} more matching device declarations"))
+        }
+        append("</body></html>")
+      }
     }
 
     private fun buildMenuFieldDocumentation(
@@ -559,6 +622,222 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       return count
     }
 
+    private fun findDatabaseFieldValueContext(text: String, offset: Int): DatabaseFieldValueContext? {
+      val recordDeclaration = EpicsRecordCompletionSupport.extractRecordDeclarations(text)
+        .firstOrNull { declaration -> offset in declaration.recordStart..declaration.recordEnd }
+        ?: return null
+      val fieldDeclaration = EpicsRecordCompletionSupport.extractFieldDeclarationsInRecord(text, recordDeclaration)
+        .firstOrNull { declaration -> offset in declaration.valueStart..declaration.valueEnd }
+        ?: return null
+
+      return DatabaseFieldValueContext(
+        recordType = recordDeclaration.recordType,
+        recordName = recordDeclaration.name,
+        fieldName = fieldDeclaration.fieldName,
+        value = fieldDeclaration.value,
+        valueStart = fieldDeclaration.valueStart,
+        valueEnd = fieldDeclaration.valueEnd,
+      )
+    }
+
+    private fun resolveDtypDeviceHoverMatches(
+      project: Project,
+      hostFile: VirtualFile,
+      context: DatabaseFieldValueContext,
+    ): List<DbdDeviceHoverMatch> {
+      val ownerRoot = EpicsPathResolver.findOwningEpicsRoot(project, hostFile)
+      val choiceName = context.value.trim()
+      if (choiceName.isEmpty()) {
+        return emptyList()
+      }
+
+      val matches = mutableListOf<DbdDeviceHoverMatch>()
+      val seenFiles = linkedSetOf<String>()
+      for (searchDirectory in collectDtypDeviceSearchDirectories(project, hostFile, ownerRoot)) {
+        val directory = searchDirectory.directory
+        if (!directory.exists() || !directory.isDirectory()) {
+          continue
+        }
+
+        val paths = runCatching {
+          Files.list(directory).use { stream ->
+            stream
+              .filter { candidate -> Files.isRegularFile(candidate) && candidate.name.lowercase().endsWith(".dbd") }
+              .sorted(compareBy<Path> { it.name.lowercase() }.thenBy { it.pathString.lowercase() })
+              .toList()
+          }
+        }.getOrDefault(emptyList())
+
+        for (dbdPath in paths) {
+          val normalizedPath = dbdPath.normalize()
+          if (!seenFiles.add(normalizedPath.pathString)) {
+            continue
+          }
+
+          val text = runCatching { Files.readString(normalizedPath) }.getOrNull() ?: continue
+          for (declaration in extractDbdDeviceDeclarations(text)) {
+            if (
+              declaration.recordType != context.recordType ||
+                declaration.choiceName != choiceName
+            ) {
+              continue
+            }
+
+            matches += DbdDeviceHoverMatch(
+              absolutePath = normalizedPath,
+              line = lineNumberAt(text, declaration.startOffset),
+              startOffset = declaration.startOffset,
+              recordType = declaration.recordType,
+              linkType = declaration.linkType,
+              supportName = declaration.supportName,
+              choiceName = declaration.choiceName,
+              declarationText = declaration.declarationText,
+              searchLabel = searchDirectory.label,
+            )
+          }
+        }
+      }
+
+      return matches
+    }
+
+    private fun collectDtypDeviceSearchDirectories(
+      project: Project,
+      hostFile: VirtualFile,
+      ownerRoot: Path,
+    ): List<DbdSearchDirectory> {
+      val directories = mutableListOf<DbdSearchDirectory>()
+      val seen = linkedSetOf<String>()
+
+      fun addDirectory(path: Path?, label: String) {
+        val normalizedPath = path?.normalize() ?: return
+        if (!seen.add(normalizedPath.pathString)) {
+          return
+        }
+        directories += DbdSearchDirectory(normalizedPath, label)
+      }
+
+      addDirectory(hostFile.parent?.toNioPath(), "current folder")
+      addDirectory(ownerRoot.resolve("dbd"), "project dbd")
+
+      val releaseVariables = project.getService(EpicsBuildModelService::class.java)
+        ?.loadBuildModel(ownerRoot)
+        ?.releaseVariables
+        ?: loadReleaseVariables(ownerRoot)
+      resolveReleaseModuleRoots(ownerRoot, releaseVariables).forEach { root ->
+        addDirectory(root.rootPath.resolve("dbd"), "${root.variableName} dbd")
+      }
+
+      return directories
+    }
+
+    private fun loadReleaseVariables(ownerRoot: Path): Map<String, String> {
+      val configureDirectory = ownerRoot.resolve("configure")
+      val releaseFiles = listOf(
+        configureDirectory.resolve("RELEASE"),
+        configureDirectory.resolve("RELEASE.local"),
+      )
+      val rawValues = linkedMapOf<String, String>()
+      for (releaseFile in releaseFiles) {
+        if (!releaseFile.exists() || !releaseFile.isRegularFile()) {
+          continue
+        }
+
+        runCatching { Files.readAllLines(releaseFile) }.getOrDefault(emptyList()).forEach { line ->
+          val match = RELEASE_ASSIGNMENT_REGEX.find(line) ?: return@forEach
+          rawValues[match.groups[1]?.value.orEmpty()] = match.groups[2]?.value?.trim().orEmpty()
+        }
+      }
+      return rawValues
+    }
+
+    private fun resolveReleaseModuleRoots(
+      ownerRoot: Path,
+      releaseVariables: Map<String, String>,
+    ): List<ResolvedReleaseRoot> {
+      val resolved = linkedMapOf<String, Path?>()
+      val resolving = linkedSetOf<String>()
+
+      fun resolve(variableName: String): Path? {
+        if (resolved.containsKey(variableName)) {
+          return resolved[variableName]
+        }
+        if (!resolving.add(variableName)) {
+          return null
+        }
+
+        val rawValue = releaseVariables[variableName]
+        if (rawValue.isNullOrBlank()) {
+          resolving.remove(variableName)
+          resolved[variableName] = null
+          return null
+        }
+
+        val expandedValue = EPICS_VARIABLE_REGEX.replace(rawValue) { match ->
+          val nestedName = match.groups[1]?.value
+            ?: match.groups[3]?.value
+            ?: match.groups[5]?.value
+            ?: return@replace ""
+          val defaultValue = match.groups[2]?.value ?: match.groups[4]?.value
+          resolve(nestedName)?.pathString
+            ?: releaseVariables[nestedName]
+            ?: System.getenv(nestedName)
+            ?: defaultValue
+            ?: ""
+        }
+
+        val resolvedPath = when {
+          expandedValue.isBlank() ||
+            expandedValue.contains("\$(") ||
+            expandedValue.contains("\${") -> null
+          else -> runCatching {
+            val candidate = Path.of(expandedValue)
+            if (candidate.isAbsolute) candidate.normalize() else ownerRoot.resolve(candidate).normalize()
+          }.getOrNull()
+        }?.takeIf { candidate -> candidate.exists() && candidate.isDirectory() }
+
+        resolving.remove(variableName)
+        resolved[variableName] = resolvedPath
+        return resolvedPath
+      }
+
+      return releaseVariables.keys.mapNotNull { variableName ->
+        resolve(variableName)?.let { rootPath ->
+          ResolvedReleaseRoot(variableName, rootPath)
+        }
+      }
+    }
+
+    private fun extractDbdDeviceDeclarations(text: String): List<DbdDeviceDeclaration> {
+      return DBD_DEVICE_DECLARATION_REGEX.findAll(text).mapNotNull { match ->
+        val recordType = match.groups[1]?.value.orEmpty()
+        val linkType = match.groups[2]?.value.orEmpty()
+        val supportName = match.groups[3]?.value.orEmpty()
+        val choiceName = match.groups[4]?.value.orEmpty()
+        if (
+          recordType.isBlank() ||
+            linkType.isBlank() ||
+            supportName.isBlank() ||
+            choiceName.isBlank()
+        ) {
+          return@mapNotNull null
+        }
+
+        DbdDeviceDeclaration(
+          recordType = recordType,
+          linkType = linkType,
+          supportName = supportName,
+          choiceName = choiceName,
+          declarationText = match.value,
+          startOffset = match.range.first,
+        )
+      }.toList()
+    }
+
+    private fun lineNumberAt(text: String, offset: Int): Int {
+      return text.take(offset.coerceIn(0, text.length)).count { it == '\n' } + 1
+    }
+
     private fun readText(file: VirtualFile): String? {
       return try {
         String(file.contentsToByteArray(), file.charset)
@@ -692,6 +971,46 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       val body: String,
     )
 
+    private data class DatabaseFieldValueContext(
+      val recordType: String,
+      val recordName: String,
+      val fieldName: String,
+      val value: String,
+      val valueStart: Int,
+      val valueEnd: Int,
+    )
+
+    private data class DbdSearchDirectory(
+      val directory: Path,
+      val label: String,
+    )
+
+    private data class ResolvedReleaseRoot(
+      val variableName: String,
+      val rootPath: Path,
+    )
+
+    private data class DbdDeviceDeclaration(
+      val recordType: String,
+      val linkType: String,
+      val supportName: String,
+      val choiceName: String,
+      val declarationText: String,
+      val startOffset: Int,
+    )
+
+    private data class DbdDeviceHoverMatch(
+      val absolutePath: Path,
+      val line: Int,
+      val startOffset: Int,
+      val recordType: String,
+      val linkType: String,
+      val supportName: String,
+      val choiceName: String,
+      val declarationText: String,
+      val searchLabel: String,
+    )
+
     private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")
     private const val PVLIST_EXTENSION = "pvlist"
     private const val RECORD_PREVIEW_MAX_LINES = 100
@@ -715,6 +1034,10 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
     private val RECORD_DECLARATION_REGEX = Regex("""\b(?:g?record)\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*"((?:[^"\\]|\\.)*)"""")
     private val RECORD_DECLARATION_PREFIX_REGEX = Regex("""(record\(\s*[A-Za-z0-9_]+\s*,\s*")((?:[^"\\]|\\.)*)(")""")
     private val SUBSTITUTION_BLOCK_START_REGEX = Regex("""(?m)^\s*file\s+("?[^"\s{]+"?)\s*\{""")
+    private val RELEASE_ASSIGNMENT_REGEX = Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$""")
+    private val DBD_DEVICE_DECLARATION_REGEX = Regex(
+      """device\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)""",
+    )
     private val EPICS_VARIABLE_REGEX = Regex("""\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)""")
     private val PVLIST_MACRO_ASSIGNMENT_REGEX = Regex("""^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$""")
     private val PVLIST_MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")

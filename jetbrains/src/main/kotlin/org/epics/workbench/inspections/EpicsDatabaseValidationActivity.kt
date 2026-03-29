@@ -68,7 +68,10 @@ internal class EpicsDatabaseValidationListener(
     }
 
     return when {
-      isDatabaseFile(file.name) -> EpicsDatabaseValueValidator.collectIssues(document.text)
+      isDatabaseFile(file.name) ->
+        EpicsDatabaseValueValidator.collectIssues(document.text) +
+          EpicsMakefileInclusionValidator.collectIssues(file, document.text)
+      isSubstitutionsFile(file.name) -> EpicsMakefileInclusionValidator.collectIssues(file, document.text)
       isStartupFile(file.name) -> EpicsStartupMacroValidator.collectIssues(project, file, document.text)
       isMonitorFile(file.name) -> EpicsMonitorValidator.collectIssues(document.text)
       isProbeFile(file.name) -> EpicsProbeValidator.collectIssues(document.text)
@@ -85,6 +88,9 @@ internal class EpicsDatabaseValidationListener(
     val errorAttributes = EditorColorsManager.getInstance()
       .globalScheme
       .getAttributes(CodeInsightColors.ERRORS_ATTRIBUTES)
+    val warningAttributes = EditorColorsManager.getInstance()
+      .globalScheme
+      .getAttributes(CodeInsightColors.WARNINGS_ATTRIBUTES)
 
     val highlighters = mutableListOf<RangeHighlighter>()
     for (issue in issues) {
@@ -99,7 +105,11 @@ internal class EpicsDatabaseValidationListener(
         startOffset,
         rangeEnd,
         HighlighterLayer.ERROR,
-        errorAttributes,
+        if (issue.severity == EpicsDatabaseValueValidator.ValidationSeverity.WARNING) {
+          warningAttributes
+        } else {
+          errorAttributes
+        },
         HighlighterTargetArea.EXACT_RANGE,
       )
       highlighter.errorStripeTooltip = issue.message
@@ -127,7 +137,11 @@ internal class EpicsDatabaseValidationListener(
   }
 
   private fun isSupportedFile(fileName: String): Boolean {
-    return isDatabaseFile(fileName) || isStartupFile(fileName) || isMonitorFile(fileName) || isProbeFile(fileName)
+    return isDatabaseFile(fileName) ||
+      isSubstitutionsFile(fileName) ||
+      isStartupFile(fileName) ||
+      isMonitorFile(fileName) ||
+      isProbeFile(fileName)
   }
 
   private fun isMonitorFile(fileName: String): Boolean {
@@ -136,6 +150,10 @@ internal class EpicsDatabaseValidationListener(
 
   private fun isProbeFile(fileName: String): Boolean {
     return fileName.substringAfterLast('.', "").lowercase() == "probe"
+  }
+
+  private fun isSubstitutionsFile(fileName: String): Boolean {
+    return fileName.substringAfterLast('.', "").lowercase() in setOf("substitutions", "sub", "subs")
   }
 
   companion object {

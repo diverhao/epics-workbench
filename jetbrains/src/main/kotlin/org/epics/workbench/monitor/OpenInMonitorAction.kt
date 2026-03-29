@@ -7,6 +7,7 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.projectHasEpicsRoot
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import org.epics.workbench.navigation.EpicsRecordResolver
 import org.epics.workbench.probe.EpicsProbeSupport
@@ -20,12 +21,21 @@ class OpenInMonitorAction : DumbAwareAction() {
   override fun update(event: AnActionEvent) {
     val project = event.project
     val file = getTargetFile(event)
-    event.presentation.isEnabledAndVisible = project != null && file != null && isSupportedFile(file)
+    event.presentation.isEnabledAndVisible =
+      project != null && file != null && (projectHasEpicsRoot(project) || isSupportedFile(file))
   }
 
   override fun actionPerformed(event: AnActionEvent) {
     val project = event.project ?: return
     val file = getTargetFile(event) ?: return
+    if (!isSupportedFile(file)) {
+      FileEditorManager.getInstance(project).openFile(
+        EpicsMonitorWidgetVirtualFile(emptyList()),
+        true,
+        true,
+      )
+      return
+    }
     val editor = event.getData(CommonDataKeys.EDITOR)
     val initialChannels = if (EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file)) {
       val expandedResult = EpicsSubstitutionsExpansionSupport.expandToDatabaseText(project, file)

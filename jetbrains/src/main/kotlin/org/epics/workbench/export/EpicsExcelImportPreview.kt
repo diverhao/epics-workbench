@@ -20,7 +20,7 @@ class OpenExcelImportPreviewAction : DumbAwareAction() {
 internal fun promptImportEpicsExcelWorkbook(project: Project) {
   val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
     .createSingleFileDescriptor("xlsx")
-    .withTitle("Import Excel as EPICS DB")
+    .withTitle(TITLE)
   com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, project, null) { file ->
     importWorkbookPath(project, Path.of(file.path))
   }
@@ -50,4 +50,4 @@ internal fun importWorkbookPath(project: Project, path: Path) {
   EpicsDatabaseExcelImporter.openImportedSheets(project, importedSheets)
 }
 
-private const val TITLE = "Import Excel as EPICS DB"
+private const val TITLE = "Import Excel as Database"

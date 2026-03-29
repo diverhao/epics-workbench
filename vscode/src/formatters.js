@@ -154,6 +154,101 @@ function formatMonitorText(text) {
   return formattedText;
 }
 
+function formatStartupText(text) {
+  const normalizedText = String(text || "").replace(/\r\n/g, "\n");
+  const hadTrailingNewline = normalizedText.endsWith("\n");
+  const contentText = hadTrailingNewline
+    ? normalizedText.slice(0, -1)
+    : normalizedText;
+  const lines = contentText ? contentText.split("\n") : [];
+  const formattedLines = [];
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const trimmedLine = lines[lineIndex].trim();
+    if (!trimmedLine) {
+      formattedLines.push("");
+      continue;
+    }
+
+    if (lineIndex === 0 && trimmedLine.startsWith("#!")) {
+      formattedLines.push(trimmedLine);
+      continue;
+    }
+
+    const { code, comment } = splitStartupLineComment(trimmedLine);
+    const trimmedCode = code.trim();
+    const trimmedComment = comment ? comment.trim() : "";
+
+    if (!trimmedCode) {
+      formattedLines.push(trimmedComment);
+      continue;
+    }
+
+    const formattedCode = formatStartupLine(trimmedCode);
+    formattedLines.push(
+      `${formattedCode}${trimmedComment ? ` ${trimmedComment}` : ""}`,
+    );
+  }
+
+  let formattedText = formattedLines.join("\n");
+  if (hadTrailingNewline) {
+    formattedText += "\n";
+  }
+
+  return formattedText;
+}
+
+function formatMakefileText(text) {
+  const normalizedText = String(text || "").replace(/\r\n/g, "\n");
+  const hadTrailingNewline = normalizedText.endsWith("\n");
+  const contentText = hadTrailingNewline
+    ? normalizedText.slice(0, -1)
+    : normalizedText;
+  const lines = contentText ? contentText.split("\n") : [];
+  const formattedLines = [];
+
+  for (const line of lines) {
+    const withoutTrailingWhitespace = line.replace(/[ \t]+$/g, "");
+    if (!withoutTrailingWhitespace.trim()) {
+      formattedLines.push("");
+      continue;
+    }
+
+    if (/^\t/.test(withoutTrailingWhitespace)) {
+      formattedLines.push(withoutTrailingWhitespace);
+      continue;
+    }
+
+    const trimmedLine = withoutTrailingWhitespace.trim();
+    if (trimmedLine.startsWith("#")) {
+      const commentText = trimmedLine.slice(1).trimStart();
+      formattedLines.push(commentText ? `# ${commentText}` : "#");
+      continue;
+    }
+
+    const normalizedIncludeLine = normalizeMakefileIncludeLine(trimmedLine);
+    if (normalizedIncludeLine) {
+      formattedLines.push(normalizedIncludeLine);
+      continue;
+    }
+
+    const normalizedAssignmentLine = normalizeMakefileAssignmentLine(trimmedLine);
+    if (normalizedAssignmentLine) {
+      formattedLines.push(normalizedAssignmentLine);
+      continue;
+    }
+
+    formattedLines.push(trimmedLine);
+  }
+
+  let formattedText = formattedLines.join("\n");
+  if (hadTrailingNewline) {
+    formattedText += "\n";
+  }
+
+  return formattedText;
+}
+
 function formatProtocolText(text, options) {
   const normalizedText = String(text || "").replace(/\r\n/g, "\n");
   const hadTrailingNewline = normalizedText.endsWith("\n");
@@ -352,6 +447,34 @@ function formatDatabaseLine(trimmedLine) {
   return trimmedLine;
 }
 
+function formatStartupLine(trimmedLine) {
+  if (trimmedLine.startsWith("#")) {
+    if (trimmedLine.startsWith("#!")) {
+      return trimmedLine;
+    }
+
+    const commentText = trimmedLine.slice(1).trimStart();
+    return commentText ? `# ${commentText}` : "#";
+  }
+
+  const normalizedFunctionCallLine = normalizeStartupFunctionCallLine(trimmedLine);
+  if (normalizedFunctionCallLine) {
+    return normalizedFunctionCallLine;
+  }
+
+  const normalizedIncludeLine = normalizeStartupIncludeLine(trimmedLine);
+  if (normalizedIncludeLine) {
+    return normalizedIncludeLine;
+  }
+
+  const normalizedCommandLine = normalizeStartupCommandLine(trimmedLine);
+  if (normalizedCommandLine) {
+    return normalizedCommandLine;
+  }
+
+  return trimmedLine;
+}
+
 function formatSubstitutionLine(trimmedLine, state) {
   if (trimmedLine.startsWith("#")) {
     return trimmedLine;
@@ -489,6 +612,54 @@ function normalizeProtocolAssignmentLine(trimmedLine) {
   return match ? `${match[1]} = ${match[2].trim()};` : undefined;
 }
 
+function normalizeStartupFunctionCallLine(trimmedLine) {
+  const match = trimmedLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const innerText = match[2].trim();
+  if (!innerText) {
+    return `${match[1]}()`;
+  }
+
+  const values = splitSubstitutionCommaSeparatedItems(innerText);
+  return `${match[1]}(${values.map((value) => value.trim()).join(", ")})`;
+}
+
+function normalizeStartupIncludeLine(trimmedLine) {
+  const match = trimmedLine.match(/^<\s*(.+)$/);
+  return match ? `< ${match[1].trim()}` : undefined;
+}
+
+function normalizeStartupCommandLine(trimmedLine) {
+  const match = trimmedLine.match(/^([./A-Za-z_][A-Za-z0-9_./-]*)\s+(.+)$/);
+  if (!match) {
+    return undefined;
+  }
+
+  return `${match[1]} ${match[2].trim()}`;
+}
+
+function normalizeMakefileIncludeLine(trimmedLine) {
+  const match = trimmedLine.match(/^(-?include)\s+(.+?)\s*$/);
+  return match ? `${match[1]} ${match[2].trim()}` : undefined;
+}
+
+function normalizeMakefileAssignmentLine(trimmedLine) {
+  const match = trimmedLine.match(
+    /^([A-Za-z0-9_.$(){}\-/]+)\s*(\+?[:?]?=)\s*(.*?)\s*$/,
+  );
+  if (!match) {
+    return undefined;
+  }
+
+  const valueText = match[3].trim();
+  return valueText
+    ? `${match[1]} ${match[2]} ${valueText}`
+    : `${match[1]} ${match[2]}`;
+}
+
 function normalizeClosingBraceLine(trimmedLine) {
   const match = trimmedLine.match(/^\}(.*)$/);
   if (!match) {
@@ -622,6 +793,46 @@ function splitProtocolLineComment(text) {
       return {
         code: text.slice(0, index).trimEnd(),
         comment: text.slice(index),
+      };
+    }
+  }
+
+  return {
+    code: text,
+    comment: "",
+  };
+}
+
+function splitStartupLineComment(text) {
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (inString) {
+      if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (character === "#" && text[index + 1] !== "!") {
+      return {
+        code: text.slice(0, index).trimEnd(),
+        comment: text.slice(index).trim(),
       };
     }
   }
@@ -805,8 +1016,10 @@ function escapeDoubleQuotedString(value) {
 
 module.exports = {
   formatDatabaseText,
+  formatMakefileText,
   formatMonitorText,
   formatProtocolText,
+  formatStartupText,
   formatSubstitutionText,
   splitSubstitutionCommaSeparatedItems,
 };

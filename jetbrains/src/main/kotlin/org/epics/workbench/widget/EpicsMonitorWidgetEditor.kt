@@ -160,6 +160,21 @@ private class EpicsMonitorWidgetFileEditor(
     buildUi()
     loadInitialChannels()
     applyEditorStyle()
+    installEpicsWidgetPopupMenu(
+      project = project,
+      component = component,
+      channelsProvider = {
+        channelRows.mapNotNull { row ->
+          row.currentChannelName.trim().takeIf(String::isNotBlank)
+        }
+      },
+      primaryChannelProvider = {
+        channelRows.firstNotNullOfOrNull { row ->
+          row.currentChannelName.trim().takeIf(String::isNotBlank)
+        }
+      },
+      sourceLabelProvider = { EpicsMonitorWidgetVirtualFile.TAB_TITLE },
+    )
     startMonitoring()
   }
 

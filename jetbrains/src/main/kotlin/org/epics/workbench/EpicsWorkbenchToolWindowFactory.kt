@@ -39,7 +39,7 @@ private class EpicsWorkbenchToolWindowPanel(
   private val runtimeService = project.service<EpicsMonitorRuntimeService>()
   private val statusLabel = JLabel()
   private val toggleButton = JButton()
-  private val importPreviewButton = JButton("Import Excel as EPICS DB")
+  private val importPreviewButton = JButton("Import Excel as Database")
   private val configureButton = JButton("Configuration...")
 
   init {
@@ -72,7 +72,7 @@ private class EpicsWorkbenchToolWindowPanel(
       - `.probe` files show a live record page inline in the editor.
       - Stop Monitoring disposes the active sessions and destroys the EPICS context.
       - Use Configuration... to set the default protocol and CA address settings.
-      - Use Import Excel as EPICS DB to choose an EPICS Excel workbook and open generated database tabs.
+      - Use Import Excel as Database to choose an EPICS Excel workbook and open generated database tabs.
       - Use Probe from database/startup editor context menus to open a file-less EPICS probe widget.
       """.trimIndent(),
     )
@@ -106,7 +106,7 @@ private class EpicsWorkbenchToolWindowPanel(
   private fun promptImportExcelWorkbook(project: Project) {
     val descriptor = FileChooserDescriptorFactory
       .createSingleFileDescriptor("xlsx")
-      .withTitle("Import Excel as EPICS DB")
+      .withTitle("Import Excel as Database")
     FileChooser.chooseFile(descriptor, project, null) { file ->
       val path = Path.of(file.path)
       val importedSheets = runCatching {
@@ -115,7 +115,7 @@ private class EpicsWorkbenchToolWindowPanel(
         Messages.showErrorDialog(
           project,
           error.message ?: "Failed to import ${path.fileName}.",
-          "Import Excel as EPICS DB",
+          "Import Excel as Database",
         )
         return@chooseFile
       }
@@ -124,7 +124,7 @@ private class EpicsWorkbenchToolWindowPanel(
         Messages.showWarningDialog(
           project,
           "No EPICS-style sheets were found in ${path.fileName}.",
-          "Import Excel as EPICS DB",
+          "Import Excel as Database",
         )
         return@chooseFile
       }

@@ -108,6 +108,30 @@ private class EpicsPvlistWidgetFileEditor(
     buildUi()
     applyEditorStyle()
     rebuildMacroPanel()
+    installEpicsWidgetPopupMenu(
+      project = project,
+      component = component,
+      channelsProvider = {
+        file.model.rawPvNames.mapNotNull { rawValue ->
+          val trimmed = rawValue.trim()
+          trimmed.takeIf(String::isNotBlank)
+        }
+      },
+      primaryChannelProvider = {
+        val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(
+          file.model,
+          runtimeService.defaultProtocol,
+        )
+        plan.rows.firstOrNull { row -> row.definitionKey != null }?.channelName
+          ?: file.model.rawPvNames.firstOrNull()?.trim()?.takeIf(String::isNotBlank)
+      },
+      sourceLabelProvider = { file.model.sourceLabel.ifBlank { EpicsPvlistWidgetVirtualFile.TAB_TITLE } },
+      exportFileProvider = {
+        file.model.sourcePath
+          ?.takeIf(String::isNotBlank)
+          ?.let(com.intellij.openapi.vfs.LocalFileSystem.getInstance()::findFileByPath)
+      },
+    )
     refreshTimer.initialDelay = 0
     refreshTimer.start()
     refreshViewState()

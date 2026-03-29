@@ -8,8 +8,10 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
+import org.epics.workbench.build.projectHasEpicsRoot
 import org.epics.workbench.substitutions.EpicsSubstitutionsExpansionSupport
 import org.epics.workbench.widget.EpicsPvlistWidgetVirtualFile
+import org.epics.workbench.widget.openEpicsPvlistWidget
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -19,13 +21,25 @@ class OpenInPvlistAction : DumbAwareAction() {
   override fun update(event: AnActionEvent) {
     val project = event.project
     val file = getTargetFile(event)
-    event.presentation.isEnabledAndVisible = project != null && file != null && isSupportedFile(file)
+    event.presentation.isEnabledAndVisible =
+      project != null && file != null && (projectHasEpicsRoot(project) || isSupportedFile(file))
   }
 
   override fun actionPerformed(event: AnActionEvent) {
     val project = event.project ?: return
     val file = getTargetFile(event) ?: return
     if (!isSupportedFile(file)) {
+      openEpicsPvlistWidget(
+        project,
+        EpicsPvlistWidgetModel(
+          sourceLabel = file.name,
+          sourcePath = null,
+          sourceKind = EpicsPvlistWidgetSourceKind.PVLIST,
+          rawPvNames = mutableListOf(),
+          macroNames = mutableListOf(),
+          macroValues = linkedMapOf(),
+        ),
+      )
       return
     }
 

@@ -5,6 +5,7 @@ import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import org.epics.workbench.build.epicsBuildModelService
+import org.epics.workbench.toc.EpicsDatabaseToc
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -148,6 +149,7 @@ internal object EpicsRecordResolver {
     offset: Int,
   ): List<EpicsResolvedRecordDefinition> {
     val linkedValue = getDatabaseLinkedRecordValueAtOffset(text, offset) ?: return emptyList()
+    val tocMacros = EpicsDatabaseToc.extractMacroAssignmentValues(text)
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     val releaseVariables = loadReleaseVariables(ownerRoot)
     val envPathsVariables = loadEnvPathsVariables(hostFile.parent?.toNioPath(), releaseVariables)
@@ -161,7 +163,7 @@ internal object EpicsRecordResolver {
 
     return resolveLinkedRecordsFromSearchPaths(
       currentFile = hostFile,
-      candidateNames = extractLinkedRecordCandidates(linkedValue),
+      candidateNames = extractLinkedRecordCandidates(linkedValue, tocMacros),
       searchDirectories = searchDirectories.toList(),
     )
   }
@@ -670,8 +672,9 @@ internal object EpicsRecordResolver {
     recordType: String? = null,
   ): EpicsResolvedRecordDefinition? {
     val text = readText(virtualFile) ?: return null
+    val tocMacros = EpicsDatabaseToc.extractMacroAssignmentValues(text)
     for (declaration in extractRecordDeclarations(text)) {
-      if (declaration.name != recordName) {
+      if (!buildDatabaseRecordSearchNames(declaration.name, tocMacros).contains(recordName)) {
         continue
       }
       if (recordType != null && declaration.recordType != recordType) {
@@ -871,7 +874,10 @@ internal object EpicsRecordResolver {
     }
   }
 
-  private fun extractLinkedRecordCandidates(fieldValue: String): List<String> {
+  private fun extractLinkedRecordCandidates(
+    fieldValue: String,
+    tocMacros: Map<String, String> = emptyMap(),
+  ): List<String> {
     val trimmedValue = fieldValue.trim()
     if (trimmedValue.isBlank() || trimmedValue.startsWith("@")) {
       return emptyList()
@@ -885,6 +891,9 @@ internal object EpicsRecordResolver {
     val candidates = linkedSetOf<String>()
     val normalized = normalizeLinkedRecordCandidate(firstToken)
     if (normalized.isNotBlank()) {
+      resolveRecordNameWithTocMacros(normalized, tocMacros)
+        ?.takeIf { it != normalized }
+        ?.let(candidates::add)
       candidates += normalized
     }
 
@@ -892,7 +901,13 @@ internal object EpicsRecordResolver {
     if (lastDotIndex > 0) {
       val suffix = firstToken.substring(lastDotIndex + 1)
       if (Regex("""^[A-Z0-9_]+$""").matches(suffix)) {
-        candidates += normalizeLinkedRecordCandidate(firstToken.substring(0, lastDotIndex))
+        val recordPortion = normalizeLinkedRecordCandidate(firstToken.substring(0, lastDotIndex))
+        if (recordPortion.isNotBlank()) {
+          resolveRecordNameWithTocMacros(recordPortion, tocMacros)
+            ?.takeIf { it != recordPortion }
+            ?.let(candidates::add)
+          candidates += recordPortion
+        }
       }
     }
 
@@ -901,6 +916,71 @@ internal object EpicsRecordResolver {
 
   private fun normalizeLinkedRecordCandidate(candidate: String): String {
     return candidate.trim().replace(Regex("""[),;]+$"""), "")
+  }
+
+  private fun buildDatabaseRecordSearchNames(
+    recordName: String,
+    tocMacros: Map<String, String>,
+  ): Set<String> {
+    val normalizedRecordName = recordName.trim()
+    if (normalizedRecordName.isBlank()) {
+      return emptySet()
+    }
+
+    val searchNames = linkedSetOf(normalizedRecordName)
+    resolveRecordNameWithTocMacros(normalizedRecordName, tocMacros)
+      ?.takeIf { it != normalizedRecordName }
+      ?.let(searchNames::add)
+    return searchNames
+  }
+
+  private fun resolveRecordNameWithTocMacros(
+    recordName: String,
+    tocMacros: Map<String, String>,
+  ): String? {
+    val normalizedRecordName = recordName.trim()
+    if (normalizedRecordName.isBlank()) {
+      return null
+    }
+    if (!containsEpicsMacroReference(normalizedRecordName)) {
+      return normalizedRecordName
+    }
+
+    val resolved = expandAssignedMacros(normalizedRecordName, tocMacros, linkedSetOf())
+    return resolved?.takeUnless(::containsEpicsMacroReference)
+  }
+
+  private fun expandAssignedMacros(
+    value: String,
+    tocMacros: Map<String, String>,
+    stack: Set<String>,
+  ): String? {
+    var unresolved = false
+    val expanded = EPICS_VARIABLE_REGEX.replace(value) { match ->
+      val macroName = match.groups[1]?.value
+        ?: match.groups[3]?.value
+        ?: match.groups[5]?.value
+        ?: ""
+      if (macroName.isBlank() || !tocMacros.containsKey(macroName) || macroName in stack) {
+        unresolved = true
+        return@replace match.value
+      }
+
+      val nextStack = linkedSetOf<String>().apply {
+        addAll(stack)
+        add(macroName)
+      }
+      expandAssignedMacros(tocMacros[macroName].orEmpty(), tocMacros, nextStack) ?: run {
+        unresolved = true
+        match.value
+      }
+    }
+
+    return if (unresolved) null else expanded
+  }
+
+  private fun containsEpicsMacroReference(value: String): Boolean {
+    return Regex("""\$\(|\$\{|\$[A-Za-z_]""").containsMatchIn(value)
   }
 
   private fun collectDatabaseFiles(

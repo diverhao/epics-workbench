@@ -42,7 +42,7 @@ class EpicsRuntimeProjectConfigurable(
       emptyText.text = "One address per line"
     }
     iocStartupShellField = JBTextField().apply {
-      emptyText.text = "Leave blank to launch ./st.cmd directly"
+      emptyText.text = "Optional fallback shell when a startup file has no usable shebang"
     }
     iocStartupShellArgsField = JBTextField().apply {
       emptyText.text = "Examples: -lc, -l -c, -c"
@@ -51,7 +51,7 @@ class EpicsRuntimeProjectConfigurable(
     val note = buildString {
       append("Saved to ")
       append(EpicsRuntimeProjectConfigurationService.CONFIG_FILE_NAME)
-      append(" in the current project root.")
+      append(" in the current project root. IOC startup files with a valid shebang run through that interpreter first.")
     }
 
     component = FormBuilder.createFormBuilder()

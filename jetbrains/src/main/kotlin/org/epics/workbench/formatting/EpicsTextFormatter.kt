@@ -132,6 +132,90 @@ internal object EpicsTextFormatter {
     return formattedLines.joinToString("\n").let { if (hadTrailingNewline) "$it\n" else it }
   }
 
+  fun formatStartupText(text: String): String {
+    val normalizedText = text.replace("\r\n", "\n")
+    val hadTrailingNewline = normalizedText.endsWith("\n")
+    val contentText = if (hadTrailingNewline) normalizedText.dropLast(1) else normalizedText
+    val lines = if (contentText.isEmpty()) emptyList() else contentText.split('\n')
+    val formattedLines = mutableListOf<String>()
+
+    for ((lineIndex, line) in lines.withIndex()) {
+      val trimmedLine = line.trim()
+      if (trimmedLine.isEmpty()) {
+        formattedLines += ""
+        continue
+      }
+
+      if (lineIndex == 0 && trimmedLine.startsWith("#!")) {
+        formattedLines += trimmedLine
+        continue
+      }
+
+      val lineParts = splitStartupLineComment(trimmedLine)
+      val trimmedCode = lineParts.code.trim()
+      val trimmedComment = lineParts.comment.trim()
+      if (trimmedCode.isEmpty()) {
+        formattedLines += trimmedComment
+        continue
+      }
+
+      val formattedCode = formatStartupLine(trimmedCode)
+      formattedLines += buildString {
+        append(formattedCode)
+        if (trimmedComment.isNotEmpty()) {
+          append(' ')
+          append(trimmedComment)
+        }
+      }
+    }
+
+    return formattedLines.joinToString("\n").let { if (hadTrailingNewline) "$it\n" else it }
+  }
+
+  fun formatMakefileText(text: String): String {
+    val normalizedText = text.replace("\r\n", "\n")
+    val hadTrailingNewline = normalizedText.endsWith("\n")
+    val contentText = if (hadTrailingNewline) normalizedText.dropLast(1) else normalizedText
+    val lines = if (contentText.isEmpty()) emptyList() else contentText.split('\n')
+    val formattedLines = mutableListOf<String>()
+
+    for (line in lines) {
+      val withoutTrailingWhitespace = line.replace(Regex("""[ \t]+$"""), "")
+      if (withoutTrailingWhitespace.isBlank()) {
+        formattedLines += ""
+        continue
+      }
+
+      if (withoutTrailingWhitespace.startsWith('\t')) {
+        formattedLines += withoutTrailingWhitespace
+        continue
+      }
+
+      val trimmedLine = withoutTrailingWhitespace.trim()
+      if (trimmedLine.startsWith("#")) {
+        val commentText = trimmedLine.drop(1).trimStart()
+        formattedLines += if (commentText.isEmpty()) "#" else "# $commentText"
+        continue
+      }
+
+      val normalizedIncludeLine = normalizeMakefileIncludeLine(trimmedLine)
+      if (normalizedIncludeLine != null) {
+        formattedLines += normalizedIncludeLine
+        continue
+      }
+
+      val normalizedAssignmentLine = normalizeMakefileAssignmentLine(trimmedLine)
+      if (normalizedAssignmentLine != null) {
+        formattedLines += normalizedAssignmentLine
+        continue
+      }
+
+      formattedLines += trimmedLine
+    }
+
+    return formattedLines.joinToString("\n").let { if (hadTrailingNewline) "$it\n" else it }
+  }
+
   fun formatProtocolText(text: String, indentUnit: String): String {
     val normalizedText = text.replace("\r\n", "\n")
     val hadTrailingNewline = normalizedText.endsWith("\n")
@@ -351,6 +435,21 @@ internal object EpicsTextFormatter {
     return trimmedLine
   }
 
+  private fun formatStartupLine(trimmedLine: String): String {
+    if (trimmedLine.startsWith("#")) {
+      if (trimmedLine.startsWith("#!")) {
+        return trimmedLine
+      }
+      val commentText = trimmedLine.drop(1).trimStart()
+      return if (commentText.isEmpty()) "#" else "# $commentText"
+    }
+
+    normalizeStartupFunctionCallLine(trimmedLine)?.let { return it }
+    normalizeStartupIncludeLine(trimmedLine)?.let { return it }
+    normalizeStartupCommandLine(trimmedLine)?.let { return it }
+    return trimmedLine
+  }
+
   private fun isSubstitutionBlockLine(trimmedLine: String): Boolean {
     return Regex("""^(?:file\s+(?:"(?:[^"\\]|\\.)*"|[^\s{]+)|global)\s*\{\s*$""").matches(trimmedLine) ||
       Regex("""^global\s*\{\s*$""").matches(trimmedLine)
@@ -441,6 +540,43 @@ internal object EpicsTextFormatter {
   private fun normalizeProtocolAssignmentLine(trimmedLine: String): String? {
     val match = Regex("""^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.+?)\s*;\s*$""").matchEntire(trimmedLine) ?: return null
     return "${match.groupValues[1]} = ${match.groupValues[2].trim()};"
+  }
+
+  private fun normalizeStartupFunctionCallLine(trimmedLine: String): String? {
+    val match = Regex("""^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$""").matchEntire(trimmedLine) ?: return null
+    val innerText = match.groupValues[2].trim()
+    if (innerText.isEmpty()) {
+      return "${match.groupValues[1]}()"
+    }
+
+    val values = splitSubstitutionCommaSeparatedItems(innerText)
+    return "${match.groupValues[1]}(${values.joinToString(", ") { it.trim() }})"
+  }
+
+  private fun normalizeStartupIncludeLine(trimmedLine: String): String? {
+    val match = Regex("""^<\s*(.+)$""").matchEntire(trimmedLine) ?: return null
+    return "< ${match.groupValues[1].trim()}"
+  }
+
+  private fun normalizeStartupCommandLine(trimmedLine: String): String? {
+    val match = Regex("""^([./A-Za-z_][A-Za-z0-9_./-]*)\s+(.+)$""").matchEntire(trimmedLine) ?: return null
+    return "${match.groupValues[1]} ${match.groupValues[2].trim()}"
+  }
+
+  private fun normalizeMakefileIncludeLine(trimmedLine: String): String? {
+    val match = Regex("""^(-?include)\s+(.+?)\s*$""").matchEntire(trimmedLine) ?: return null
+    return "${match.groupValues[1]} ${match.groupValues[2].trim()}"
+  }
+
+  private fun normalizeMakefileAssignmentLine(trimmedLine: String): String? {
+    val match = Regex("""^([A-Za-z0-9_.$(){}\-/]+)\s*(\+?[:?]?=)\s*(.*?)\s*$""")
+      .matchEntire(trimmedLine) ?: return null
+    val valueText = match.groupValues[3].trim()
+    return if (valueText.isEmpty()) {
+      "${match.groupValues[1]} ${match.groupValues[2]}"
+    } else {
+      "${match.groupValues[1]} ${match.groupValues[2]} $valueText"
+    }
   }
 
   private fun normalizeClosingBraceLine(trimmedLine: String): String? {
@@ -572,6 +708,40 @@ internal object EpicsTextFormatter {
           code = text.substring(0, index).trimEnd(),
           comment = text.substring(index),
         )
+      }
+    }
+
+    return LineCommentParts(text, "")
+  }
+
+  private fun splitStartupLineComment(text: String): LineCommentParts {
+    var inString = false
+    var escaped = false
+
+    for (index in text.indices) {
+      val character = text[index]
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (inString) {
+        when (character) {
+          '\\' -> escaped = true
+          '"' -> inString = false
+        }
+        continue
+      }
+      when (character) {
+        '"' -> inString = true
+        '#' -> {
+          if (text.getOrNull(index + 1) == '!') {
+            continue
+          }
+          return LineCommentParts(
+            code = text.substring(0, index).trimEnd(),
+            comment = text.substring(index).trim(),
+          )
+        }
       }
     }
 
