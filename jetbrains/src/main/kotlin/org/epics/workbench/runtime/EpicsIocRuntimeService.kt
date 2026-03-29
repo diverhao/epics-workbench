@@ -53,6 +53,11 @@ data class EpicsIocRuntimeEnvironmentEntry(
   val value: String,
 )
 
+internal data class EpicsStartupValidation(
+  val hasShebangCommand: Boolean,
+  val missingExecutableName: String? = null,
+)
+
 @Service(Service.Level.PROJECT)
 class EpicsIocRuntimeService(
   private val project: Project,
@@ -88,7 +93,9 @@ class EpicsIocRuntimeService(
 
     val workingDirectory = Path.of(startupFile.path).parent
       ?: return Result.failure(IllegalStateException("Startup file does not have a parent directory."))
-    val commandLine = buildStartupCommandLine(startupFile)
+    val commandLine = buildStartupCommandLine(startupFile).getOrElse { error ->
+      return Result.failure(error)
+    }
 
     val process = runCatching {
       ProcessBuilder(commandLine)
@@ -376,81 +383,25 @@ class EpicsIocRuntimeService(
     return "IOC: $parentName"
   }
 
-  private fun buildStartupCommandLine(startupFile: VirtualFile): List<String> {
+  private fun buildStartupCommandLine(startupFile: VirtualFile): Result<List<String>> {
     val startupPath = Path.of(startupFile.path).normalize()
-    resolveStartupShebangCommandLine(startupPath)?.let { return it }
+    val shebangResolution = resolveStartupShebangCommandLine(startupPath)
+    if (shebangResolution.missingExecutableName != null) {
+      return Result.failure(
+        IllegalStateException("Error: executable ${shebangResolution.missingExecutableName} missing"),
+      )
+    }
+    shebangResolution.commandLine?.let { return Result.success(it) }
 
     val configuration = configurationService.loadConfiguration()
     val startupCommand = "./${startupFile.name}"
     val shellPath = configuration.iocStartupShell.trim()
     if (shellPath.isEmpty()) {
-      return listOf(startupCommand)
+      return Result.success(listOf(startupCommand))
     }
     val shellArgs = ParametersListUtil.parse(configuration.iocStartupShellArgs.trim()).toMutableList()
     shellArgs += startupCommand
-    return listOf(shellPath) + shellArgs
-  }
-
-  private fun resolveStartupShebangCommandLine(startupPath: Path): List<String>? {
-    val firstLine = runCatching {
-      Files.newBufferedReader(startupPath).use { reader -> reader.readLine().orEmpty() }
-    }.getOrDefault("")
-    if (!firstLine.startsWith("#!")) {
-      return null
-    }
-
-    val shebangCommand = firstLine.removePrefix("#!").trim()
-    if (shebangCommand.isEmpty()) {
-      return null
-    }
-
-    val shebangParts = ParametersListUtil.parse(shebangCommand)
-      .map(String::trim)
-      .filter(String::isNotEmpty)
-    if (shebangParts.isEmpty()) {
-      return null
-    }
-
-    val executablePath = resolveExistingExecutablePath(
-      executableText = shebangParts.first(),
-      baseDirectory = startupPath.parent,
-    ) ?: return null
-
-    return buildList {
-      add(executablePath.toString())
-      addAll(shebangParts.drop(1))
-      add(startupPath.toString())
-    }
-  }
-
-  private fun resolveExistingExecutablePath(executableText: String, baseDirectory: Path?): Path? {
-    val normalizedExecutable = executableText.trim()
-    if (normalizedExecutable.isEmpty()) {
-      return null
-    }
-
-    if (normalizedExecutable.contains('/') || normalizedExecutable.contains('\\')) {
-      val candidatePath = if (Path.of(normalizedExecutable).isAbsolute) {
-        Path.of(normalizedExecutable)
-      } else {
-        (baseDirectory ?: Path.of("")).resolve(normalizedExecutable)
-      }.normalize()
-      return candidatePath.takeIf(Files::exists)
-    }
-
-    val pathEntries = System.getenv("PATH")
-      .orEmpty()
-      .split(File.pathSeparatorChar)
-      .map(String::trim)
-      .filter(String::isNotEmpty)
-    for (pathEntry in pathEntries) {
-      val candidatePath = Path.of(pathEntry, normalizedExecutable).normalize()
-      if (Files.exists(candidatePath)) {
-        return candidatePath
-      }
-    }
-
-    return null
+    return Result.success(listOf(shellPath) + shellArgs)
   }
 
   private data class IocProcessSession(
@@ -486,12 +437,102 @@ class EpicsIocRuntimeService(
       return extension == "cmd" || extension == "iocsh" || target.name == "st.cmd"
     }
 
+    internal fun validateStartupFile(file: VirtualFile?, text: String? = null): EpicsStartupValidation {
+      val target = file ?: return EpicsStartupValidation(hasShebangCommand = false)
+      val startupPath = runCatching { Path.of(target.path).normalize() }.getOrNull()
+        ?: return EpicsStartupValidation(hasShebangCommand = false)
+      val resolution = resolveStartupShebangCommandLine(startupPath, text)
+      return EpicsStartupValidation(
+        hasShebangCommand = resolution.hasShebangCommand,
+        missingExecutableName = resolution.missingExecutableName,
+      )
+    }
+
     fun isIocBootStartupFile(file: VirtualFile?): Boolean {
       val target = file ?: return false
       if (!isStartupFile(target)) {
         return false
       }
       return Path.of(target.path).normalize().any { pathPart -> pathPart.toString() == "iocBoot" }
+    }
+
+    private fun displayExecutableName(executableText: String): String {
+      val trimmed = executableText.trim().trimEnd('/', '\\')
+      return trimmed.substringAfterLast('/').substringAfterLast('\\').ifEmpty { trimmed }
+    }
+
+    private fun resolveStartupShebangCommandLine(startupPath: Path, text: String? = null): StartupShebangResolution {
+      val firstLine = text
+        ?.substringBefore('\n')
+        ?.removeSuffix("\r")
+        ?: runCatching {
+          Files.newBufferedReader(startupPath).use { reader -> reader.readLine().orEmpty() }
+        }.getOrDefault("")
+      if (!firstLine.startsWith("#!")) {
+        return StartupShebangResolution()
+      }
+
+      val shebangCommand = firstLine.removePrefix("#!").trim()
+      if (shebangCommand.isEmpty()) {
+        return StartupShebangResolution()
+      }
+
+      val shebangParts = ParametersListUtil.parse(shebangCommand)
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+      if (shebangParts.isEmpty()) {
+        return StartupShebangResolution()
+      }
+
+      val executablePath = resolveExistingExecutablePath(
+        executableText = shebangParts.first(),
+        baseDirectory = startupPath.parent,
+      )
+      if (executablePath == null) {
+        return StartupShebangResolution(
+          hasShebangCommand = true,
+          missingExecutableName = displayExecutableName(shebangParts.first()),
+        )
+      }
+
+      return StartupShebangResolution(
+        hasShebangCommand = true,
+        commandLine = buildList {
+          add(executablePath.toString())
+          addAll(shebangParts.drop(1))
+          add(startupPath.toString())
+        },
+      )
+    }
+
+    private fun resolveExistingExecutablePath(executableText: String, baseDirectory: Path?): Path? {
+      val normalizedExecutable = executableText.trim()
+      if (normalizedExecutable.isEmpty()) {
+        return null
+      }
+
+      if (normalizedExecutable.contains('/') || normalizedExecutable.contains('\\')) {
+        val candidatePath = if (Path.of(normalizedExecutable).isAbsolute) {
+          Path.of(normalizedExecutable)
+        } else {
+          (baseDirectory ?: Path.of("")).resolve(normalizedExecutable)
+        }.normalize()
+        return candidatePath.takeIf(Files::exists)
+      }
+
+      val pathEntries = System.getenv("PATH")
+        .orEmpty()
+        .split(File.pathSeparatorChar)
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+      for (pathEntry in pathEntries) {
+        val candidatePath = Path.of(pathEntry, normalizedExecutable).normalize()
+        if (Files.exists(candidatePath)) {
+          return candidatePath
+        }
+      }
+
+      return null
     }
 
     fun parseCommandNames(output: String): List<String> {
@@ -588,4 +629,10 @@ class EpicsIocRuntimeService(
     private val COMMAND_NAME_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
     private val VARIABLE_LINE_REGEX = Regex("""^(.*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$""")
   }
+
+  private data class StartupShebangResolution(
+    val hasShebangCommand: Boolean = false,
+    val commandLine: List<String>? = null,
+    val missingExecutableName: String? = null,
+  )
 }

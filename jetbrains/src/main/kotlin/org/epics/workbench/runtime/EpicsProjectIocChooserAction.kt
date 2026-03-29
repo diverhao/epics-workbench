@@ -120,25 +120,19 @@ internal fun showProjectIocChooser(
   project: com.intellij.openapi.project.Project,
   contextFile: VirtualFile? = null,
 ) {
-  val startupFiles = collectProjectStartupFiles(project, contextFile)
-  if (startupFiles.isEmpty()) {
+  val startupItems = collectProjectStartupMenuItems(project, contextFile)
+  if (startupItems.isEmpty()) {
     Messages.showWarningDialog(project, "No st.cmd-like files were found under this project's iocBoot folders.", TITLE)
     return
   }
 
-  ProjectIocChooserDialog(project, startupFiles, contextFile).show()
-}
-
-private fun collectProjectStartupFiles(
-  project: com.intellij.openapi.project.Project,
-  contextFile: VirtualFile?,
-): List<VirtualFile> {
-  return collectProjectStartupMenuItems(project, contextFile).map { it.startupFile }
+  ProjectIocChooserDialog(project, startupItems, contextFile).show()
 }
 
 private data class ProjectStartupMenuItem(
   val startupFile: VirtualFile,
   val label: String,
+  val missingExecutableName: String? = null,
 )
 
 private fun collectProjectStartupMenuItems(
@@ -155,6 +149,7 @@ private fun collectProjectStartupMenuItems(
     val rootName: String,
     val startupFile: VirtualFile,
     val iocBootRelativePath: String,
+    val missingExecutableName: String? = null,
   )
 
   val buildModelService = project.service<EpicsBuildModelService>()
@@ -162,13 +157,21 @@ private fun collectProjectStartupMenuItems(
   roots.forEach { root ->
     val rootPath = root.toNioPathOrNull()?.normalize() ?: return@forEach
     val iocBootRootPath = rootPath.resolve("iocBoot").normalize()
-    val startupPaths = buildModelService.collectStartupEntryPoints(rootPath).ifEmpty {
-      collectStartupFilesUnder(iocBootRootPath)
-    }
+    val startupPaths = (
+      buildModelService.collectStartupEntryPoints(rootPath) +
+        collectStartupFilesUnder(iocBootRootPath)
+      )
+      .map(Path::normalize)
+      .filter(::isStartupFilePath)
+      .distinctBy { candidate -> candidate.pathString.lowercase() }
     startupPaths.forEach startupPathLoop@{ startupPath ->
-      val normalizedPath = startupPath.normalize()
+      val normalizedPath = startupPath
       val startupFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(normalizedPath.pathString)
         ?: return@startupPathLoop
+      val validation = EpicsIocRuntimeService.validateStartupFile(startupFile)
+      if (!validation.hasShebangCommand) {
+        return@startupPathLoop
+      }
       val relativePath = runCatching {
         iocBootRootPath.relativize(normalizedPath).toString().replace('\\', '/')
       }.getOrDefault(startupFile.name)
@@ -178,6 +181,7 @@ private fun collectProjectStartupMenuItems(
           rootName = root.name,
           startupFile = startupFile,
           iocBootRelativePath = relativePath,
+          missingExecutableName = validation.missingExecutableName,
         ),
       )
     }
@@ -198,6 +202,7 @@ private fun collectProjectStartupMenuItems(
       ProjectStartupMenuItem(
         startupFile = candidate.startupFile,
         label = label,
+        missingExecutableName = candidate.missingExecutableName,
       )
     }
 }
@@ -236,7 +241,10 @@ private class ProjectStartupIocStartAction(
     event.presentation.text = startupItem.label
     event.presentation.description = "Start the IOC for ${startupItem.startupFile.name}"
     event.presentation.isVisible =
-      project != null && startupItem.startupFile.isValid && EpicsIocRuntimeService.isIocBootStartupFile(startupItem.startupFile)
+      project != null &&
+        startupItem.missingExecutableName == null &&
+        startupItem.startupFile.isValid &&
+        EpicsIocRuntimeService.isIocBootStartupFile(startupItem.startupFile)
     event.presentation.isEnabled = !running
   }
 
@@ -268,7 +276,10 @@ private class ProjectStartupIocStopAction(
     event.presentation.text = startupItem.label
     event.presentation.description = "Stop the IOC for ${startupItem.startupFile.name}"
     event.presentation.isVisible =
-      project != null && startupItem.startupFile.isValid && EpicsIocRuntimeService.isIocBootStartupFile(startupItem.startupFile)
+      project != null &&
+        startupItem.missingExecutableName == null &&
+        startupItem.startupFile.isValid &&
+        EpicsIocRuntimeService.isIocBootStartupFile(startupItem.startupFile)
     event.presentation.isEnabled = running
   }
 
@@ -285,11 +296,11 @@ private class ProjectStartupIocStopAction(
 
 private class ProjectIocChooserDialog(
   private val project: com.intellij.openapi.project.Project,
-  startupFiles: List<VirtualFile>,
+  startupItems: List<ProjectStartupMenuItem>,
   initialSelection: VirtualFile?,
 ) : DialogWrapper(project, true) {
   private val runtimeService = project.service<EpicsIocRuntimeService>()
-  private val startupList = JBList(startupFiles)
+  private val startupList = JBList(startupItems)
   private val openFileAction = object : DialogWrapperAction("Open File") {
     override fun doAction(event: ActionEvent?) {
       openSelectedStartupFile(closeAfterOpen = false)
@@ -297,7 +308,8 @@ private class ProjectIocChooserDialog(
   }
   private val startOrBringAction = object : DialogWrapperAction("Start") {
     override fun doAction(event: ActionEvent?) {
-      val startupFile = selectedStartupFile() ?: return
+      val startupItem = selectedStartupItem() ?: return
+      val startupFile = startupItem.startupFile
       if (runtimeService.isRunning(startupFile)) {
         runtimeService.showRunningConsole(startupFile)
       } else {
@@ -331,7 +343,7 @@ private class ProjectIocChooserDialog(
     startupList.addMouseListener(
       object : MouseAdapter() {
         override fun mouseClicked(event: MouseEvent) {
-          if (event.clickCount >= 2 && startupList.selectedValue != null) {
+          if (event.clickCount >= 2 && selectedStartupFile() != null) {
             openSelectedStartupFile(closeAfterOpen = true)
           }
         }
@@ -339,8 +351,8 @@ private class ProjectIocChooserDialog(
     )
     init()
 
-    val initialIndex = startupFiles.indexOfFirst { candidate ->
-      initialSelection?.path == candidate.path
+    val initialIndex = startupItems.indexOfFirst { candidate ->
+      initialSelection?.path == candidate.startupFile.path
     }.takeIf { it >= 0 } ?: 0
     startupList.selectedIndex = initialIndex
     refreshActionState()
@@ -362,15 +374,21 @@ private class ProjectIocChooserDialog(
   }
 
   private fun refreshActionState() {
-    val startupFile = selectedStartupFile()
+    val startupItem = selectedStartupItem()
+    val startupFile = startupItem?.startupFile
     val running = startupFile?.let(runtimeService::isRunning) == true
+    val canControlStartup = startupItem != null && startupItem.missingExecutableName == null
     openFileAction.isEnabled = startupFile != null
-    startOrBringAction.isEnabled = startupFile != null
-    stopAction.isEnabled = startupFile != null
+    startOrBringAction.isEnabled = canControlStartup
+    stopAction.isEnabled = canControlStartup && running
+    getButton(startOrBringAction)?.isVisible = canControlStartup
+    getButton(stopAction)?.isVisible = canControlStartup
     startOrBringAction.putValue(Action.NAME, if (running) "Bring to Front" else "Start")
   }
 
-  private fun selectedStartupFile(): VirtualFile? = startupList.selectedValue
+  private fun selectedStartupItem(): ProjectStartupMenuItem? = startupList.selectedValue
+
+  private fun selectedStartupFile(): VirtualFile? = selectedStartupItem()?.startupFile
 
   private fun openSelectedStartupFile(closeAfterOpen: Boolean) {
     val startupFile = selectedStartupFile() ?: return
@@ -387,18 +405,25 @@ private class ProjectIocChooserDialog(
 
 private class StartupListRenderer(
   private val runtimeService: EpicsIocRuntimeService,
-) : ColoredListCellRenderer<VirtualFile>() {
+) : ColoredListCellRenderer<ProjectStartupMenuItem>() {
   override fun customizeCellRenderer(
-    list: JList<out VirtualFile>,
-    value: VirtualFile?,
+    list: JList<out ProjectStartupMenuItem>,
+    value: ProjectStartupMenuItem?,
     index: Int,
     selected: Boolean,
     hasFocus: Boolean,
   ) {
-    val startupFile = value ?: return
+    val startupItem = value ?: return
+    val startupFile = startupItem.startupFile
     font = list.font.deriveFont(list.font.size2D + 2f)
-    append(startupFile.path, SimpleTextAttributes.REGULAR_ATTRIBUTES)
-    if (runtimeService.isRunning(startupFile)) {
+    append(startupItem.label, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+    append("   ${startupFile.path}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+    if (startupItem.missingExecutableName != null) {
+      append(
+        "   Error: executable ${startupItem.missingExecutableName} missing",
+        SimpleTextAttributes.ERROR_ATTRIBUTES,
+      )
+    } else if (runtimeService.isRunning(startupFile)) {
       append(
         "   Running",
         SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, JBColor(0x2E7D32, 0x73D07C)),

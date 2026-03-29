@@ -39,8 +39,12 @@ class EpicsBuildPopupGroup : AbstractEpicsPopupGroup(
   "org.epics.workbench.BuildWithMakefileAction",
   "org.epics.workbench.CleanAndBuildWithMakefileAction",
   SEPARATOR,
+  "org.epics.workbench.ShowMakefileAction",
+  "org.epics.workbench.ShowReleaseAction",
+  SEPARATOR,
   "org.epics.workbench.BuildProjectAction",
   "org.epics.workbench.CleanAndBuildProjectAction",
+  "org.epics.workbench.DistCleanProjectAction",
 )
 
 class EpicsWidgetPopupGroup : AbstractEpicsPopupGroup(

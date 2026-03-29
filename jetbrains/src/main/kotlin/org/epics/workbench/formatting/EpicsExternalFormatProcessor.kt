@@ -90,7 +90,7 @@ class EpicsExternalFormatProcessor : ExternalFormatProcessor {
       extension == PROTOCOL_EXTENSION -> FormatKind.PROTOCOL
       extension == MONITOR_EXTENSION -> FormatKind.MONITOR
       extension == SEQUENCER_EXTENSION -> FormatKind.SEQUENCER
-      isMakefile(file) -> FormatKind.MAKEFILE
+      isMakefileStyleFile(file) -> FormatKind.MAKEFILE
       file.fileType.name == DATABASE_FILE_TYPE || file.language.id == DATABASE_LANGUAGE_ID -> FormatKind.DATABASE
       file.fileType.name == STARTUP_FILE_TYPE || file.language.id == STARTUP_LANGUAGE_ID -> FormatKind.STARTUP
       file.fileType.name == SUBSTITUTIONS_FILE_TYPE || file.language.id == SUBSTITUTIONS_LANGUAGE_ID -> FormatKind.SUBSTITUTIONS
@@ -100,8 +100,6 @@ class EpicsExternalFormatProcessor : ExternalFormatProcessor {
       else -> null
     }
   }
-
-  private fun isMakefile(file: PsiFile): Boolean = file.virtualFile?.name == "Makefile" || file.name == "Makefile"
 
   companion object {
     private const val DATABASE_LANGUAGE_ID = "EPICS Database"

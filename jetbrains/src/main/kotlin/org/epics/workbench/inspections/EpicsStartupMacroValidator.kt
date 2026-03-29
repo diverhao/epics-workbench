@@ -5,6 +5,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import org.epics.workbench.build.epicsBuildModelService
 import org.epics.workbench.navigation.EpicsPathKind
 import org.epics.workbench.navigation.EpicsPathResolver
+import org.epics.workbench.runtime.EpicsIocRuntimeService
 import java.nio.charset.Charset
 
 internal object EpicsStartupMacroValidator {
@@ -29,12 +30,18 @@ internal object EpicsStartupMacroValidator {
     val nameEnd: Int,
   )
 
+  private data class StartupShebangExecutableRange(
+    val startOffset: Int,
+    val endOffset: Int,
+  )
+
   fun collectIssues(
     project: Project,
     hostFile: VirtualFile,
     text: String,
   ): List<EpicsDatabaseValueValidator.ValidationIssue> {
     val issues = mutableListOf<EpicsDatabaseValueValidator.ValidationIssue>()
+    collectMissingShebangExecutableIssue(hostFile, text)?.let(issues::add)
 
     for (statement in extractStartupLoadStatements(text)) {
       if (statement.command != "dbLoadRecords") {
@@ -91,6 +98,38 @@ internal object EpicsStartupMacroValidator {
     }
 
     return issues
+  }
+
+  private fun collectMissingShebangExecutableIssue(
+    hostFile: VirtualFile,
+    text: String,
+  ): EpicsDatabaseValueValidator.ValidationIssue? {
+    val validation = EpicsIocRuntimeService.validateStartupFile(hostFile, text)
+    val missingExecutableName = validation.missingExecutableName ?: return null
+    val range = findShebangExecutableRange(text) ?: return null
+    return EpicsDatabaseValueValidator.ValidationIssue(
+      startOffset = range.startOffset,
+      endOffset = range.endOffset,
+      message = "Executable \"$missingExecutableName\" referenced by the shebang was not found.",
+      severity = EpicsDatabaseValueValidator.ValidationSeverity.WARNING,
+    )
+  }
+
+  private fun findShebangExecutableRange(text: String): StartupShebangExecutableRange? {
+    val firstLine = text.substringBefore('\n').removeSuffix("\r")
+    if (!firstLine.startsWith("#!")) {
+      return null
+    }
+
+    val shebangCommand = firstLine.removePrefix("#!")
+    val leadingWhitespaceLength = shebangCommand.takeWhile(Char::isWhitespace).length
+    val executableText = SHEBANG_EXECUTABLE_REGEX.find(shebangCommand.drop(leadingWhitespaceLength))?.value
+      ?: return null
+    val startOffset = 2 + leadingWhitespaceLength
+    return StartupShebangExecutableRange(
+      startOffset = startOffset,
+      endOffset = startOffset + executableText.length,
+    )
   }
 
   private fun extractStartupLoadStatements(text: String): List<StartupLoadStatement> {
@@ -316,6 +355,7 @@ internal object EpicsStartupMacroValidator {
   private val REGISTER_RECORD_DEVICE_DRIVER_REGEX =
     Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)_registerRecordDeviceDriver\s*\(""")
   private val NAMED_ASSIGNMENT_REGEX = Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=""")
+  private val SHEBANG_EXECUTABLE_REGEX = Regex("""^(?:"[^"]*"|'[^']*'|\S+)""")
   private val DATABASE_MACRO_REGEX =
     Regex("""\$\(([^)=,\s]+)(?:=[^)]*)?\)|\$\{([^}=,\s]+)(?:=[^}]*)?\}""")
   private val REQUIRED_DATABASE_MACRO_REGEX =

@@ -15,6 +15,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
+import org.epics.workbench.formatting.isMakefileStyleFile
 import org.epics.workbench.formatting.EpicsTextFormatter
 import org.epics.workbench.monitor.EpicsMonitorFileSupport
 import org.epics.workbench.runtime.EpicsMonitorRuntimeService
@@ -31,7 +32,7 @@ class FormatDatabaseFileAction : DumbAwareAction() {
       event.project != null && (
         file?.let(::isDatabaseFile) == true ||
           isStartupFile(file) ||
-          isMakefile(file) ||
+          isMakefileStyleFile(file) ||
           isDbdFile(file) ||
           isProtocolFile(file) ||
           EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) ||
@@ -45,7 +46,7 @@ class FormatDatabaseFileAction : DumbAwareAction() {
     val file = getTargetFile(event) ?: return
     if (!isDatabaseFile(file) &&
       !isStartupFile(file) &&
-      !isMakefile(file) &&
+      !isMakefileStyleFile(file) &&
       !isDbdFile(file) &&
       !isProtocolFile(file) &&
       !EpicsSubstitutionsExpansionSupport.isSubstitutionsFile(file) &&
@@ -60,7 +61,7 @@ class FormatDatabaseFileAction : DumbAwareAction() {
     val formattedText = when {
       isDatabaseFile(file) -> EpicsTextFormatter.formatDatabaseText(originalText, getIndentUnit(psiFile))
       isStartupFile(file) -> EpicsTextFormatter.formatStartupText(originalText)
-      isMakefile(file) -> EpicsTextFormatter.formatMakefileText(originalText)
+      isMakefileStyleFile(file) -> EpicsTextFormatter.formatMakefileText(originalText)
       isDbdFile(file) -> EpicsTextFormatter.formatDatabaseText(originalText, getIndentUnit(psiFile))
       isProtocolFile(file) -> EpicsTextFormatter.formatProtocolText(originalText, getIndentUnit(psiFile))
       isPvlistFile(file) -> EpicsTextFormatter.formatMonitorText(originalText)
@@ -177,10 +178,6 @@ private fun isPvlistFile(file: VirtualFile?): Boolean {
 
 private fun isDbdFile(file: VirtualFile?): Boolean {
   return file?.extension?.lowercase() == "dbd"
-}
-
-private fun isMakefile(file: VirtualFile?): Boolean {
-  return file?.name == "Makefile"
 }
 
 private fun isProtocolFile(file: VirtualFile?): Boolean {

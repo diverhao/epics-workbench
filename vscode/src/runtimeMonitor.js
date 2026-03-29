@@ -1718,23 +1718,33 @@ class EpicsRuntimeMonitorController {
   createProjectStartupIocQuickPickItems(projectRootPath, startupDocumentPaths) {
     return startupDocumentPaths.map((startupDocumentPath) => {
       const runningTerminal = this.getCandidateRunningStartupIocTerminals(startupDocumentPath)[0];
+      const startupValidation = resolveStartupExecutableValidation(startupDocumentPath);
+      const executableErrorMessage =
+        startupValidation.executableText && !startupValidation.executablePath
+          ? `Error: executable ${startupValidation.executableName} missing`
+          : "";
       return {
         label: getIocBootDisplayPath(projectRootPath, startupDocumentPath),
         description: runningTerminal ? "Running" : "",
-        detail: runningTerminal
+        detail: executableErrorMessage || (runningTerminal
           ? `Terminal: ${runningTerminal.name || "Terminal"}`
-          : "Not running",
-        buttons: runningTerminal
+          : "Not running"),
+        buttons: executableErrorMessage
           ? [
             STARTUP_IOC_PICKER_OPEN_FILE_BUTTON,
-            STARTUP_IOC_PICKER_BRING_TO_FRONT_BUTTON,
-            STARTUP_IOC_PICKER_STOP_BUTTON,
+            ...(runningTerminal ? [STARTUP_IOC_PICKER_BRING_TO_FRONT_BUTTON] : []),
           ]
-          : [
-            STARTUP_IOC_PICKER_OPEN_FILE_BUTTON,
-            STARTUP_IOC_PICKER_START_BUTTON,
-            STARTUP_IOC_PICKER_STOP_BUTTON,
-          ],
+          : runningTerminal
+            ? [
+              STARTUP_IOC_PICKER_OPEN_FILE_BUTTON,
+              STARTUP_IOC_PICKER_BRING_TO_FRONT_BUTTON,
+              STARTUP_IOC_PICKER_STOP_BUTTON,
+            ]
+            : [
+              STARTUP_IOC_PICKER_OPEN_FILE_BUTTON,
+              STARTUP_IOC_PICKER_START_BUTTON,
+              STARTUP_IOC_PICKER_STOP_BUTTON,
+            ],
         startupDocumentPath,
       };
     });
@@ -1938,10 +1948,17 @@ class EpicsRuntimeMonitorController {
     const selected = await vscode.window.showQuickPick(
       startupDocumentPaths.map((startupDocumentPath) => {
         const runningTerminal = this.getCandidateRunningStartupIocTerminals(startupDocumentPath)[0];
+        const startupValidation = resolveStartupExecutableValidation(startupDocumentPath);
+        const executableErrorMessage =
+          startupValidation.executableText && !startupValidation.executablePath
+            ? `Error: executable ${startupValidation.executableName} missing`
+            : "";
         return {
           label: startupDocumentPath,
           description: runningTerminal ? "Running" : "",
-          detail: runningTerminal ? `Terminal: ${runningTerminal.name || "Terminal"}` : "",
+          detail: executableErrorMessage || (runningTerminal
+            ? `Terminal: ${runningTerminal.name || "Terminal"}`
+            : ""),
           startupDocumentPath,
         };
       }),
@@ -2015,6 +2032,16 @@ class EpicsRuntimeMonitorController {
     );
     const startupDocument =
       openDocument || (await vscode.workspace.openTextDocument(normalizedStartupDocumentPath));
+    const startupValidation = resolveStartupExecutableValidation(
+      normalizedStartupDocumentPath,
+      startupDocument.getText(),
+    );
+    if (startupValidation.executableText && !startupValidation.executablePath) {
+      vscode.window.showErrorMessage(
+        `Error: executable ${startupValidation.executableName} missing`,
+      );
+      return undefined;
+    }
     if (startupDocument.isDirty) {
       const saved = await startupDocument.save();
       if (!saved) {
@@ -7162,15 +7189,6 @@ function isPathUnderIocBoot(fsPath) {
   return /(^|\/)iocBoot(\/|$)/.test(normalizedPath);
 }
 
-function hasExecutablePermission(fsPath) {
-  try {
-    fs.accessSync(fsPath, fs.constants.X_OK);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
 function readFirstLineFromFile(fsPath) {
   try {
     const text = fs.readFileSync(fsPath, "utf8");
@@ -7237,20 +7255,33 @@ function isStcmdLikeFilePath(fsPath, documentText) {
     return false;
   }
 
-  if (!isPathUnderIocBoot(normalizedPath) || !hasExecutablePermission(normalizedPath)) {
+  if (!isPathUnderIocBoot(normalizedPath)) {
     return false;
   }
 
-  const shebangExecutable = extractShebangExecutable(
-    documentText === undefined ? readFirstLineFromFile(normalizedPath) : documentText,
-  );
-  if (!shebangExecutable) {
+  const extension = path.extname(normalizedPath).toLowerCase();
+  if (extension !== ".cmd" && extension !== ".iocsh") {
     return false;
   }
 
   return Boolean(
-    resolveExistingExecutablePath(shebangExecutable, path.dirname(normalizedPath)),
+    resolveStartupExecutableValidation(normalizedPath, documentText).executableText,
   );
+}
+
+function resolveStartupExecutableValidation(fsPath, documentText) {
+  const normalizedPath = normalizeFsPath(fsPath);
+  const executableText = extractShebangExecutable(
+    documentText === undefined ? readFirstLineFromFile(normalizedPath) : documentText,
+  );
+  const executableName = path.basename(executableText || "");
+  return {
+    executableText,
+    executableName,
+    executablePath: executableText
+      ? resolveExistingExecutablePath(executableText, path.dirname(normalizedPath))
+      : undefined,
+  };
 }
 
 function getIocBootRelativeDisplayPath(projectRootPath, startupDocumentPath) {
@@ -13030,6 +13061,7 @@ module.exports = {
   loadProjectRuntimeConfiguration,
   createRuntimeEnvironmentFromProjectConfiguration,
   normalizeRuntimeProtocol,
+  resolveStartupExecutableValidation,
   safeRequireRuntimeLibrary,
   formatRuntimeValue,
   getCaRuntimeDisplayValue,

@@ -28,6 +28,7 @@ const {
   loadProjectRuntimeConfiguration,
   createRuntimeEnvironmentFromProjectConfiguration,
   normalizeRuntimeProtocol,
+  resolveStartupExecutableValidation,
   safeRequireRuntimeLibrary,
   formatRuntimeValue,
   getCaRuntimeDisplayValue,
@@ -102,11 +103,14 @@ const COPY_ALL_RECORD_NAMES_COMMAND = "vscode-epics.copyAllRecordNames";
 const COPY_AS_MONITOR_FILE_COMMAND = "vscode-epics.copyAsMonitorFile";
 const COPY_AS_EXPANDED_DB_COMMAND = "vscode-epics.copyAsExpandedDb";
 const ADD_DB_TO_MAKEFILE_COMMAND = "vscode-epics.addDbToMakefile";
+const SHOW_MAKEFILE_COMMAND = "vscode-epics.showMakefile";
+const SHOW_RELEASE_COMMAND = "vscode-epics.showRelease";
 const BUILD_WITH_MAKEFILE_COMMAND = "vscode-epics.buildWithMakefile";
 const CLEAN_AND_BUILD_WITH_MAKEFILE_COMMAND =
   "vscode-epics.cleanAndBuildWithMakefile";
 const BUILD_PROJECT_COMMAND = "vscode-epics.buildProject";
 const CLEAN_AND_BUILD_PROJECT_COMMAND = "vscode-epics.cleanAndBuildProject";
+const DIST_CLEAN_PROJECT_COMMAND = "vscode-epics.distCleanProject";
 const EXPORT_DATABASE_TO_EXCEL_COMMAND = "vscode-epics.exportDatabaseToExcel";
 const IMPORT_DATABASE_FROM_EXCEL_COMMAND = "vscode-epics.importDatabaseFromExcel";
 const IMPORT_DATABASE_FROM_EXCEL_SHORT_COMMAND =
@@ -363,6 +367,21 @@ function activate(context) {
       workspaceIndex,
       databaseValueDecorationTypes,
     );
+  const startupExecutableWatchSupport =
+    createStartupExecutableWatchSupport(refreshDocumentDiagnostics);
+  context.subscriptions.push({
+    dispose() {
+      startupExecutableWatchSupport.dispose();
+    },
+  });
+  const startupExecutableValidationInterval = setInterval(() => {
+    startupExecutableWatchSupport.pollOpenDocuments();
+  }, 1000);
+  context.subscriptions.push({
+    dispose() {
+      clearInterval(startupExecutableValidationInterval);
+    },
+  });
   const refreshOpenDiagnostics = () => {
     for (const document of vscode.workspace.textDocuments) {
       refreshDocumentDiagnostics(document);
@@ -664,6 +683,16 @@ function activate(context) {
     }),
   );
   context.subscriptions.push(
+    vscode.commands.registerCommand(SHOW_MAKEFILE_COMMAND, async (resourceUri) => {
+      await showMakefile(resourceUri);
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(SHOW_RELEASE_COMMAND, async (resourceUri) => {
+      await showProjectRelease(resourceUri);
+    }),
+  );
+  context.subscriptions.push(
     vscode.commands.registerCommand(BUILD_WITH_MAKEFILE_COMMAND, async (resourceUri) => {
       await buildWithLocalMakefile(resourceUri, makeBuildOutputChannel);
     }),
@@ -681,6 +710,11 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand(CLEAN_AND_BUILD_PROJECT_COMMAND, async (resourceUri) => {
       await cleanEpicsProject(resourceUri, makeBuildOutputChannel);
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(DIST_CLEAN_PROJECT_COMMAND, async (resourceUri) => {
+      await distCleanEpicsProject(resourceUri, makeBuildOutputChannel);
     }),
   );
   context.subscriptions.push(
@@ -884,6 +918,8 @@ function activate(context) {
       [
         { language: "makefile" },
         { scheme: "file", pattern: "**/Makefile" },
+        { scheme: "file", pattern: "**/configure/RELEASE" },
+        { scheme: "file", pattern: "**/configure/RELEASE.local" },
       ],
       new EpicsMakefileFormattingProvider(),
     ),
@@ -903,6 +939,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((document) => {
       refreshActiveMakefileContextKeys();
+      startupExecutableWatchSupport.updateDocument(document);
       if (isProjectModelDocument(document)) {
         workspaceIndex.markDirty();
         refreshOpenDiagnostics();
@@ -917,6 +954,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
       refreshActiveMakefileContextKeys();
+      startupExecutableWatchSupport.updateDocument(event.document);
       if (isProjectModelDocument(event.document)) {
         workspaceIndex.markDirty();
         refreshOpenDiagnostics();
@@ -939,6 +977,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
       refreshActiveMakefileContextKeys();
+      startupExecutableWatchSupport.removeDocument(document);
       diagnostics.delete(document.uri);
       if (
         isDatabaseDocument(document) ||
@@ -951,6 +990,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
       refreshActiveMakefileContextKeys();
+      startupExecutableWatchSupport.updateDocument(document);
       if (isProjectModelDocument(document)) {
         workspaceIndex.markDirty();
         refreshOpenDiagnostics();
@@ -993,6 +1033,7 @@ function activate(context) {
   );
 
   for (const document of vscode.workspace.textDocuments) {
+    startupExecutableWatchSupport.updateDocument(document);
     refreshDocumentDiagnostics(document);
   }
   updateDatabaseRecordDecorationsForVisibleEditors(databaseRecordDecorationTypes);
@@ -7128,13 +7169,18 @@ function findProjectIocBootFilePaths(rootPath) {
         continue;
       }
 
-      if (entry.isFile()) {
+      if (entry.isFile() && isIocStartupEntryFilePath(absolutePath)) {
         filePaths.push(absolutePath);
       }
     }
   }
 
   return filePaths.sort(compareLabels);
+}
+
+function isIocStartupEntryFilePath(filePath) {
+  const extension = path.extname(String(filePath || "")).toLowerCase();
+  return extension === ".cmd" || extension === ".iocsh";
 }
 
 function resolveLinkedRecordName(snapshot, document, fieldValue) {
@@ -9492,6 +9538,10 @@ function createStartupDiagnostics(document, snapshot) {
   const project = findProjectForUri(snapshot.projectModel, document.uri);
   const state = createInitialStartupExecutionState(snapshot, document);
   const statements = extractStartupStatements(document.getText());
+  const shebangDiagnostic = createMissingStartupExecutableDiagnostic(document);
+  if (shebangDiagnostic) {
+    diagnostics.push(shebangDiagnostic);
+  }
 
   for (const statement of statements) {
     switch (statement.kind) {
@@ -9586,6 +9636,55 @@ function createStartupDiagnostics(document, snapshot) {
   }
 
   return diagnostics;
+}
+
+function createMissingStartupExecutableDiagnostic(document) {
+  const startupValidation = resolveStartupExecutableValidation(
+    document.uri.fsPath,
+    document.getText(),
+  );
+  if (
+    !startupValidation?.executableText ||
+    startupValidation.executablePath ||
+    !startupValidation.executableName
+  ) {
+    return undefined;
+  }
+
+  const executableRange = findShebangExecutableRange(document.getText());
+  if (!executableRange) {
+    return undefined;
+  }
+
+  return createDiagnostic(
+    executableRange.start,
+    executableRange.end,
+    `Executable "${startupValidation.executableName}" referenced by the shebang was not found.`,
+    vscode.DiagnosticSeverity.Warning,
+  );
+}
+
+function findShebangExecutableRange(text) {
+  const firstLine = String(text || "").split(/\r?\n/, 1)[0] || "";
+  if (!firstLine.startsWith("#!")) {
+    return undefined;
+  }
+
+  const shebangCommand = firstLine.slice(2);
+  const leadingWhitespaceLength = shebangCommand.match(/^\s*/)?.[0].length || 0;
+  const executableMatch = shebangCommand
+    .slice(leadingWhitespaceLength)
+    .match(/^(?:"[^"]*"|'[^']*'|\S+)/);
+  if (!executableMatch?.[0]) {
+    return undefined;
+  }
+
+  const startCharacter = 2 + leadingWhitespaceLength;
+  const endCharacter = startCharacter + executableMatch[0].length;
+  return {
+    start: new vscode.Position(0, startCharacter),
+    end: new vscode.Position(0, endCharacter),
+  };
 }
 
 function createStartupLoadMacroDiagnostics(document, statement, resolvedFile) {
@@ -10529,7 +10628,11 @@ function resolveLocalMakeBuildDirectoryForDocument(document) {
     return undefined;
   }
 
-  if (isMakefileDocument(document) || isMakefileInstallableDatabaseSourceDocument(document)) {
+  if (
+    isMakefileDocument(document) ||
+    isMakefileInstallableDatabaseSourceDocument(document) ||
+    isStartupDocument(document)
+  ) {
     return path.dirname(makefilePath);
   }
 
@@ -10659,6 +10762,59 @@ async function buildWithLocalMakefile(resourceUri, outputChannel) {
   );
 }
 
+async function showMakefile(resourceUri) {
+  const document = await resolveDocumentForCommand(resourceUri);
+  let makefilePath = getSiblingMakefilePathForDocument(document);
+  let makefileLabel;
+  if (makefilePath && fs.existsSync(makefilePath)) {
+    makefileLabel = path.basename(path.dirname(makefilePath));
+  } else {
+    const buildTarget = await resolveEpicsProjectBuildTarget(resolveUriForCommand(resourceUri || document?.uri));
+    makefilePath = buildTarget ? path.join(buildTarget.rootPath, "Makefile") : undefined;
+    makefileLabel = buildTarget?.label;
+  }
+  if (!makefilePath || !fs.existsSync(makefilePath)) {
+    vscode.window.showWarningMessage("No Makefile was found for the selected file or project.");
+    return;
+  }
+
+  try {
+    const makefileDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(makefilePath));
+    await vscode.window.showTextDocument(makefileDocument, {
+      preview: false,
+      preserveFocus: false,
+    });
+  } catch (error) {
+    const targetLabel = makefileLabel ? ` for ${makefileLabel}` : "";
+    vscode.window.showErrorMessage(`Failed to open Makefile${targetLabel}.`);
+  }
+}
+
+async function showProjectRelease(resourceUri) {
+  const activeUri = resolveUriForCommand(resourceUri);
+  const buildTarget = await resolveEpicsProjectBuildTarget(activeUri);
+  if (!buildTarget) {
+    vscode.window.showWarningMessage("No EPICS project root is available to show RELEASE.");
+    return;
+  }
+
+  const releasePath = path.join(buildTarget.rootPath, "configure", "RELEASE");
+  if (!fs.existsSync(releasePath)) {
+    vscode.window.showWarningMessage(`No RELEASE file was found for project ${buildTarget.label}.`);
+    return;
+  }
+
+  try {
+    const releaseDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(releasePath));
+    await vscode.window.showTextDocument(releaseDocument, {
+      preview: false,
+      preserveFocus: false,
+    });
+  } catch (error) {
+    vscode.window.showErrorMessage(`Failed to open RELEASE for project ${buildTarget.label}.`);
+  }
+}
+
 async function cleanWithLocalMakefile(resourceUri, outputChannel) {
   const document = await resolveDocumentForCommand(resourceUri);
   const buildDirectory = resolveLocalMakeBuildDirectoryForDocument(document);
@@ -10702,6 +10858,22 @@ async function cleanEpicsProject(resourceUri, outputChannel) {
     buildTarget.rootPath,
     outputChannel,
     `Clean Project ${buildTarget.label}`,
+    [["clean"]],
+  );
+}
+
+async function distCleanEpicsProject(resourceUri, outputChannel) {
+  const activeUri = resolveUriForCommand(resourceUri);
+  const buildTarget = await resolveEpicsProjectBuildTarget(activeUri);
+  if (!buildTarget) {
+    vscode.window.showWarningMessage("No EPICS project root is available to dist clean.");
+    return;
+  }
+
+  await runMakeCommands(
+    buildTarget.rootPath,
+    outputChannel,
+    `Dist Clean Project ${buildTarget.label}`,
     [["distclean"]],
   );
 }
@@ -16813,6 +16985,121 @@ function registerWatcher(disposables, glob, onChange) {
   watcher.onDidChange(onChange, undefined, disposables);
   watcher.onDidDelete(onChange, undefined, disposables);
   disposables.push(watcher);
+}
+
+function createStartupExecutableWatchSupport(refreshDocumentDiagnostics) {
+  const watchedExecutablesByDocumentUri = new Map();
+
+  const disposeWatcher = (documentUriKey) => {
+    const entry = watchedExecutablesByDocumentUri.get(documentUriKey);
+    if (!entry?.watchedPath || !entry?.onChange) {
+      if (entry) {
+        watchedExecutablesByDocumentUri.set(documentUriKey, {
+          validationKey: entry.validationKey,
+          watchedPath: "",
+          onChange: undefined,
+        });
+      }
+      return;
+    }
+
+    fs.unwatchFile(entry.watchedPath, entry.onChange);
+    watchedExecutablesByDocumentUri.set(documentUriKey, {
+      validationKey: entry.validationKey,
+      watchedPath: "",
+      onChange: undefined,
+    });
+  };
+
+  const removeDocumentState = (documentUriKey) => {
+    const entry = watchedExecutablesByDocumentUri.get(documentUriKey);
+    if (entry?.watchedPath && entry?.onChange) {
+      fs.unwatchFile(entry.watchedPath, entry.onChange);
+    }
+    watchedExecutablesByDocumentUri.delete(documentUriKey);
+  };
+
+  const updateDocumentState = (document, refreshIfValidationChanged = false) => {
+    const documentUriKey = document?.uri?.toString();
+    if (!documentUriKey) {
+      return;
+    }
+
+    if (!isStartupDocument(document) || document.uri.scheme !== "file") {
+      removeDocumentState(documentUriKey);
+      return;
+    }
+
+    const validation = resolveStartupExecutableValidation(
+      document.uri.fsPath,
+      document.getText(),
+    );
+    const watchedPath = validation.executablePath
+      ? normalizeFsPath(validation.executablePath)
+      : "";
+    const validationKey = `${validation.executableText || ""}\n${watchedPath}`;
+    const existingEntry = watchedExecutablesByDocumentUri.get(documentUriKey);
+    const validationChanged =
+      existingEntry &&
+      existingEntry.validationKey !== validationKey;
+
+    if (existingEntry?.watchedPath !== watchedPath) {
+      disposeWatcher(documentUriKey);
+    }
+
+    const currentEntry = watchedExecutablesByDocumentUri.get(documentUriKey);
+    if (!currentEntry?.watchedPath && watchedPath) {
+      const onChange = () => {
+        const openDocument = vscode.workspace.textDocuments.find(
+          (candidate) => candidate.uri.toString() === documentUriKey,
+        );
+        if (!openDocument) {
+          removeDocumentState(documentUriKey);
+          return;
+        }
+
+        updateDocumentState(openDocument, true);
+      };
+      fs.watchFile(watchedPath, { interval: 1000 }, onChange);
+      watchedExecutablesByDocumentUri.set(documentUriKey, {
+        validationKey,
+        watchedPath,
+        onChange,
+      });
+    } else {
+      watchedExecutablesByDocumentUri.set(documentUriKey, {
+        validationKey,
+        watchedPath: currentEntry?.watchedPath || "",
+        onChange: currentEntry?.onChange,
+      });
+    }
+
+    if (refreshIfValidationChanged && validationChanged) {
+      refreshDocumentDiagnostics(document);
+    }
+  };
+
+  return {
+    updateDocument(document) {
+      updateDocumentState(document);
+    },
+
+    removeDocument(document) {
+      removeDocumentState(document?.uri?.toString());
+    },
+
+    pollOpenDocuments() {
+      for (const document of vscode.workspace.textDocuments) {
+        updateDocumentState(document, true);
+      }
+    },
+
+    dispose() {
+      for (const documentUriKey of watchedExecutablesByDocumentUri.keys()) {
+        removeDocumentState(documentUriKey);
+      }
+    },
+  };
 }
 
 async function collectWorkspaceUris() {

@@ -15,7 +15,12 @@ import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.vfs.newvfs.BulkFileListener
+import com.intellij.openapi.vfs.newvfs.events.VFileEvent
+import javax.swing.Timer
 
 class EpicsDatabaseValidationActivity : ProjectActivity {
   override suspend fun execute(project: Project) {
@@ -23,6 +28,25 @@ class EpicsDatabaseValidationActivity : ProjectActivity {
     val multicaster = EditorFactory.getInstance().eventMulticaster
     multicaster.addDocumentListener(listener, project)
     EditorFactory.getInstance().addEditorFactoryListener(listener, project)
+    project.messageBus.connect(project).subscribe(
+      VirtualFileManager.VFS_CHANGES,
+      object : BulkFileListener {
+        override fun after(events: MutableList<out VFileEvent>) {
+          if (events.isEmpty()) {
+            return
+          }
+          listener.refreshOpenStartupEditors()
+        }
+      },
+    )
+    val refreshTimer = Timer(1000) {
+      listener.refreshOpenStartupEditors()
+    }
+    refreshTimer.initialDelay = 0
+    refreshTimer.start()
+    Disposer.register(project) {
+      refreshTimer.stop()
+    }
     listener.refreshOpenEditors()
   }
 }
@@ -43,6 +67,21 @@ internal class EpicsDatabaseValidationListener(
       if (editor.project == project) {
         updateDocument(editor.document)
       }
+    }
+  }
+
+  fun refreshOpenStartupEditors() {
+    for (editor in EditorFactory.getInstance().allEditors) {
+      if (editor.project != project) {
+        continue
+      }
+
+      val file = FileDocumentManager.getInstance().getFile(editor.document) ?: continue
+      if (!isStartupFile(file.name)) {
+        continue
+      }
+
+      updateDocument(editor.document)
     }
   }
 

@@ -85,7 +85,17 @@ private fun buildBuildMenu(project: Project): JMenu {
       addActionListener {
         val root = selectEpicsProjectRoot(project, null, "Clean Project", "Select an EPICS project root to clean.")
           ?: return@addActionListener
-        runMakeBuildCommand(project, Path.of(root.path), "Clean Project ${root.name}", listOf(listOf("distclean")))
+        runMakeBuildCommand(project, Path.of(root.path), "Clean Project ${root.name}", listOf(listOf("clean")))
+      }
+    },
+  )
+  menu.add(
+    JMenuItem("Dist Clean Project").apply {
+      isEnabled = canBuild
+      addActionListener {
+        val root = selectEpicsProjectRoot(project, null, "Dist Clean Project", "Select an EPICS project root to dist clean.")
+          ?: return@addActionListener
+        runMakeBuildCommand(project, Path.of(root.path), "Dist Clean Project ${root.name}", listOf(listOf("distclean")))
       }
     },
   )

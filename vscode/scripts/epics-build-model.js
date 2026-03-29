@@ -751,13 +751,17 @@ function findProjectIocBootFilePaths(rootPath) {
         continue;
       }
 
-      if (entry.isFile()) {
+      if (entry.isFile() && isStartupEntryPointFilePath(absolutePath)) {
         filePaths.push(absolutePath);
       }
     }
   }
 
   return filePaths.sort(compareLabels);
+}
+
+function isStartupEntryPointFilePath(filePath) {
+  return STARTUP_EXTENSIONS.has(path.extname(String(filePath || "")).toLowerCase());
 }
 
 function isConcreteMakefileReferenceToken(token, kind) {

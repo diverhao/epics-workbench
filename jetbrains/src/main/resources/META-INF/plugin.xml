@@ -69,6 +69,7 @@
       fieldName="INSTANCE"
       extensions="probe"
     />
+    <fileTypeOverrider implementation="org.epics.workbench.filetypes.EpicsMakefileFileTypeOverrider" />
     <lang.syntaxHighlighterFactory
       language="EPICS Database"
       implementationClass="org.epics.workbench.highlighting.EpicsDatabaseSyntaxHighlighterFactory"
@@ -309,13 +310,25 @@
       id="org.epics.workbench.BuildWithMakefileAction"
       class="org.epics.workbench.build.BuildWithMakefileAction"
       text="Build"
-      description="Run make clean in the selected file's local Makefile directory"
+      description="Run make in the selected file's local Makefile directory"
     />
     <action
       id="org.epics.workbench.CleanAndBuildWithMakefileAction"
       class="org.epics.workbench.build.CleanAndBuildWithMakefileAction"
       text="Clean"
-      description="Run make in the selected file's local Makefile directory"
+      description="Run make clean in the selected file's local Makefile directory"
+    />
+    <action
+      id="org.epics.workbench.ShowMakefileAction"
+      class="org.epics.workbench.build.ShowMakefileAction"
+      text="Show Makefile"
+      description="Open the Makefile in the selected file's directory"
+    />
+    <action
+      id="org.epics.workbench.ShowReleaseAction"
+      class="org.epics.workbench.build.ShowReleaseAction"
+      text="Show RELEASE"
+      description="Open configure/RELEASE for the selected EPICS project"
     />
     <action
       id="org.epics.workbench.BuildProjectAction"
@@ -327,6 +340,12 @@
       id="org.epics.workbench.CleanAndBuildProjectAction"
       class="org.epics.workbench.build.CleanAndBuildProjectAction"
       text="Clean Project"
+      description="Run make clean in the EPICS project root"
+    />
+    <action
+      id="org.epics.workbench.DistCleanProjectAction"
+      class="org.epics.workbench.build.DistCleanProjectAction"
+      text="Dist Clean Project"
       description="Run make distclean in the EPICS project root"
     />
     <action

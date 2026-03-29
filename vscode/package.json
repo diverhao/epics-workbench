@@ -1,5 +1,5 @@
 {
-    "version": "0.0.3",
+    "version": "0.0.4",
     "repository": {
         "url": "",
         "type": "git"
@@ -246,6 +246,14 @@
                 },
                 {
                     "when": "epicsWorkbench.activeCanBuildWithMakefile || epicsWorkbench.isEpicsProject",
+                    "command": "vscode-epics.showMakefile"
+                },
+                {
+                    "when": "epicsWorkbench.isEpicsProject",
+                    "command": "vscode-epics.showRelease"
+                },
+                {
+                    "when": "epicsWorkbench.activeCanBuildWithMakefile || epicsWorkbench.isEpicsProject",
                     "command": "vscode-epics.buildWithMakefile"
                 },
                 {
@@ -259,6 +267,10 @@
                 {
                     "when": "epicsWorkbench.isEpicsProject",
                     "command": "vscode-epics.cleanAndBuildProject"
+                },
+                {
+                    "when": "epicsWorkbench.isEpicsProject",
+                    "command": "vscode-epics.distCleanProject"
                 },
                 {
                     "when": "resourceExtname == .tdl || resourceExtname == .edl || resourceExtname == .bob || resourceExtname == .stp || resourceExtname == .plt",
@@ -416,14 +428,29 @@
                     "command": "vscode-epics.cleanAndBuildWithMakefile"
                 },
                 {
+                    "when": "(epicsWorkbench.activeCanBuildWithMakefile || epicsWorkbench.isEpicsProject) && webviewId != 'epicsWorkbench.runtimeWidget' && webviewId != 'epicsWorkbench.probeWidget' && webviewId != 'epicsWorkbench.pvlistWidget' && webviewId != 'epicsWorkbench.monitorWidget'",
+                    "group": "2_open@1",
+                    "command": "vscode-epics.showMakefile"
+                },
+                {
+                    "when": "epicsWorkbench.isEpicsProject && webviewId != 'epicsWorkbench.runtimeWidget' && webviewId != 'epicsWorkbench.probeWidget' && webviewId != 'epicsWorkbench.pvlistWidget' && webviewId != 'epicsWorkbench.monitorWidget'",
+                    "group": "2_open@2",
+                    "command": "vscode-epics.showRelease"
+                },
+                {
                     "when": "epicsWorkbench.isEpicsProject",
-                    "group": "1_project@1",
+                    "group": "3_project@1",
                     "command": "vscode-epics.buildProject"
                 },
                 {
                     "when": "epicsWorkbench.isEpicsProject",
-                    "group": "1_project@2",
+                    "group": "3_project@2",
                     "command": "vscode-epics.cleanAndBuildProject"
+                },
+                {
+                    "when": "epicsWorkbench.isEpicsProject",
+                    "group": "3_project@3",
+                    "command": "vscode-epics.distCleanProject"
                 }
             ]
         },
@@ -596,6 +623,10 @@
             }
         ],
         "configurationDefaults": {
+            "files.associations": {
+                "**/configure/RELEASE": "makefile",
+                "**/configure/RELEASE.local": "makefile"
+            },
             "[startup]": {
                 "editor.wordBasedSuggestions": "off"
             },
@@ -745,6 +776,16 @@
                 "category": "EPICS"
             },
             {
+                "title": "Show Makefile",
+                "command": "vscode-epics.showMakefile",
+                "category": "EPICS"
+            },
+            {
+                "title": "Show RELEASE",
+                "command": "vscode-epics.showRelease",
+                "category": "EPICS"
+            },
+            {
                 "title": "Build",
                 "command": "vscode-epics.buildWithMakefile",
                 "category": "EPICS"
@@ -762,6 +803,11 @@
             {
                 "title": "Clean Project",
                 "command": "vscode-epics.cleanAndBuildProject",
+                "category": "EPICS"
+            },
+            {
+                "title": "Dist Clean Project",
+                "command": "vscode-epics.distCleanProject",
                 "category": "EPICS"
             },
             {
@@ -972,6 +1018,7 @@
         "onCommand:vscode-epics.cleanAndBuildWithMakefile",
         "onCommand:vscode-epics.buildProject",
         "onCommand:vscode-epics.cleanAndBuildProject",
+        "onCommand:vscode-epics.distCleanProject",
         "onCommand:vscode-epics.exportDatabaseToExcel",
         "onCommand:vscode-epics.openInTdm",
         "onCommand:vscode-epics.openInProbe",
