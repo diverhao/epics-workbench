@@ -1613,6 +1613,10 @@ class EpicsRuntimeMonitorController {
       return [trackedTerminal];
     }
 
+    if (!canInferRunningStartupIocByWorkingDirectory(normalizedStartupDocumentPath)) {
+      return [];
+    }
+
     const workingDirectory = normalizeFsPath(path.dirname(normalizedStartupDocumentPath));
     return (vscode.window.terminals || []).filter((terminal) =>
       this.getTerminalActiveExecutionCount(terminal) > 0 &&
@@ -7379,6 +7383,50 @@ function findProjectStcmdLikeFilePaths(projectRootPath) {
       getIocBootRelativeDisplayPath(projectRootPath, right),
     ),
   );
+}
+
+function findSiblingStcmdLikeFilePaths(directoryPath) {
+  const normalizedDirectoryPath = normalizeFsPath(directoryPath);
+  if (!normalizedDirectoryPath || !fs.existsSync(normalizedDirectoryPath)) {
+    return [];
+  }
+
+  let directoryEntries = [];
+  try {
+    directoryEntries = fs.readdirSync(normalizedDirectoryPath, { withFileTypes: true });
+  } catch (error) {
+    return [];
+  }
+
+  const startupDocumentPaths = [];
+  for (const directoryEntry of directoryEntries) {
+    if (!directoryEntry?.isFile?.()) {
+      continue;
+    }
+
+    const entryPath = path.join(normalizedDirectoryPath, directoryEntry.name);
+    if (isStcmdLikeFilePath(entryPath)) {
+      startupDocumentPaths.push(normalizeFsPath(entryPath));
+    }
+  }
+
+  return startupDocumentPaths.sort((left, right) => left.localeCompare(right));
+}
+
+function canInferRunningStartupIocByWorkingDirectory(startupDocumentPath) {
+  const normalizedStartupDocumentPath = normalizeFsPath(startupDocumentPath);
+  if (!normalizedStartupDocumentPath) {
+    return false;
+  }
+
+  const siblingStartupPaths = findSiblingStcmdLikeFilePaths(
+    path.dirname(normalizedStartupDocumentPath),
+  );
+  if (siblingStartupPaths.length !== 1) {
+    return false;
+  }
+
+  return siblingStartupPaths[0] === normalizedStartupDocumentPath;
 }
 
 function getIocBootStartupDocumentPath(document) {
