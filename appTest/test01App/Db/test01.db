@@ -7,6 +7,7 @@
 # | val1    |                    | calc | val2 | A>1000?0:A+1 |
 # | val2    |                    | ai   | val3 | NA           |
 # | $(SYS)3 |                    | ai   | ""   | NA           |
+# | $(SYS)4 |                    | ai   | ""   | NA           |
 # EPICS TOC END
 
 record(calc, "val1") {

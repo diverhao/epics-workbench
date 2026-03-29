@@ -106,6 +106,23 @@ internal val DBD_KEYWORDS = setOf(
   "extra",
 )
 
+internal val MAKEFILE_KEYWORDS = setOf(
+  "include",
+  "ifdef",
+  "ifndef",
+  "ifeq",
+  "ifneq",
+  "else",
+  "endif",
+  "define",
+  "endef",
+  "export",
+  "unexport",
+  "override",
+  "private",
+  "vpath",
+)
+
 private fun syntaxHighlights(tokenType: IElementType?): Array<TextAttributesKey> = when (tokenType) {
   TokenType.BAD_CHARACTER -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.BAD_CHARACTER)
   EpicsTokenTypes.COMMENT -> SyntaxHighlighterBase.pack(EpicsHighlightingKeys.COMMENT)
@@ -190,5 +207,16 @@ class EpicsProbeSyntaxHighlighterFactory : SyntaxHighlighterFactory() {
         return syntaxHighlights(tokenType)
       }
     }
+  }
+}
+
+class EpicsMakefileSyntaxHighlighterFactory : SyntaxHighlighterFactory() {
+  override fun getSyntaxHighlighter(project: Project?, virtualFile: VirtualFile?): SyntaxHighlighter {
+    return EpicsSimpleSyntaxHighlighter(
+      EpicsLexingProfile(
+        keywords = MAKEFILE_KEYWORDS,
+        extraIdentifierChars = setOf('-', '.'),
+      ),
+    )
   }
 }

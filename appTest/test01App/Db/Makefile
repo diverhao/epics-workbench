@@ -4,8 +4,8 @@
 
 TOP = ../..
 include $(TOP)/configure/CONFIG
-DB += test01.db
 DB += test02.db
+DB += test01.db
 
 
 include $(TOP)/configure/RULES

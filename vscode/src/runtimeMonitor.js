@@ -2351,28 +2351,6 @@ class EpicsRuntimeMonitorController {
   }
 
   async showProjectStartupIocPicker(resourceUri) {
-    const resourceFsPath = normalizeFsPath(
-      getCommandResourceFsPath(resourceUri) ||
-      vscode.window.activeTextEditor?.document?.uri?.fsPath,
-    );
-    if (isStcmdLikeFilePath(resourceFsPath)) {
-      const isRunning =
-        this.getCandidateRunningStartupIocTerminals(resourceFsPath)
-          .filter((terminal) => vscode.window.terminals.includes(terminal))
-          .length > 0;
-      if (isRunning) {
-        await this.stopStartupIocForDocumentPath(resourceFsPath, {
-          promptIfAmbiguous: false,
-        });
-      } else {
-        await this.startStartupIocForDocumentPath(resourceFsPath, {
-          showTerminal: true,
-          notify: true,
-        });
-      }
-      return;
-    }
-
     const resolvedProjectStartupPaths =
       await this.resolveProjectStartupDocumentPaths(resourceUri);
     if (!resolvedProjectStartupPaths) {
@@ -3974,6 +3952,13 @@ class EpicsRuntimeMonitorController {
       quickPick.activeItems = [quickPick.items[0]];
     }
     quickPick.onDidAccept(() => {});
+    quickPick.onDidChangeSelection((items) => {
+      const selectedItem = items?.[0];
+      if (!selectedItem?.recordName) {
+        return;
+      }
+      this.runIocRuntimeQuickPickApplySelection?.(quickPick, selectedItem);
+    });
     quickPick.onDidHide(() => {
       if (this.runIocRuntimeQuickPick === quickPick) {
         this.runIocRuntimeQuickPick = undefined;

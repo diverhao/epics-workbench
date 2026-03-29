@@ -115,3 +115,15 @@ class EpicsProbeFileType private constructor() : EpicsFileType(
     val INSTANCE = EpicsProbeFileType()
   }
 }
+
+class EpicsMakefileFileType private constructor() : EpicsFileType(
+  EpicsMakefileLanguage.INSTANCE,
+  "EPICS Makefile",
+  "EPICS Makefile-style configure files",
+  "makefile",
+) {
+  companion object {
+    @JvmField
+    val INSTANCE = EpicsMakefileFileType()
+  }
+}

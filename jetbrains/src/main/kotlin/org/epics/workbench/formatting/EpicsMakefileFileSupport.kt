@@ -24,5 +24,9 @@ internal fun isMakefileStyleFile(file: VirtualFile?): Boolean {
   if (parent.name != "configure") {
     return false
   }
-  return target.name == "RELEASE" || target.name == "RELEASE.local"
+  return isEpicsReleaseFileName(target.name)
+}
+
+private fun isEpicsReleaseFileName(fileName: String): Boolean {
+  return fileName == "RELEASE" || fileName.startsWith("RELEASE.")
 }

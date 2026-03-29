@@ -8,6 +8,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.actionSystem.ex.ActionUtil
 import com.intellij.openapi.components.service
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.project.DumbAware
 import org.epics.workbench.runtime.EpicsIocRuntimeService
 
@@ -73,7 +74,13 @@ class EpicsDatabaseFilePopupGroup : AbstractEpicsPopupGroup(
   "org.epics.workbench.CopyAllRecordNamesAction",
   "org.epics.workbench.ExpandAllRecordsAction",
   "org.epics.workbench.CollapseAllRecordsAction",
-)
+) {
+  override fun update(event: AnActionEvent) {
+    val file = event.getData(com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE)
+      ?: event.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE)?.virtualFile
+    event.presentation.isEnabledAndVisible = event.project != null && isDatabaseFile(file)
+  }
+}
 
 class EpicsIocRuntimePopupGroup : AbstractEpicsPopupGroup(
   "org.epics.workbench.ShowRunningTerminalAction",
@@ -95,4 +102,8 @@ class EpicsIocRuntimePopupGroup : AbstractEpicsPopupGroup(
     event.presentation.isEnabledAndVisible =
       project != null && project.service<EpicsIocRuntimeService>().listRunningIocStartups().isNotEmpty()
   }
+}
+
+private fun isDatabaseFile(file: VirtualFile?): Boolean {
+  return file?.extension?.lowercase() in setOf("db", "vdb", "template")
 }

@@ -54,9 +54,6 @@ class ManageProjectIocAction : DumbAwareAction() {
     val project = event.project ?: return
     val file = event.getData(CommonDataKeys.VIRTUAL_FILE)
       ?: event.getData(CommonDataKeys.PSI_FILE)?.virtualFile
-    if (toggleProjectIocForContextFile(project, file)) {
-      return
-    }
     showProjectIocChooser(project, file)
   }
 }
@@ -130,28 +127,6 @@ internal fun showProjectIocChooser(
   }
 
   ProjectIocChooserDialog(project, startupItems, contextFile).show()
-}
-
-private fun toggleProjectIocForContextFile(
-  project: com.intellij.openapi.project.Project,
-  contextFile: VirtualFile?,
-): Boolean {
-  if (!EpicsIocRuntimeService.isIocBootStartupFile(contextFile)) {
-    return false
-  }
-
-  val startupFile = contextFile ?: return false
-  val runtimeService = project.service<EpicsIocRuntimeService>()
-  if (runtimeService.isRunning(startupFile)) {
-    runtimeService.stopIoc(startupFile)
-    return true
-  }
-
-  FileDocumentManager.getInstance().getDocument(startupFile)?.let(FileDocumentManager.getInstance()::saveDocument)
-  runtimeService.startIoc(startupFile).exceptionOrNull()?.let { error ->
-    Messages.showErrorDialog(project, error.message ?: "Failed to start ${startupFile.name}.", TITLE)
-  }
-  return true
 }
 
 private data class ProjectStartupMenuItem(

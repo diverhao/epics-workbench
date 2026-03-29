@@ -98,6 +98,10 @@
       language="EPICS Probe"
       implementationClass="org.epics.workbench.highlighting.EpicsProbeSyntaxHighlighterFactory"
     />
+    <lang.syntaxHighlighterFactory
+      language="EPICS Makefile"
+      implementationClass="org.epics.workbench.highlighting.EpicsMakefileSyntaxHighlighterFactory"
+    />
     <notificationGroup id="EPICS Workbench Notifications" displayType="BALLOON" isLogByDefault="true" />
     <spellchecker.support
       language="EPICS Database"

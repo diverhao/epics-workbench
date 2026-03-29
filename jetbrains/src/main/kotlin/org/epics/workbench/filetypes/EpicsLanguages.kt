@@ -57,3 +57,10 @@ class EpicsProbeLanguage private constructor() : Language("EPICS Probe") {
     val INSTANCE = EpicsProbeLanguage()
   }
 }
+
+class EpicsMakefileLanguage private constructor() : Language("EPICS Makefile") {
+  companion object {
+    @JvmField
+    val INSTANCE = EpicsMakefileLanguage()
+  }
+}

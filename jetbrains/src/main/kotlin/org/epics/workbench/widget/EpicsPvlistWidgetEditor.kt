@@ -15,7 +15,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
-import com.intellij.ui.ColorUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -24,6 +23,11 @@ import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
 import org.epics.workbench.pvlist.EpicsPvlistWidgetSupport
 import org.epics.workbench.runtime.EpicsMonitorRuntimeService
 import org.epics.workbench.runtime.EpicsPvlistWidgetRowViewState
+import org.epics.workbench.ui.EpicsWidgetPalette
+import org.epics.workbench.ui.applyEpicsWidgetButtonStyle
+import org.epics.workbench.ui.applyEpicsWidgetTextAreaStyle
+import org.epics.workbench.ui.applyEpicsWidgetTextFieldStyle
+import org.epics.workbench.ui.buildEpicsWidgetPalette
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
@@ -108,12 +112,14 @@ private class EpicsPvlistWidgetFileEditor(
     toolTipText = "Case-insensitive record-name filter. Spaces mean AND."
     maximumSize = Dimension(320, preferredSize.height)
   }
+  private val channelTableScrollPane = JBScrollPane(channelTable)
   private val overlayTitleLabel = JLabel("Configure Channels")
   private val addChannelsArea = PromptTextArea("One channel per line", 16, 28)
   private val addChannelsButton = JButton("OK")
   private val refreshTimer = Timer(1000) { refreshViewState() }
   private val component = JPanel(BorderLayout(0, 12))
   private val macrosFieldsContainer = JPanel()
+  private var palette = buildEpicsWidgetPalette(Color.WHITE, Color.BLACK)
 
   init {
     runtimeService.initialize()
@@ -226,16 +232,21 @@ private class EpicsPvlistWidgetFileEditor(
       add(messageLabel)
     }
 
-    channelTable.setShowGrid(false)
+    channelTable.setShowGrid(true)
     channelTable.fillsViewportHeight = true
     channelTable.rowHeight = (channelTable.font.size * 1.55).toInt().coerceAtLeast(20)
     channelTable.rowMargin = 0
-    channelTable.intercellSpacing = Dimension(0, 0)
+    channelTable.intercellSpacing = Dimension(1, 1)
     channelTable.columnModel.getColumn(0).preferredWidth = 280
     channelTable.columnModel.getColumn(0).cellRenderer = PvlistChannelCellRenderer()
     channelTable.columnModel.getColumn(1).preferredWidth = 420
     channelTable.columnModel.getColumn(1).cellRenderer = PvlistValueCellRenderer()
     channelTable.columnModel.getColumn(1).cellEditor = channelEditor
+    channelTable.tableHeader.reorderingAllowed = false
+    channelTable.tableHeader.resizingAllowed = true
+    for (columnIndex in 0 until channelTable.columnModel.columnCount) {
+      channelTable.columnModel.getColumn(columnIndex).headerRenderer = PvlistHeaderRenderer()
+    }
     channelTable.putClientProperty("terminateEditOnFocusLost", false)
     channelTable.addMouseMotionListener(
       object : MouseMotionAdapter() {
@@ -318,9 +329,10 @@ private class EpicsPvlistWidgetFileEditor(
       add(Box.createVerticalStrut(6))
       add(channelFilterField)
       add(Box.createVerticalStrut(8))
-      add(JBScrollPane(channelTable).apply {
-        border = BorderFactory.createEmptyBorder()
+      add(channelTableScrollPane.apply {
+        border = BorderFactory.createLineBorder(palette.borderColor)
         alignmentX = Component.LEFT_ALIGNMENT
+        viewport.isOpaque = true
       })
     }
 
@@ -356,24 +368,32 @@ private class EpicsPvlistWidgetFileEditor(
     val background = scheme.defaultBackground
     val foreground = scheme.defaultForeground
     val font = buildMonospaceEditorFont(scheme.editorFontName, scheme.editorFontSize)
+    palette = buildEpicsWidgetPalette(background, foreground)
 
     component.background = background
     component.foreground = foreground
+    component.isOpaque = true
 
     listOf(
       sourceLabel,
       messageLabel,
       addChannelsArea,
       channelTable,
-      channelFilterField,
     ).forEach { component ->
       component.background = background
       component.foreground = foreground
       component.font = font
     }
 
+    sourceLabel.foreground = palette.mutedForeground
+    messageLabel.foreground = palette.mutedForeground
+
+    applyEpicsWidgetTextFieldStyle(channelFilterField, palette)
+    channelFilterField.font = font
+
     listOf(configureChannelsButton, addChannelsButton).forEach { button ->
       button.font = font
+      applyEpicsWidgetButtonStyle(button, palette)
     }
 
     macrosFieldsContainer.background = background
@@ -390,17 +410,23 @@ private class EpicsPvlistWidgetFileEditor(
       label.font = font.deriveFont(Font.BOLD, font.size2D)
     }
 
-    listOf(addChannelsArea).forEach { area ->
-      area.isOpaque = true
-      area.background = ColorUtil.mix(background, foreground, 0.06)
-      area.border = BorderFactory.createCompoundBorder(
-        BorderFactory.createLineBorder(ColorUtil.mix(background, foreground, 0.18)),
-        BorderFactory.createEmptyBorder(4, 4, 4, 4),
-      )
-      area.caretColor = foreground
-      area.selectionColor = Color(foreground.red, foreground.green, foreground.blue, 48)
-      area.selectedTextColor = foreground
-    }
+    applyEpicsWidgetTextAreaStyle(addChannelsArea, palette)
+    addChannelsArea.font = font
+
+    channelTable.background = background
+    channelTable.foreground = foreground
+    channelTable.selectionBackground = palette.selectionBackground
+    channelTable.selectionForeground = palette.selectionForeground
+    channelTable.gridColor = palette.separatorColor
+    channelTable.tableHeader.background = palette.headerBackground
+    channelTable.tableHeader.foreground = foreground
+    channelTable.tableHeader.font = font.deriveFont(Font.BOLD, font.size2D)
+    channelTable.tableHeader.border = BorderFactory.createMatteBorder(0, 0, 1, 0, palette.borderColor)
+    channelTableScrollPane.background = background
+    channelTableScrollPane.viewport.background = background
+    channelTableScrollPane.border = BorderFactory.createLineBorder(palette.borderColor)
+    channelEditor.textField.font = font
+    channelEditor.applyStyle()
   }
 
   private fun rebuildMacroPanel() {
@@ -411,17 +437,14 @@ private class EpicsPvlistWidgetFileEditor(
     if (file.model.macroNames.isEmpty()) {
       macrosFieldsContainer.add(JLabel("No macros detected.").apply {
         this.font = channelTable.font
-        foreground = channelTable.foreground
+        foreground = palette.mutedForeground
       })
     } else {
       file.model.macroNames.forEach { macroName ->
         val field = JTextField(file.model.macroValues[macroName].orEmpty(), 20).apply {
           maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
           this.font = font
-          foreground = channelTable.foreground
-          caretColor = channelTable.foreground
-          isOpaque = false
-          border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
+          applyEpicsWidgetTextFieldStyle(this, palette)
           addActionListener {
             file.model.macroValues[macroName] = text
             refreshViewState()
@@ -511,12 +534,21 @@ private class EpicsPvlistWidgetFileEditor(
         column,
       )
       val channelName = tableModel.getRow(table.convertRowIndexToModel(row)).channelName.trim()
-      border = BorderFactory.createEmptyBorder(1, 6, 1, 6)
+      border = BorderFactory.createEmptyBorder(2, 8, 2, 8)
+      background =
+        if (isSelected) {
+          palette.selectionBackground
+        } else if (row % 2 == 0) {
+          palette.background
+        } else {
+          palette.panelBackground
+        }
+      isOpaque = true
       foreground =
         if (isSelected) {
-          table.selectionForeground
+          palette.selectionForeground
         } else if (channelName.isNotBlank()) {
-          ColorUtil.mix(table.foreground, Color(0, 102, 204), 0.55)
+          palette.linkForeground
         } else {
           table.foreground
         }
@@ -542,19 +574,62 @@ private class EpicsPvlistWidgetFileEditor(
         row,
         column,
       )
-      border = BorderFactory.createEmptyBorder(1, 6, 1, 6)
+      border = BorderFactory.createEmptyBorder(2, 8, 2, 8)
+      background =
+        if (isSelected) {
+          palette.selectionBackground
+        } else if (row % 2 == 0) {
+          palette.background
+        } else {
+          palette.panelBackground
+        }
+      foreground = if (isSelected) palette.selectionForeground else palette.foreground
+      isOpaque = true
+      return component
+    }
+  }
+
+  private inner class PvlistHeaderRenderer : DefaultTableCellRenderer() {
+    override fun getTableCellRendererComponent(
+      table: JTable,
+      value: Any?,
+      isSelected: Boolean,
+      hasFocus: Boolean,
+      row: Int,
+      column: Int,
+    ): Component {
+      val component = super.getTableCellRendererComponent(
+        table,
+        value,
+        false,
+        false,
+        row,
+        column,
+      )
+      background = palette.headerBackground
+      foreground = palette.foreground
+      border = BorderFactory.createEmptyBorder(4, 10, 4, 10)
+      font = table.font.deriveFont(Font.BOLD, table.font.size2D)
+      isOpaque = true
       return component
     }
   }
 
   private inner class PvlistValueCellEditor : AbstractCellEditor(), TableCellEditor {
-    private val textField = JTextField()
+    val textField = JTextField()
     private var editingRowKey: String? = null
 
     init {
-      textField.font = channelTable.font
-      textField.border = BorderFactory.createEmptyBorder(0, 6, 0, 6)
       textField.addActionListener { stopCellEditing() }
+    }
+
+    fun applyStyle() {
+      textField.font = channelTable.font
+      applyEpicsWidgetTextFieldStyle(textField, palette)
+      textField.border = BorderFactory.createCompoundBorder(
+        BorderFactory.createLineBorder(palette.borderColor),
+        BorderFactory.createEmptyBorder(2, 8, 2, 8),
+      )
     }
 
     override fun getTableCellEditorComponent(

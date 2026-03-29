@@ -7,7 +7,12 @@ import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
+import org.epics.workbench.ui.EpicsWidgetPalette
+import org.epics.workbench.ui.applyEpicsWidgetButtonStyle
+import org.epics.workbench.ui.applyEpicsWidgetTextFieldStyle
+import org.epics.workbench.ui.buildEpicsWidgetPalette
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Component
 import java.awt.Cursor
 import java.awt.Dimension
@@ -94,6 +99,7 @@ internal class EpicsProbeViewPanel(
   private var editorForeground = foreground
   private var plainFont = font
   private var boldFont = font.deriveFont(Font.BOLD, font.size2D)
+  private var palette = buildEpicsWidgetPalette(Color.WHITE, Color.BLACK)
 
   init {
     border = BorderFactory.createEmptyBorder(4, 4, 4, 4)
@@ -286,8 +292,8 @@ internal class EpicsProbeViewPanel(
     ) + 1
     fieldRowsPanel.add(createFieldHeaderRow(fieldColumnWidth))
 
-    filteredFields.forEach { field ->
-      fieldRowsPanel.add(createFieldRow(field, fieldColumnWidth))
+    filteredFields.forEachIndexed { index, field ->
+      fieldRowsPanel.add(createFieldRow(field, fieldColumnWidth, index))
     }
     fieldRowsPanel.revalidate()
     fieldRowsPanel.repaint()
@@ -319,10 +325,8 @@ internal class EpicsProbeViewPanel(
   }
 
   private fun createFieldHeaderRow(fieldColumnWidth: Int): JPanel {
-    return JPanel(BorderLayout(FIELD_ROW_GAP, 0)).apply {
+    return createFieldRowPanel(palette.headerBackground).apply {
       alignmentX = Component.LEFT_ALIGNMENT
-      isOpaque = false
-      border = BorderFactory.createEmptyBorder(1, 0, 1, 0)
       add(
         createFieldTextLabel("Field", bold = true).apply {
           applyFieldNameColumnWidth(this, fieldColumnWidth)
@@ -333,7 +337,11 @@ internal class EpicsProbeViewPanel(
     }
   }
 
-  private fun createFieldRow(field: EpicsProbeFieldViewState, fieldColumnWidth: Int): JPanel {
+  private fun createFieldRow(
+    field: EpicsProbeFieldViewState,
+    fieldColumnWidth: Int,
+    rowIndex: Int,
+  ): JPanel {
     val fieldNameLabel =
       createFieldTextLabel(field.fieldName).apply {
         applyFieldNameColumnWidth(this, fieldColumnWidth)
@@ -375,12 +383,23 @@ internal class EpicsProbeViewPanel(
           },
         )
       }
-    return JPanel(BorderLayout(FIELD_ROW_GAP, 0)).apply {
+    return createFieldRowPanel(
+      if (rowIndex % 2 == 0) palette.background else palette.panelBackground,
+    ).apply {
       alignmentX = Component.LEFT_ALIGNMENT
-      isOpaque = false
-      border = BorderFactory.createEmptyBorder(1, 0, 1, 0)
       add(fieldNameLabel, BorderLayout.WEST)
       add(valueLabel, BorderLayout.CENTER)
+    }
+  }
+
+  private fun createFieldRowPanel(backgroundColor: Color): JPanel {
+    return JPanel(BorderLayout(FIELD_ROW_GAP, 0)).apply {
+      isOpaque = true
+      background = backgroundColor
+      border = BorderFactory.createCompoundBorder(
+        BorderFactory.createMatteBorder(0, 0, 1, 0, palette.separatorColor),
+        BorderFactory.createEmptyBorder(3, 8, 3, 8),
+      )
     }
   }
 
@@ -429,6 +448,7 @@ internal class EpicsProbeViewPanel(
     editorForeground = schemeForeground
     plainFont = schemeFont
     boldFont = plainFont.deriveFont(Font.BOLD, plainFont.size2D)
+    palette = buildEpicsWidgetPalette(editorBackground, editorForeground)
 
     this.background = editorBackground
     this.foreground = editorForeground
@@ -457,16 +477,20 @@ internal class EpicsProbeViewPanel(
     messageLabel.font = plainFont
 
     statusLabel.background = editorBackground
-    statusLabel.foreground = editorForeground
+    statusLabel.foreground = palette.mutedForeground
     statusLabel.font = plainFont
 
     listOf(startButton, stopButton, processButton).forEach { button ->
       button.font = plainFont
+      applyEpicsWidgetButtonStyle(button, palette)
     }
 
     fieldsTitleLabel.background = editorBackground
     fieldsTitleLabel.foreground = editorForeground
     fieldsTitleLabel.font = boldFont
+
+    applyEpicsWidgetTextFieldStyle(fieldFilterField, palette)
+    fieldFilterField.font = plainFont
 
     listOf(valueRowLabel, recordTypeRowLabel, lastUpdateRowLabel, accessRowLabel).forEach { label ->
       applyRowLabelStyle(label, bold = false)
@@ -475,6 +499,7 @@ internal class EpicsProbeViewPanel(
     fieldScrollPane.background = editorBackground
     fieldScrollPane.foreground = editorForeground
     fieldScrollPane.viewport.background = editorBackground
+    fieldScrollPane.border = BorderFactory.createLineBorder(palette.borderColor)
 
     refreshFieldLines(currentState?.fields.orEmpty())
 

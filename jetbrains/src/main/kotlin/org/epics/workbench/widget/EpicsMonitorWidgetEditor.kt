@@ -58,9 +58,14 @@ import org.epics.pva.data.nt.PVATimeStamp
 import org.epics.workbench.runtime.EpicsClientLibraries
 import org.epics.workbench.runtime.EpicsRuntimeProjectConfigurationService
 import org.epics.workbench.runtime.MonitorProtocol
+import org.epics.workbench.ui.EpicsWidgetPalette
+import org.epics.workbench.ui.applyEpicsWidgetButtonStyle
+import org.epics.workbench.ui.applyEpicsWidgetTextFieldStyle
+import org.epics.workbench.ui.buildEpicsWidgetPalette
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Component
+import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
@@ -149,6 +154,7 @@ private class EpicsMonitorWidgetFileEditor(
   private val historyLines = ArrayDeque<String>()
   private val channelRows = mutableListOf<MonitorChannelRow>()
   private val sessionsByRowId = linkedMapOf<String, MonitorChannelSession>()
+  private var palette = buildEpicsWidgetPalette(Color.WHITE, Color.BLACK)
 
   private var monitoringActive = false
   private var bufferSize = DEFAULT_BUFFER_SIZE
@@ -458,30 +464,33 @@ private class EpicsMonitorWidgetFileEditor(
     val background = scheme.defaultBackground
     val foreground = scheme.defaultForeground
     val editorFont = scheme.getFont(EditorFontType.PLAIN)
+    palette = buildEpicsWidgetPalette(background, foreground)
 
     component.background = background
     component.foreground = foreground
     cardPanel.background = background
     cardPanel.foreground = foreground
-    historyArea.background = background
+    historyArea.background = palette.panelBackground
     historyArea.foreground = foreground
     historyArea.font = editorFont
     historyScrollPane.background = background
-    historyScrollPane.viewport.background = background
+    historyScrollPane.viewport.background = palette.panelBackground
+    historyScrollPane.border = BorderFactory.createLineBorder(palette.borderColor)
     channelsPanel.background = background
     channelsPanel.foreground = foreground
-    bufferHintLabel.foreground = foreground
+    bufferHintLabel.foreground = palette.mutedForeground
     bufferHintLabel.font = editorFont
     bufferSizeField.font = editorFont
+    applyEpicsWidgetTextFieldStyle(bufferSizeField, palette)
     channelRows.forEach { row ->
       row.panel.background = background
       row.panel.foreground = foreground
       row.textField.font = editorFont
-      row.textField.foreground = foreground
-      row.textField.background = background
+      applyEpicsWidgetTextFieldStyle(row.textField, palette)
     }
     listOf(addChannelButton, configureButton, exportButton, closeConfigButton).forEach { button ->
       button.font = editorFont
+      applyEpicsWidgetButtonStyle(button, palette)
     }
   }
 
