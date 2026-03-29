@@ -70,6 +70,7 @@ import org.epics.workbench.pvlist.EpicsPvlistWidgetSupport
 import org.epics.workbench.probe.EpicsProbeDocumentAnalysis
 import org.epics.workbench.probe.EpicsProbeSupport
 import org.epics.workbench.toc.EpicsDatabaseToc
+import org.epics.workbench.widget.openEpicsWidget
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -311,6 +312,7 @@ class EpicsMonitorRuntimeService(
     val panel = EpicsProbeViewPanel(
       stateProvider = { getProbeViewState(editor) },
       putHandler = { key -> requestPutProbeValue(editor, key) },
+      openLinkedProbeHandler = { recordName -> openEpicsWidget(project, recordName) },
       isMonitoringActive = { isMonitoringActive() },
       startHandler = { startMonitoring() },
       stopHandler = { stopMonitoring() },

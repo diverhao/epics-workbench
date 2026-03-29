@@ -6,6 +6,7 @@ import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextField
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Cursor
@@ -21,10 +22,13 @@ import javax.swing.JEditorPane
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.Timer
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 internal class EpicsProbeViewPanel(
   private val stateProvider: () -> EpicsProbeViewState?,
   private val putHandler: (String) -> Unit,
+  private val openLinkedProbeHandler: (String) -> Unit,
   private val isMonitoringActive: () -> Boolean,
   private val startHandler: () -> Unit,
   private val stopHandler: () -> Unit,
@@ -34,7 +38,7 @@ internal class EpicsProbeViewPanel(
   private val cardPanel = JPanel(BorderLayout())
   private val emptyPanel = createEmptyPanel()
   private val contentPanel = JPanel(BorderLayout())
-  private val bodyPanel = JPanel(BorderLayout(0, 12))
+  private val bodyPanel = JPanel(BorderLayout(0, 8))
   private val toolbarPanel = JPanel(BorderLayout())
   private val metaPanel = JPanel().apply {
     layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -61,14 +65,26 @@ internal class EpicsProbeViewPanel(
   private val lastUpdateRowLabel = JLabel()
   private val accessRowLabel = JLabel()
   private val fieldsTitleLabel = JLabel("Fields")
-  private val fieldHeaderLabel = JLabel()
+  private val fieldFilterField = JBTextField().apply {
+    emptyText.text = "Filter fields"
+    toolTipText = "Case-insensitive field-name filter. Text after the first space is ignored."
+    maximumSize = Dimension(220, preferredSize.height)
+  }
+  private val fieldControlsPanel = JPanel().apply {
+    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+    isOpaque = false
+    fieldsTitleLabel.alignmentX = Component.LEFT_ALIGNMENT
+    fieldFilterField.alignmentX = Component.LEFT_ALIGNMENT
+    add(fieldsTitleLabel)
+    add(fieldFilterField)
+  }
   private val fieldRowsPanel = JPanel().apply {
     layout = BoxLayout(this, BoxLayout.Y_AXIS)
     alignmentX = Component.LEFT_ALIGNMENT
   }
-  private val fieldListPanel = JPanel(BorderLayout(0, 8)).apply {
+  private val fieldListPanel = JPanel(BorderLayout(0, 4)).apply {
     isOpaque = false
-    add(fieldsTitleLabel, BorderLayout.NORTH)
+    add(fieldControlsPanel, BorderLayout.NORTH)
     add(fieldRowsPanel, BorderLayout.CENTER)
   }
   private val fieldScrollPane = JBScrollPane(fieldListPanel)
@@ -87,7 +103,7 @@ internal class EpicsProbeViewPanel(
     buttonPanel.add(processButton)
     buttonPanel.add(statusLabel)
     toolbarPanel.isOpaque = false
-    toolbarPanel.border = BorderFactory.createEmptyBorder(0, 0, 12, 0)
+    toolbarPanel.border = BorderFactory.createEmptyBorder(0, 0, 8, 0)
     toolbarPanel.add(buttonPanel, BorderLayout.WEST)
 
     startButton.addActionListener { startHandler() }
@@ -96,6 +112,21 @@ internal class EpicsProbeViewPanel(
 
     startButton.isVisible = showStartStopControls
     stopButton.isVisible = showStartStopControls
+    fieldFilterField.document.addDocumentListener(
+      object : DocumentListener {
+        override fun insertUpdate(event: DocumentEvent?) {
+          refreshFieldLines(currentState?.fields.orEmpty())
+        }
+
+        override fun removeUpdate(event: DocumentEvent?) {
+          refreshFieldLines(currentState?.fields.orEmpty())
+        }
+
+        override fun changedUpdate(event: DocumentEvent?) {
+          refreshFieldLines(currentState?.fields.orEmpty())
+        }
+      },
+    )
 
     metaPanel.isOpaque = false
     listOf(valueRowLabel, recordTypeRowLabel, lastUpdateRowLabel, accessRowLabel).forEach { label ->
@@ -167,7 +198,7 @@ internal class EpicsProbeViewPanel(
     startButton.isEnabled = !active
     stopButton.isEnabled = active
     processButton.isEnabled = active && state.recordName.isNotBlank()
-    statusLabel.text = if (active) "Running" else "Stopped"
+    statusLabel.text = if (state.isConnected) "Connected" else "Not connected"
     showContentPanel()
   }
 
@@ -230,10 +261,16 @@ internal class EpicsProbeViewPanel(
 
   private fun refreshFieldLines(fields: List<EpicsProbeFieldViewState>) {
     fieldRowsPanel.removeAll()
-    if (fields.isEmpty()) {
-      fieldHeaderLabel.isVisible = false
+    val filteredFields = filterFields(fields)
+    if (filteredFields.isEmpty()) {
       fieldRowsPanel.add(
-        JLabel(currentState?.message ?: "No fields loaded.").apply {
+        JLabel(
+          if (fields.isNotEmpty() && normalizedFieldFilterTerm().isNotEmpty()) {
+            "No fields match filter."
+          } else {
+            currentState?.message ?: "No fields loaded."
+          },
+        ).apply {
           alignmentX = Component.LEFT_ALIGNMENT
           applyRowLabelStyle(this, bold = false)
         },
@@ -245,44 +282,122 @@ internal class EpicsProbeViewPanel(
 
     val fieldColumnWidth = maxOf(
       "Field".length,
-      fields.maxOfOrNull { it.fieldName.length } ?: 0,
-    ) + 2
-    fieldHeaderLabel.text = padFieldLabel("Field", fieldColumnWidth) + "Value"
-    fieldHeaderLabel.isVisible = true
-    applyRowLabelStyle(fieldHeaderLabel, bold = true)
-    fieldRowsPanel.add(fieldHeaderLabel)
+      filteredFields.maxOfOrNull { it.fieldName.length } ?: 0,
+    ) + 1
+    fieldRowsPanel.add(createFieldHeaderRow(fieldColumnWidth))
 
-    fields.forEach { field ->
-      val lineLabel =
-        JLabel(padFieldLabel(field.fieldName, fieldColumnWidth) + field.value).apply {
-          alignmentX = Component.LEFT_ALIGNMENT
-          applyRowLabelStyle(this, bold = false)
-          cursor =
-            if (field.canPut) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) else Cursor.getDefaultCursor()
-          toolTipText = if (field.canPut) "Double-click to change the value" else null
-          addMouseListener(
-            object : MouseAdapter() {
-              override fun mouseClicked(event: MouseEvent) {
-                if (event.clickCount != 2 || event.button != MouseEvent.BUTTON1 || !field.canPut) {
-                  return
-                }
-                putHandler(field.key)
-              }
-            },
-          )
-        }
-      fieldRowsPanel.add(lineLabel)
+    filteredFields.forEach { field ->
+      fieldRowsPanel.add(createFieldRow(field, fieldColumnWidth))
     }
     fieldRowsPanel.revalidate()
     fieldRowsPanel.repaint()
   }
 
-  private fun padFieldLabel(fieldName: String, width: Int): String {
-    return fieldName.padEnd(width.coerceAtLeast(fieldName.length))
+  private fun normalizedFieldFilterTerm(): String {
+    return fieldFilterField.text
+      .orEmpty()
+      .trim()
+      .split(FIELD_FILTER_SPLIT_REGEX, limit = 2)
+      .firstOrNull()
+      .orEmpty()
+      .lowercase(Locale.ROOT)
+  }
+
+  private fun filterFields(fields: List<EpicsProbeFieldViewState>): List<EpicsProbeFieldViewState> {
+    val filterTerm = normalizedFieldFilterTerm()
+    if (filterTerm.isEmpty()) {
+      return fields
+    }
+
+    return fields.filter { field ->
+      field.fieldName.lowercase(Locale.ROOT).contains(filterTerm)
+    }
   }
 
   private fun formatMetaRow(label: String, value: String): String {
     return "${label.padEnd(META_LABEL_WIDTH)}  $value"
+  }
+
+  private fun createFieldHeaderRow(fieldColumnWidth: Int): JPanel {
+    return JPanel(BorderLayout(FIELD_ROW_GAP, 0)).apply {
+      alignmentX = Component.LEFT_ALIGNMENT
+      isOpaque = false
+      border = BorderFactory.createEmptyBorder(1, 0, 1, 0)
+      add(
+        createFieldTextLabel("Field", bold = true).apply {
+          applyFieldNameColumnWidth(this, fieldColumnWidth)
+        },
+        BorderLayout.WEST,
+      )
+      add(createFieldTextLabel("Value", bold = true), BorderLayout.CENTER)
+    }
+  }
+
+  private fun createFieldRow(field: EpicsProbeFieldViewState, fieldColumnWidth: Int): JPanel {
+    val fieldNameLabel =
+      createFieldTextLabel(field.fieldName).apply {
+        applyFieldNameColumnWidth(this, fieldColumnWidth)
+        val probeTargetRecordName = field.probeTargetRecordName
+        cursor =
+          if (!probeTargetRecordName.isNullOrBlank()) {
+            Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+          } else {
+            Cursor.getDefaultCursor()
+          }
+        toolTipText =
+          probeTargetRecordName?.let { "Open Probe for $it" }
+        if (!probeTargetRecordName.isNullOrBlank()) {
+          addMouseListener(
+            object : MouseAdapter() {
+              override fun mouseClicked(event: MouseEvent) {
+                if (event.clickCount != 1 || event.button != MouseEvent.BUTTON1) {
+                  return
+                }
+                openLinkedProbeHandler(probeTargetRecordName)
+              }
+            },
+          )
+        }
+      }
+    val valueLabel =
+      createFieldTextLabel(field.value).apply {
+        cursor =
+          if (field.canPut) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) else Cursor.getDefaultCursor()
+        toolTipText = if (field.canPut) "Double-click to change the value" else null
+        addMouseListener(
+          object : MouseAdapter() {
+            override fun mouseClicked(event: MouseEvent) {
+              if (event.clickCount != 2 || event.button != MouseEvent.BUTTON1 || !field.canPut) {
+                return
+              }
+              putHandler(field.key)
+            }
+          },
+        )
+      }
+    return JPanel(BorderLayout(FIELD_ROW_GAP, 0)).apply {
+      alignmentX = Component.LEFT_ALIGNMENT
+      isOpaque = false
+      border = BorderFactory.createEmptyBorder(1, 0, 1, 0)
+      add(fieldNameLabel, BorderLayout.WEST)
+      add(valueLabel, BorderLayout.CENTER)
+    }
+  }
+
+  private fun createFieldTextLabel(text: String, bold: Boolean = false): JLabel {
+    return JLabel(text).apply {
+      alignmentX = Component.LEFT_ALIGNMENT
+      applyRowLabelStyle(this, bold = bold)
+    }
+  }
+
+  private fun applyFieldNameColumnWidth(label: JLabel, fieldColumnWidth: Int) {
+    val targetWidth = label.getFontMetrics(label.font).stringWidth("W".repeat(fieldColumnWidth.coerceAtLeast(1)))
+    val targetHeight = label.preferredSize.height
+    val size = Dimension(targetWidth, targetHeight)
+    label.minimumSize = size
+    label.preferredSize = size
+    label.maximumSize = Dimension(targetWidth, Int.MAX_VALUE)
   }
 
   private fun applyRowLabelStyle(label: JLabel, bold: Boolean) {
@@ -320,7 +435,7 @@ internal class EpicsProbeViewPanel(
     this.font = plainFont
     isOpaque = true
 
-    listOf(cardPanel, buttonPanel, emptyPanel, fieldRowsPanel, fieldListPanel, bodyPanel).forEach { component ->
+    listOf(cardPanel, buttonPanel, emptyPanel, fieldRowsPanel, fieldListPanel, fieldControlsPanel, bodyPanel).forEach { component ->
       component.background = editorBackground
       component.foreground = editorForeground
       component.font = plainFont
@@ -353,19 +468,15 @@ internal class EpicsProbeViewPanel(
     fieldsTitleLabel.foreground = editorForeground
     fieldsTitleLabel.font = boldFont
 
-    applyRowLabelStyle(fieldHeaderLabel, bold = true)
-
     listOf(valueRowLabel, recordTypeRowLabel, lastUpdateRowLabel, accessRowLabel).forEach { label ->
       applyRowLabelStyle(label, bold = false)
-    }
-
-    fieldRowsPanel.components.filterIsInstance<JLabel>().forEach { label ->
-      applyRowLabelStyle(label, bold = label === fieldHeaderLabel)
     }
 
     fieldScrollPane.background = editorBackground
     fieldScrollPane.foreground = editorForeground
     fieldScrollPane.viewport.background = editorBackground
+
+    refreshFieldLines(currentState?.fields.orEmpty())
 
     revalidate()
     repaint()
@@ -382,6 +493,8 @@ internal class EpicsProbeViewPanel(
   }
 
   private companion object {
+    private const val FIELD_ROW_GAP = 8
     private const val META_LABEL_WIDTH = 12
+    private val FIELD_FILTER_SPLIT_REGEX = Regex("\\s+")
   }
 }

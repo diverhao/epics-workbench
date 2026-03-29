@@ -257,7 +257,6 @@ private class ProjectStartupIocStartAction(
     }
 
     FileDocumentManager.getInstance().getDocument(startupFile)?.let(FileDocumentManager.getInstance()::saveDocument)
-    FileEditorManager.getInstance(project).openFile(startupFile, true, true)
     runtimeService.startIoc(startupFile).exceptionOrNull()?.let { error ->
       Messages.showErrorDialog(project, error.message ?: "Failed to start ${startupFile.name}.", TITLE)
     }

@@ -27,6 +27,10 @@ const RUN_IOC_SHELL_COMMAND = "vscode-epics.runIocShellCommand";
 const RUN_IOC_SHELL_DBL_COMMAND = "vscode-epics.runIocShellDbl";
 const RUN_IOC_SHELL_DBPR_CURRENT_RECORD_COMMAND =
   "vscode-epics.runIocShellDbprCurrentRecord";
+const DUMP_ALL_IOC_RECORDS_COMMAND = "vscode-epics.dumpAllIocRecords";
+const DUMP_IOC_RECORD_COMMAND = "vscode-epics.dumpIocRecord";
+const PROBE_IOC_RECORD_COMMAND = "vscode-epics.probeIocRecord";
+const PVLIST_ALL_IOC_RECORDS_COMMAND = "vscode-epics.pvlistAllIocRecords";
 const START_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.startActiveStartupIoc";
 const STOP_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.stopActiveStartupIoc";
 const MANAGE_PROJECT_STARTUP_IOC_COMMAND = "vscode-epics.manageProjectStartupIoc";
@@ -70,6 +74,11 @@ const PROBE_FIELD_CONNECT_BATCH_SIZE = 8;
 const PROBE_OVERLAY_MAX_LINES = 160;
 const DEFAULT_MONITOR_WIDGET_BUFFER_SIZE = 500;
 const EPICS_CA_EPOCH_OFFSET_SECONDS = 631152000;
+const PROBE_LINK_FIELD_TYPES = new Set([
+  "DBF_INLINK",
+  "DBF_OUTLINK",
+  "DBF_FWDLINK",
+]);
 const STARTUP_TERMINAL_OUTPUT_MAX_LENGTH = 250000;
 const IOC_RUNTIME_COMMANDS_FETCH_TIMEOUT_MS = 5000;
 const STARTUP_RUNNING_WATERMARK_LINE_INTERVAL = 6;
@@ -83,6 +92,8 @@ const ACTIVE_STARTUP_CAN_START_IOC_CONTEXT_KEY =
   "epicsWorkbench.activeStartupCanStartIoc";
 const ACTIVE_STARTUP_CAN_STOP_IOC_CONTEXT_KEY =
   "epicsWorkbench.activeStartupCanStopIoc";
+const HAS_RUNNING_PROJECT_IOC_CONTEXT_KEY =
+  "epicsWorkbench.hasRunningProjectIoc";
 const STARTUP_IOC_PICKER_START_BUTTON = {
   iconPath: new vscode.ThemeIcon("play"),
   tooltip: "Start",
@@ -297,6 +308,30 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
+      DUMP_ALL_IOC_RECORDS_COMMAND,
+      async (resourceUri) => controller.dumpAllIocRecords(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      DUMP_IOC_RECORD_COMMAND,
+      async (resourceUri) => controller.dumpIocRecord(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      PROBE_IOC_RECORD_COMMAND,
+      async (resourceUri) => controller.probeIocRecord(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      PVLIST_ALL_IOC_RECORDS_COMMAND,
+      async (resourceUri) => controller.openPvlistForAllIocRecords(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
       START_ACTIVE_STARTUP_IOC_COMMAND,
       async () => controller.startActiveStartupIoc(),
     ),
@@ -328,25 +363,25 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
       SHOW_ACTIVE_STARTUP_IOC_TERMINAL_COMMAND,
-      async () => controller.showActiveStartupIocTerminal(),
+      async (resourceUri) => controller.showActiveStartupIocTerminal(resourceUri),
     ),
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
       OPEN_ACTIVE_STARTUP_IOC_COMMANDS_COMMAND,
-      async () => controller.openActiveStartupIocCommands(),
+      async (resourceUri) => controller.openActiveStartupIocCommands(resourceUri),
     ),
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
       OPEN_ACTIVE_STARTUP_IOC_VARIABLES_COMMAND,
-      async () => controller.openActiveStartupIocVariables(),
+      async (resourceUri) => controller.openActiveStartupIocVariables(resourceUri),
     ),
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
       OPEN_ACTIVE_STARTUP_IOC_ENVIRONMENT_COMMAND,
-      async () => controller.openActiveStartupIocEnvironment(),
+      async (resourceUri) => controller.openActiveStartupIocEnvironment(resourceUri),
     ),
   );
   extensionContext.subscriptions.push(
@@ -1259,12 +1294,20 @@ class EpicsRuntimeMonitorController {
       return undefined;
     }
 
+    await this.openTemporaryIocOutputDocument(
+      `# ${trimmedCommand}\n\n${outputText || ""}`,
+      { language: "plaintext" },
+    );
+    return outputText;
+  }
+
+  async openTemporaryIocOutputDocument(content, { language = "plaintext" } = {}) {
     const document = await vscode.workspace.openTextDocument({
-      language: "plaintext",
-      content: `# ${trimmedCommand}\n\n${outputText || ""}`,
+      language,
+      content: String(content || ""),
     });
     await vscode.window.showTextDocument(document, vscode.ViewColumn.Active, false);
-    return outputText;
+    return document;
   }
 
   trackStartupIocTerminal(documentPath, terminal) {
@@ -1848,7 +1891,6 @@ class EpicsRuntimeMonitorController {
       return undefined;
     }
 
-    await this.openStartupDocumentPath(startupDocumentPath, true);
     return startedTerminal;
   }
 
@@ -2129,16 +2171,92 @@ class EpicsRuntimeMonitorController {
     }
   }
 
-  async showActiveStartupIocTerminal() {
-    const startupTarget = this.resolveActiveStartupIocDocument();
-    if (!startupTarget) {
-      vscode.window.showWarningMessage(
-        "Open an IOC startup file under iocBoot to show its running terminal.",
+  buildRunningIocItem(startupDocumentPath, terminal) {
+    const normalizedStartupDocumentPath = normalizeFsPath(startupDocumentPath);
+    const projectRootPath = findContainingEpicsProjectRootPath(normalizedStartupDocumentPath);
+    return {
+      label: projectRootPath
+        ? getIocBootDisplayPath(projectRootPath, normalizedStartupDocumentPath)
+        : path.basename(normalizedStartupDocumentPath || "") || "IOC",
+      description: terminal?.name || "Terminal",
+      detail: normalizedStartupDocumentPath,
+      startupDocumentPath: normalizedStartupDocumentPath,
+      terminal,
+    };
+  }
+
+  getAllRunningIocItems() {
+    return [...this.iocStartupDocumentPathByTerminal.entries()]
+      .filter(([terminal, startupDocumentPath]) =>
+        Boolean(terminal) &&
+        Boolean(startupDocumentPath) &&
+        vscode.window.terminals.includes(terminal),
+      )
+      .map(([terminal, startupDocumentPath]) =>
+        this.buildRunningIocItem(startupDocumentPath, terminal),
+      )
+      .sort((left, right) =>
+        left.startupDocumentPath.localeCompare(right.startupDocumentPath) ||
+        left.description.localeCompare(right.description),
       );
+  }
+
+  resolveContextRunningIocItem(resourceUri) {
+    const resourceFsPath = normalizeFsPath(
+      getCommandResourceFsPath(resourceUri) ||
+      vscode.window.activeTextEditor?.document?.uri?.fsPath,
+    );
+    if (!isStcmdLikeFilePath(resourceFsPath)) {
+      return undefined;
+    }
+
+    const terminal = this.getCandidateRunningStartupIocTerminals(resourceFsPath)
+      .find((candidateTerminal) => vscode.window.terminals.includes(candidateTerminal));
+    return terminal
+      ? this.buildRunningIocItem(resourceFsPath, terminal)
+      : undefined;
+  }
+
+  async pickRunningProjectIoc(
+    resourceUri,
+    {
+      title,
+      placeHolder,
+    } = {},
+  ) {
+    const contextItem = this.resolveContextRunningIocItem(resourceUri);
+    if (contextItem) {
+      return contextItem;
+    }
+
+    const runningItems = this.getAllRunningIocItems();
+    if (!runningItems.length) {
+      vscode.window.showWarningMessage("No running IOCs are available.");
+      return undefined;
+    }
+
+    return vscode.window.showQuickPick(runningItems, {
+      title,
+      placeHolder,
+      ignoreFocusOut: true,
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+  }
+
+  async showActiveStartupIocTerminal(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "Show Running Terminal",
+      placeHolder: "Select the running IOC terminal to show",
+    });
+    const terminal = selectedIoc?.terminal;
+    if (!terminal) {
       return;
     }
 
-    const terminal = await this.bringStartupIocToFront(startupTarget.documentPath);
+    this.iocShellTerminal = terminal;
+    terminal.show(true);
+    this.refresh(this.contextNode);
     if (terminal) {
       vscode.window.setStatusBarMessage(
         `Showing IOC terminal "${terminal.name}"`,
@@ -2533,28 +2651,20 @@ class EpicsRuntimeMonitorController {
     await this.postIocRuntimeEnvironmentState();
   }
 
-  async openActiveStartupIocCommands() {
-    const startupTarget = this.resolveActiveStartupIocDocument();
-    if (!startupTarget) {
-      vscode.window.showWarningMessage(
-        "Open a running IOC startup file under iocBoot to view IOC runtime commands.",
-      );
+  async openActiveStartupIocCommands(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "IOC Runtime Commands",
+      placeHolder: "Select the running IOC to open runtime commands for",
+    });
+    if (!selectedIoc?.terminal || !selectedIoc?.startupDocumentPath) {
       return;
     }
-
-    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
-    if (!terminal || !vscode.window.terminals.includes(terminal)) {
-      vscode.window.showWarningMessage(
-        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
-      );
-      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
-      return;
-    }
+    const { terminal, startupDocumentPath } = selectedIoc;
 
     if (!this.iocRuntimeCommandsPanel) {
       const panel = vscode.window.createWebviewPanel(
         IOC_RUNTIME_COMMANDS_VIEW_TYPE,
-        `IOC Runtime Commands: ${path.basename(startupTarget.documentPath)}`,
+        `IOC Runtime Commands: ${path.basename(startupDocumentPath)}`,
         vscode.ViewColumn.Active,
         {
           enableScripts: true,
@@ -2565,7 +2675,7 @@ class EpicsRuntimeMonitorController {
       panel.webview.html = buildIocRuntimeCommandsHtml(
         panel.webview,
         this.buildIocRuntimeCommandsState({
-          startupDocumentPath: startupTarget.documentPath,
+          startupDocumentPath,
           terminal,
           commands: [],
           message: "Loading IOC runtime commands...",
@@ -2756,11 +2866,11 @@ class EpicsRuntimeMonitorController {
       });
     } else {
       this.iocRuntimeCommandsPanel.reveal(vscode.ViewColumn.Active, false);
-      this.iocRuntimeCommandsPanel.title = `IOC Runtime Commands: ${path.basename(startupTarget.documentPath)}`;
+      this.iocRuntimeCommandsPanel.title = `IOC Runtime Commands: ${path.basename(startupDocumentPath)}`;
     }
 
     this.iocRuntimeCommandsPanelState = {
-      startupDocumentPath: startupTarget.documentPath,
+      startupDocumentPath,
       terminal,
       commands: [],
       message: "Loading IOC runtime commands...",
@@ -2770,7 +2880,7 @@ class EpicsRuntimeMonitorController {
 
     const commands = await this.fetchIocRuntimeCommandsForTerminal(terminal);
     this.iocRuntimeCommandsPanelState = {
-      startupDocumentPath: startupTarget.documentPath,
+      startupDocumentPath,
       terminal,
       commands,
       message: commands.length
@@ -2778,37 +2888,29 @@ class EpicsRuntimeMonitorController {
         : "Could not read IOC command names from the running terminal.",
       isLoading: false,
     };
-    this.iocRuntimeCommandsPanel.title = `IOC Runtime Commands: ${path.basename(startupTarget.documentPath)}`;
+    this.iocRuntimeCommandsPanel.title = `IOC Runtime Commands: ${path.basename(startupDocumentPath)}`;
     await this.postIocRuntimeCommandsState();
     void this.prefetchIocRuntimeCommandHelpForPanel(
       commands,
       terminal,
-      startupTarget.documentPath,
+      startupDocumentPath,
     );
   }
 
-  async openActiveStartupIocVariables() {
-    const startupTarget = this.resolveActiveStartupIocDocument();
-    if (!startupTarget) {
-      vscode.window.showWarningMessage(
-        "Open a running IOC startup file under iocBoot to view IOC runtime variables.",
-      );
+  async openActiveStartupIocVariables(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "IOC Runtime Variables",
+      placeHolder: "Select the running IOC to open runtime variables for",
+    });
+    if (!selectedIoc?.terminal || !selectedIoc?.startupDocumentPath) {
       return;
     }
-
-    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
-    if (!terminal || !vscode.window.terminals.includes(terminal)) {
-      vscode.window.showWarningMessage(
-        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
-      );
-      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
-      return;
-    }
+    const { terminal, startupDocumentPath } = selectedIoc;
 
     if (!this.iocRuntimeVariablesPanel) {
       const panel = vscode.window.createWebviewPanel(
         IOC_RUNTIME_VARIABLES_VIEW_TYPE,
-        `IOC Runtime Variables: ${path.basename(startupTarget.documentPath)}`,
+        `IOC Runtime Variables: ${path.basename(startupDocumentPath)}`,
         vscode.ViewColumn.Active,
         {
           enableScripts: true,
@@ -2819,7 +2921,7 @@ class EpicsRuntimeMonitorController {
       panel.webview.html = buildIocRuntimeVariablesHtml(
         panel.webview,
         this.buildIocRuntimeVariablesState({
-          startupDocumentPath: startupTarget.documentPath,
+          startupDocumentPath,
           terminal,
           variables: [],
           message: "Loading IOC runtime variables...",
@@ -2964,11 +3066,11 @@ class EpicsRuntimeMonitorController {
       });
     } else {
       this.iocRuntimeVariablesPanel.reveal(vscode.ViewColumn.Active, false);
-      this.iocRuntimeVariablesPanel.title = `IOC Runtime Variables: ${path.basename(startupTarget.documentPath)}`;
+      this.iocRuntimeVariablesPanel.title = `IOC Runtime Variables: ${path.basename(startupDocumentPath)}`;
     }
 
     this.iocRuntimeVariablesPanelState = {
-      startupDocumentPath: startupTarget.documentPath,
+      startupDocumentPath,
       terminal,
       variables: [],
       message: "Loading IOC runtime variables...",
@@ -2978,28 +3080,20 @@ class EpicsRuntimeMonitorController {
     await this.reloadIocRuntimeVariablesPanel();
   }
 
-  async openActiveStartupIocEnvironment() {
-    const startupTarget = this.resolveActiveStartupIocDocument();
-    if (!startupTarget) {
-      vscode.window.showWarningMessage(
-        "Open a running IOC startup file under iocBoot to view IOC runtime environment values.",
-      );
+  async openActiveStartupIocEnvironment(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "IOC Runtime Environment",
+      placeHolder: "Select the running IOC to open runtime environment for",
+    });
+    if (!selectedIoc?.terminal || !selectedIoc?.startupDocumentPath) {
       return;
     }
-
-    const terminal = this.iocStartupTerminalByDocumentPath.get(startupTarget.documentPath);
-    if (!terminal || !vscode.window.terminals.includes(terminal)) {
-      vscode.window.showWarningMessage(
-        `No tracked IOC terminal is running for ${path.basename(startupTarget.documentPath)}.`,
-      );
-      this.updateStartupEditorContextKeys(vscode.window.activeTextEditor);
-      return;
-    }
+    const { terminal, startupDocumentPath } = selectedIoc;
 
     if (!this.iocRuntimeEnvironmentPanel) {
       const panel = vscode.window.createWebviewPanel(
         IOC_RUNTIME_ENVIRONMENT_VIEW_TYPE,
-        `IOC Runtime Environment: ${path.basename(startupTarget.documentPath)}`,
+        `IOC Runtime Environment: ${path.basename(startupDocumentPath)}`,
         vscode.ViewColumn.Active,
         {
           enableScripts: true,
@@ -3010,7 +3104,7 @@ class EpicsRuntimeMonitorController {
       panel.webview.html = buildIocRuntimeEnvironmentHtml(
         panel.webview,
         this.buildIocRuntimeEnvironmentState({
-          startupDocumentPath: startupTarget.documentPath,
+          startupDocumentPath,
           terminal,
           entries: [],
           message: "Loading IOC runtime environment...",
@@ -3155,11 +3249,11 @@ class EpicsRuntimeMonitorController {
       });
     } else {
       this.iocRuntimeEnvironmentPanel.reveal(vscode.ViewColumn.Active, false);
-      this.iocRuntimeEnvironmentPanel.title = `IOC Runtime Environment: ${path.basename(startupTarget.documentPath)}`;
+      this.iocRuntimeEnvironmentPanel.title = `IOC Runtime Environment: ${path.basename(startupDocumentPath)}`;
     }
 
     this.iocRuntimeEnvironmentPanelState = {
-      startupDocumentPath: startupTarget.documentPath,
+      startupDocumentPath,
       terminal,
       entries: [],
       message: "Loading IOC runtime environment...",
@@ -3167,6 +3261,192 @@ class EpicsRuntimeMonitorController {
     };
     await this.postIocRuntimeEnvironmentState();
     await this.reloadIocRuntimeEnvironmentPanel();
+  }
+
+  async dumpAllIocRecords(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "Dump All Records",
+      placeHolder: "Select the running IOC to dump all records from",
+    });
+    if (!selectedIoc?.terminal) {
+      return;
+    }
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Dumping all records from ${selectedIoc.label}`,
+      },
+      async () => {
+        const outputText = await this.captureIocShellCommandOutput(
+          "dbDumpRecord",
+          selectedIoc.terminal,
+        );
+        if (outputText === undefined) {
+          vscode.window.showWarningMessage(
+            `Could not capture dbDumpRecord output from ${selectedIoc.label}.`,
+          );
+          return;
+        }
+
+        await this.openTemporaryIocOutputDocument(outputText, {
+          language: "database",
+        });
+      },
+    );
+  }
+
+  async loadProjectIocDumpRecordItems(selectedIoc) {
+    if (!selectedIoc?.terminal) {
+      return undefined;
+    }
+
+    return vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Loading IOC records from ${selectedIoc.label}`,
+      },
+      async (progress) => {
+        progress.report({ message: `Reading ${selectedIoc.label}` });
+        const outputText = await this.captureIocShellCommandOutput(
+          "dbDumpRecord",
+          selectedIoc.terminal,
+        );
+        if (outputText === undefined) {
+          return [];
+        }
+
+        return parseDbDumpRecordOutput(outputText).map((recordEntry) => ({
+          label: recordEntry.recordName,
+          description: selectedIoc.label,
+          detail: truncateText(recordEntry.recordDesc || "(No DESC)", 120),
+          recordName: recordEntry.recordName,
+          recordDesc: recordEntry.recordDesc || "",
+          startupDocumentPath: selectedIoc.startupDocumentPath,
+          dumpText: recordEntry.dumpText,
+        }));
+      },
+    );
+  }
+
+  async pickProjectIocDumpRecord(
+    resourceUri,
+    {
+      title,
+      placeHolder,
+    } = {},
+  ) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title,
+      placeHolder: "Select the running IOC to browse records from",
+    });
+    if (!selectedIoc?.terminal) {
+      return undefined;
+    }
+
+    const dumpState = await this.loadProjectIocDumpRecordItems(selectedIoc);
+
+    if (!dumpState?.length) {
+      vscode.window.showWarningMessage(
+        `Could not read any record definitions from dbDumpRecord output for ${selectedIoc.label}.`,
+      );
+      return undefined;
+    }
+
+    return vscode.window.showQuickPick(
+      dumpState.map((item) => ({
+        ...item,
+        detail: item.detail,
+      })),
+      {
+        title,
+        placeHolder,
+        ignoreFocusOut: true,
+        matchOnDescription: true,
+        matchOnDetail: true,
+      },
+    );
+  }
+
+  async dumpIocRecord(resourceUri) {
+    const selectedRecord = await this.pickProjectIocDumpRecord(resourceUri, {
+      title: "Dump Record",
+      placeHolder: "Filter and select a record to open its dbDumpRecord output",
+    });
+    if (!selectedRecord?.dumpText) {
+      return;
+    }
+
+    await this.openTemporaryIocOutputDocument(selectedRecord.dumpText, {
+      language: "database",
+    });
+  }
+
+  async probeIocRecord(resourceUri) {
+    const selectedRecord = await this.pickProjectIocDumpRecord(resourceUri, {
+      title: "Probe a Record",
+      placeHolder: "Filter and select a record to open in Probe",
+    });
+    if (!selectedRecord?.recordName) {
+      return;
+    }
+
+    await this.openProbeWidget({
+      recordName: selectedRecord.recordName,
+    });
+  }
+
+  async openPvlistForAllIocRecords(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "PV List All Records",
+      placeHolder: "Select the running IOC to open all of its records in PvList",
+    });
+    if (!selectedIoc?.terminal) {
+      return;
+    }
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Loading all records from ${selectedIoc.label}`,
+      },
+      async () => {
+        const outputText = await this.captureIocShellCommandOutput(
+          "dbDumpRecord",
+          selectedIoc.terminal,
+        );
+        if (outputText === undefined) {
+          vscode.window.showWarningMessage(
+            `Could not capture dbDumpRecord output from ${selectedIoc.label}.`,
+          );
+          return;
+        }
+
+        const seenRecordNames = new Set();
+        const recordNames = [];
+        for (const recordEntry of parseDbDumpRecordOutput(outputText)) {
+          const recordName = String(recordEntry.recordName || "").trim();
+          if (!recordName || seenRecordNames.has(recordName)) {
+            continue;
+          }
+          seenRecordNames.add(recordName);
+          recordNames.push(recordName);
+        }
+
+        if (!recordNames.length) {
+          vscode.window.showWarningMessage(
+            `No records were found in dbDumpRecord output from ${selectedIoc.label}.`,
+          );
+          return;
+        }
+
+        await this.openPvlistWidget({
+          sourceKind: "pvlist",
+          sourceLabel: `${selectedIoc.label} (All Records)`,
+          sourceText: `${recordNames.join("\n")}\n`,
+        });
+      },
+    );
   }
 
   attachStatusBar(statusBarItem) {
@@ -3249,6 +3529,11 @@ class EpicsRuntimeMonitorController {
 
       if (message.type === "putProbeValue" && message.key) {
         await this.putRuntimeValue({ key: message.key });
+        return;
+      }
+
+      if (message.type === "openProbeFieldTarget" && message.recordName) {
+        await this.openProbeWidget({ recordName: message.recordName });
       }
     });
 
@@ -3309,6 +3594,11 @@ class EpicsRuntimeMonitorController {
 
       if (message.type === "putProbeValue" && message.key) {
         await this.putRuntimeValue({ key: message.key });
+        return;
+      }
+
+      if (message.type === "openProbeFieldTarget" && message.recordName) {
+        await this.openProbeWidget({ recordName: message.recordName });
         return;
       }
 
@@ -3411,6 +3701,11 @@ class EpicsRuntimeMonitorController {
 
     panel.webview.onDidReceiveMessage(async (message) => {
       if (!message?.type) {
+        return;
+      }
+
+      if (message.type === "openProbeRecord" && message.recordName) {
+        await this.openProbeWidget({ recordName: message.recordName });
         return;
       }
 
@@ -5300,7 +5595,7 @@ class EpicsRuntimeMonitorController {
       recordName: session.recordName,
       recordType: recordType || "(not loaded)",
       sourceLabel: session.sourceLabel,
-      runtimeStatus: this.contextStatus,
+      connectionStatusText: getProbeConnectionStatusText(mainEntry),
       value: getProbeEntryDisplayValue(mainEntry),
       valueKey: mainEntry?.key,
       valueCanPut: this.canPutRuntimeValue(mainEntry),
@@ -5311,14 +5606,21 @@ class EpicsRuntimeMonitorController {
         : session.fieldEntryStartInProgress || !session.fieldEntriesStarted
           ? "Connecting field channels..."
           : "No connectable fields have reported data yet.",
-      fields: fieldEntries.map((entry) => ({
-        key: entry.key,
-        fieldName: entry.probeFieldName,
-        pvName: entry.pvName,
-        value: getProbeEntryDisplayValue(entry),
-        updated: entry.lastUpdated ? entry.lastUpdated.toLocaleTimeString() : "",
-        canPut: this.canPutRuntimeValue(entry),
-      })),
+      fields: fieldEntries.map((entry) => {
+        const value = getProbeEntryDisplayValue(entry);
+        const fieldType = recordType
+          ? this.getFieldTypeForRecordType?.(recordType, entry.probeFieldName)
+          : undefined;
+        return {
+          key: entry.key,
+          fieldName: entry.probeFieldName,
+          pvName: entry.pvName,
+          value,
+          updated: entry.lastUpdated ? entry.lastUpdated.toLocaleTimeString() : "",
+          canPut: this.canPutRuntimeValue(entry),
+          probeTargetRecordName: getProbeLinkTargetRecordName(fieldType, value),
+        };
+      }),
     };
   }
 
@@ -5402,12 +5704,14 @@ class EpicsRuntimeMonitorController {
     }));
     const rows = (widgetState?.rows || []).map((row) => {
       const entry = row?.pvName ? entryByPvName.get(row.pvName) : undefined;
+      const probeTargetRecordName = String(row?.channelName || "").trim();
       return {
         id: row.id,
         channelName: row.channelName,
         key: entry?.key,
         canPut: this.canPutRuntimeValue(entry),
         value: row.valueText || getProbeEntryDisplayValue(entry),
+        probeTargetRecordName,
       };
     });
 
@@ -6383,6 +6687,9 @@ class EpicsRuntimeMonitorController {
     const isRunning =
       Boolean(startupTarget) &&
       this.getCandidateRunningStartupIocTerminals(startupTarget.documentPath).length > 0;
+    const hasRunningProjectIoc = Array.from(
+      this.iocStartupDocumentPathByTerminal.keys(),
+    ).some((terminal) => vscode.window.terminals.includes(terminal));
 
     void vscode.commands.executeCommand(
       "setContext",
@@ -6393,6 +6700,11 @@ class EpicsRuntimeMonitorController {
       "setContext",
       ACTIVE_STARTUP_CAN_STOP_IOC_CONTEXT_KEY,
       Boolean(startupTarget) && isRunning,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      HAS_RUNNING_PROJECT_IOC_CONTEXT_KEY,
+      hasRunningProjectIoc,
     );
   }
 
@@ -7961,29 +8273,59 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
         color: var(--vscode-descriptionForeground);
       }
       .fields {
-        margin-top: 24px;
+        margin-top: 16px;
+      }
+      .field-controls {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .field-filter {
+        width: min(420px, 100%);
+        padding: 4px 8px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font: inherit;
       }
       table {
         width: 100%;
         border-collapse: collapse;
         table-layout: fixed;
-        margin-top: 10px;
+        margin-top: 6px;
       }
       th, td {
         text-align: left;
-        padding: 8px 10px;
+        padding: 4px 8px;
         border-bottom: 1px solid var(--vscode-panel-border);
         vertical-align: top;
+        line-height: 1.25;
       }
       th {
         color: var(--vscode-descriptionForeground);
         font-weight: 600;
       }
       td:first-child, th:first-child {
-        width: 18ch;
+        width: 15ch;
       }
       code {
         font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .probe-link-target {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--vscode-textLink-foreground);
+        cursor: pointer;
+        font: inherit;
+      }
+      .probe-link-target code {
+        color: inherit;
+      }
+      .probe-link-target:hover {
+        text-decoration: underline;
       }
       .put-target {
         cursor: pointer;
@@ -7992,7 +8334,7 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
         text-decoration: underline;
       }
       .empty {
-        margin-top: 12px;
+        margin-top: 8px;
         color: var(--vscode-descriptionForeground);
       }
     </style>
@@ -8013,6 +8355,8 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
       const stopButton = document.getElementById("stopButton");
       const statusText = document.getElementById("statusText");
       let pendingPutClick = undefined;
+      let currentPayload = initialState;
+      let currentFieldFilter = "";
 
       startButton.addEventListener("click", () => {
         vscode.postMessage({ type: "startProbeRuntime" });
@@ -8030,17 +8374,38 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
           .replace(/'/g, "&#39;");
       }
 
-      function render(payload) {
+      function normalizeFieldFilterTerm(value) {
+        return String(value ?? "").trim().split(/\s+/, 1)[0]?.toLowerCase() || "";
+      }
+
+      function getFilteredProbeFields(fields) {
+        const filterTerm = normalizeFieldFilterTerm(currentFieldFilter);
+        if (!filterTerm) {
+          return fields;
+        }
+
+        return fields.filter((field) =>
+          String(field?.fieldName || "").toLowerCase().includes(filterTerm),
+        );
+      }
+
+      function render(payload, options = {}) {
+        currentPayload = payload || {};
         const state = payload?.state;
         const title = escapeHtml(payload?.recordName || payload?.sourceLabel || "EPICS Probe");
+        const previousFieldFilterInput = document.getElementById('fieldFilterInput');
+        const shouldRefocusFieldFilter =
+          options.focusFieldFilter || document.activeElement === previousFieldFilterInput;
+        const fieldFilterSelectionStart =
+          options.selectionStart ?? previousFieldFilterInput?.selectionStart ?? currentFieldFilter.length;
+        const fieldFilterSelectionEnd =
+          options.selectionEnd ?? previousFieldFilterInput?.selectionEnd ?? currentFieldFilter.length;
         startButton.disabled = !payload?.canStart || payload?.canStop;
         stopButton.disabled = !payload?.canStop;
         statusText.textContent =
-          payload?.contextStatus === "running"
-            ? "Runtime active"
-            : payload?.contextStatus === "error"
-              ? "Runtime error"
-              : "Runtime stopped";
+          payload?.recordName
+            ? (state?.connectionStatusText || "Not connected")
+            : "";
 
         const message = payload?.message
           ? '<p class="' + (payload?.diagnostics?.length ? 'error' : 'message') + '">' + escapeHtml(payload.message) + '</p>'
@@ -8051,11 +8416,16 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
           return;
         }
 
-        const fieldRows = (state.fields || []).map((field) => {
+        const filteredFields = getFilteredProbeFields(state.fields || []);
+        const hasFieldFilter = Boolean(normalizeFieldFilterTerm(currentFieldFilter));
+        const fieldRows = filteredFields.map((field) => {
           const putClass = field.canPut ? 'put-target' : '';
           const putTitle = field.canPut ? ' title="Double-click to put a new value"' : '';
+          const fieldNameHtml = field.probeTargetRecordName
+            ? '<button type="button" class="probe-link-target" data-probe-record-name="' + escapeHtml(field.probeTargetRecordName) + '" title="Open Probe for ' + escapeHtml(field.probeTargetRecordName) + '"><code>' + escapeHtml(field.fieldName) + '</code></button>'
+            : '<code>' + escapeHtml(field.fieldName) + '</code>';
           return '<tr>' +
-            '<td><code>' + escapeHtml(field.fieldName) + '</code></td>' +
+            '<td>' + fieldNameHtml + '</td>' +
             '<td class="' + putClass + '" data-key="' + escapeHtml(field.key) + '" data-can-put="' + (field.canPut ? "true" : "false") + '"' + putTitle + '>' + escapeHtml(field.value) + '</td>' +
             '</tr>';
         }).join('');
@@ -8072,17 +8442,54 @@ function buildProbeCustomEditorHtml(webview, initialState = {}) {
             '<div class="meta-label">Permission</div><div>' + escapeHtml(state.access) + '</div>' +
           '</div>' +
           '<div class="fields">' +
-            '<h2>Fields</h2>' +
+            '<div class="field-controls">' +
+              '<h2>Fields</h2>' +
+              '<input id="fieldFilterInput" class="field-filter" type="text" spellcheck="false" placeholder="Filter fields" />' +
+            '</div>' +
             (fieldRows
               ? '<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>' + fieldRows + '</tbody></table>'
-              : '<p class="empty">' + escapeHtml(state.fieldStatusText || 'No fields loaded.') + '</p>') +
+              : '<p class="empty">' + escapeHtml(
+                hasFieldFilter && (state.fields || []).length
+                  ? 'No fields match filter.'
+                  : state.fieldStatusText || 'No fields loaded.',
+              ) + '</p>') +
           '</div>';
+
+        const fieldFilterInput = document.getElementById('fieldFilterInput');
+        if (fieldFilterInput) {
+          fieldFilterInput.value = currentFieldFilter;
+          fieldFilterInput.addEventListener('input', () => {
+            currentFieldFilter = fieldFilterInput.value;
+            render(currentPayload, {
+              focusFieldFilter: true,
+              selectionStart: fieldFilterInput.selectionStart ?? currentFieldFilter.length,
+              selectionEnd: fieldFilterInput.selectionEnd ?? currentFieldFilter.length,
+            });
+          });
+          if (shouldRefocusFieldFilter) {
+            fieldFilterInput.focus();
+            fieldFilterInput.setSelectionRange(
+              fieldFilterSelectionStart,
+              fieldFilterSelectionEnd,
+            );
+          }
+        }
       }
 
       content.addEventListener('click', (event) => {
         const eventTarget = event.target instanceof Element
           ? event.target
           : event.target?.parentElement;
+        const probeTarget = eventTarget?.closest?.('[data-probe-record-name]');
+        const probeRecordName = probeTarget?.getAttribute('data-probe-record-name');
+        if (probeRecordName) {
+          pendingPutClick = undefined;
+          vscode.postMessage({
+            type: 'openProbeFieldTarget',
+            recordName: probeRecordName,
+          });
+          return;
+        }
         const target = eventTarget?.closest?.('[data-key][data-can-put="true"]');
         if (!target) {
           pendingPutClick = undefined;
@@ -9916,29 +10323,59 @@ function buildProbeWidgetHtml(webview, initialState = {}) {
         color: var(--vscode-descriptionForeground);
       }
       .fields {
-        margin-top: 24px;
+        margin-top: 16px;
+      }
+      .field-controls {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .field-filter {
+        width: min(420px, 100%);
+        padding: 4px 8px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font: inherit;
       }
       table {
         width: 100%;
         border-collapse: collapse;
         table-layout: fixed;
-        margin-top: 10px;
+        margin-top: 6px;
       }
       th, td {
         text-align: left;
-        padding: 8px 10px;
+        padding: 4px 8px;
         border-bottom: 1px solid var(--vscode-panel-border);
         vertical-align: top;
+        line-height: 1.25;
       }
       th {
         color: var(--vscode-descriptionForeground);
         font-weight: 600;
       }
       td:first-child, th:first-child {
-        width: 18ch;
+        width: 15ch;
       }
       code {
         font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .probe-link-target {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--vscode-textLink-foreground);
+        cursor: pointer;
+        font: inherit;
+      }
+      .probe-link-target code {
+        color: inherit;
+      }
+      .probe-link-target:hover {
+        text-decoration: underline;
       }
       .put-target {
         cursor: pointer;
@@ -9947,7 +10384,7 @@ function buildProbeWidgetHtml(webview, initialState = {}) {
         text-decoration: underline;
       }
       .empty {
-        margin-top: 12px;
+        margin-top: 8px;
         color: var(--vscode-descriptionForeground);
       }
     </style>
@@ -9969,6 +10406,8 @@ function buildProbeWidgetHtml(webview, initialState = {}) {
       const processButton = document.getElementById("processButton");
       const statusText = document.getElementById("statusText");
       let pendingPutClick = undefined;
+      let currentPayload = initialState;
+      let currentFieldFilter = "";
 
       channelInput.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") {
@@ -9993,19 +10432,40 @@ function buildProbeWidgetHtml(webview, initialState = {}) {
           .replace(/'/g, "&#39;");
       }
 
-      function render(payload) {
+      function normalizeFieldFilterTerm(value) {
+        return String(value ?? "").trim().split(/\s+/, 1)[0]?.toLowerCase() || "";
+      }
+
+      function getFilteredProbeFields(fields) {
+        const filterTerm = normalizeFieldFilterTerm(currentFieldFilter);
+        if (!filterTerm) {
+          return fields;
+        }
+
+        return fields.filter((field) =>
+          String(field?.fieldName || "").toLowerCase().includes(filterTerm),
+        );
+      }
+
+      function render(payload, options = {}) {
+        currentPayload = payload || {};
         const state = payload?.state;
         const title = escapeHtml(payload?.recordName || "EPICS Probe");
+        const previousFieldFilterInput = document.getElementById('fieldFilterInput');
+        const shouldRefocusFieldFilter =
+          options.focusFieldFilter || document.activeElement === previousFieldFilterInput;
+        const fieldFilterSelectionStart =
+          options.selectionStart ?? previousFieldFilterInput?.selectionStart ?? currentFieldFilter.length;
+        const fieldFilterSelectionEnd =
+          options.selectionEnd ?? previousFieldFilterInput?.selectionEnd ?? currentFieldFilter.length;
         if (document.activeElement !== channelInput) {
           channelInput.value = payload?.recordName || "";
         }
         processButton.disabled = !payload?.canProcess;
         statusText.textContent =
-          payload?.contextStatus === "running" && payload?.recordName
-            ? "Running"
-            : payload?.recordName
-              ? "Stopped"
-              : "Idle";
+          payload?.recordName
+            ? (state?.connectionStatusText || "Not connected")
+            : "";
 
         const message = payload?.message
           ? '<p class="message">' + escapeHtml(payload.message) + '</p>'
@@ -10016,11 +10476,16 @@ function buildProbeWidgetHtml(webview, initialState = {}) {
           return;
         }
 
-        const fieldRows = (state.fields || []).map((field) => {
+        const filteredFields = getFilteredProbeFields(state.fields || []);
+        const hasFieldFilter = Boolean(normalizeFieldFilterTerm(currentFieldFilter));
+        const fieldRows = filteredFields.map((field) => {
           const putClass = field.canPut ? 'put-target' : '';
           const putTitle = field.canPut ? ' title="Double-click to put a new value"' : '';
+          const fieldNameHtml = field.probeTargetRecordName
+            ? '<button type="button" class="probe-link-target" data-probe-record-name="' + escapeHtml(field.probeTargetRecordName) + '" title="Open Probe for ' + escapeHtml(field.probeTargetRecordName) + '"><code>' + escapeHtml(field.fieldName) + '</code></button>'
+            : '<code>' + escapeHtml(field.fieldName) + '</code>';
           return '<tr>' +
-            '<td><code>' + escapeHtml(field.fieldName) + '</code></td>' +
+            '<td>' + fieldNameHtml + '</td>' +
             '<td class="' + putClass + '" data-key="' + escapeHtml(field.key) + '" data-can-put="' + (field.canPut ? "true" : "false") + '"' + putTitle + '>' + escapeHtml(field.value) + '</td>' +
             '</tr>';
         }).join('');
@@ -10037,17 +10502,54 @@ function buildProbeWidgetHtml(webview, initialState = {}) {
             '<div class="meta-label">Permission</div><div>' + escapeHtml(state.access) + '</div>' +
           '</div>' +
           '<div class="fields">' +
-            '<h2>Fields</h2>' +
+            '<div class="field-controls">' +
+              '<h2>Fields</h2>' +
+              '<input id="fieldFilterInput" class="field-filter" type="text" spellcheck="false" placeholder="Filter fields" />' +
+            '</div>' +
             (fieldRows
               ? '<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>' + fieldRows + '</tbody></table>'
-              : '<p class="empty">' + escapeHtml(state.fieldStatusText || 'No fields loaded.') + '</p>') +
+              : '<p class="empty">' + escapeHtml(
+                hasFieldFilter && (state.fields || []).length
+                  ? 'No fields match filter.'
+                  : state.fieldStatusText || 'No fields loaded.',
+              ) + '</p>') +
           '</div>';
+
+        const fieldFilterInput = document.getElementById('fieldFilterInput');
+        if (fieldFilterInput) {
+          fieldFilterInput.value = currentFieldFilter;
+          fieldFilterInput.addEventListener('input', () => {
+            currentFieldFilter = fieldFilterInput.value;
+            render(currentPayload, {
+              focusFieldFilter: true,
+              selectionStart: fieldFilterInput.selectionStart ?? currentFieldFilter.length,
+              selectionEnd: fieldFilterInput.selectionEnd ?? currentFieldFilter.length,
+            });
+          });
+          if (shouldRefocusFieldFilter) {
+            fieldFilterInput.focus();
+            fieldFilterInput.setSelectionRange(
+              fieldFilterSelectionStart,
+              fieldFilterSelectionEnd,
+            );
+          }
+        }
       }
 
       content.addEventListener('click', (event) => {
         const eventTarget = event.target instanceof Element
           ? event.target
           : event.target?.parentElement;
+        const probeTarget = eventTarget?.closest?.('[data-probe-record-name]');
+        const probeRecordName = probeTarget?.getAttribute('data-probe-record-name');
+        if (probeRecordName) {
+          pendingPutClick = undefined;
+          vscode.postMessage({
+            type: 'openProbeFieldTarget',
+            recordName: probeRecordName,
+          });
+          return;
+        }
         const target = eventTarget?.closest?.('[data-key][data-can-put="true"]');
         if (!target) {
           pendingPutClick = undefined;
@@ -11286,12 +11788,29 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         font: inherit;
         box-sizing: border-box;
       }
+      .channel-controls {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .channel-filter {
+        width: min(420px, 100%);
+        padding: 4px 8px;
+        border: 1px solid var(--vscode-input-border, transparent);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border-radius: 4px;
+        font: inherit;
+        box-sizing: border-box;
+      }
       .inline-put-input {
         width: 100%;
         margin: 0;
-        min-height: calc(1em + 2px);
-        padding: 0 6px;
-        line-height: 1.4;
+        min-height: calc(1em + 1px);
+        padding: 0 4px;
+        line-height: 1.25;
       }
       table {
         width: 100%;
@@ -11300,17 +11819,31 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       }
       th, td {
         text-align: left;
-        padding: 8px 10px;
+        padding: 4px 8px;
         border-bottom: 1px solid var(--vscode-panel-border);
         vertical-align: top;
+        line-height: 1.25;
       }
       th {
         color: var(--vscode-descriptionForeground);
         font-weight: 600;
       }
       td:first-child, th:first-child {
-        width: 38ch;
+        width: 32ch;
         font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      .channel-link {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--vscode-textLink-foreground);
+        cursor: pointer;
+        font: inherit;
+        line-height: 1.25;
+        text-align: left;
+      }
+      .channel-link:hover {
+        text-decoration: underline;
       }
       .value-cell {
         cursor: pointer;
@@ -11320,7 +11853,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       .value-cell.readonly { cursor: default; }
       .value-cell.readonly:hover { text-decoration: none; }
       .value-display {
-        min-height: 1.4em;
+        min-height: 1.25em;
+        line-height: 1.25;
         white-space: pre-wrap;
       }
       .value-display.hidden {
@@ -11328,7 +11862,7 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       }
       .value-edit-shell {
         position: absolute;
-        inset: 8px 10px;
+        inset: 4px 8px;
         display: flex;
         align-items: center;
         pointer-events: none;
@@ -11361,6 +11895,7 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       let pendingClick = undefined;
       let editingState = undefined;
       let draftState = undefined;
+      let currentRowFilter = "";
       let isRendering = false;
       let suppressFocusSync = false;
       let overlayMode = false;
@@ -11553,10 +12088,37 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           .replace(/'/g, "&#39;");
       }
 
-      function render(payload) {
+      function normalizeRowFilterTerms(value) {
+        return String(value ?? "")
+          .toLowerCase()
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean);
+      }
+
+      function getFilteredRows(rows) {
+        const filterTerms = normalizeRowFilterTerms(currentRowFilter);
+        if (!filterTerms.length) {
+          return rows;
+        }
+
+        return rows.filter((row) => {
+          const channelName = String(row?.channelName || "").toLowerCase();
+          return filterTerms.every((term) => channelName.includes(term));
+        });
+      }
+
+      function render(payload, options = {}) {
         captureActiveEditingState();
         captureActiveDraftState();
         currentState = payload || {};
+        const previousRowFilterInput = document.getElementById("rowFilterInput");
+        const shouldRefocusRowFilter =
+          options.focusRowFilter || document.activeElement === previousRowFilterInput;
+        const rowFilterSelectionStart =
+          options.selectionStart ?? previousRowFilterInput?.selectionStart ?? currentRowFilter.length;
+        const rowFilterSelectionEnd =
+          options.selectionEnd ?? previousRowFilterInput?.selectionEnd ?? currentRowFilter.length;
         statusText.textContent = payload?.contextStatus || "";
         addChannelsButton.hidden = overlayMode;
         doneButton.hidden = true;
@@ -11569,6 +12131,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             : (Array.isArray(payload?.rawPvNames) ? payload.rawPvNames.join("\\n") : "");
         const macros = Array.isArray(payload?.macros) ? payload.macros : [];
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const filteredRows = getFilteredRows(rows);
+        const hasRowFilter = normalizeRowFilterTerms(currentRowFilter).length > 0;
         const macrosHtml = macros.length
           ? '<div class="macros">' + macros.map((macro) => {
               const currentValue =
@@ -11580,11 +12144,16 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
                 '" type="text" spellcheck="false" value="' + escapeHtml(currentValue) + '" />';
             }).join("") + '</div>'
           : '<div class="empty">No macros are used by this source.</div>';
-        const rowsHtml = rows.length
+        const rowsHtml = filteredRows.length
           ? '<table><thead><tr><th>Channel</th><th>Value</th></tr></thead><tbody>' +
-            rows.map((row) => {
+            filteredRows.map((row) => {
               const isEditingValue =
                 editingState?.type === "value" && editingState.key === row.key;
+              const channelNameHtml = row.probeTargetRecordName
+                ? '<button type="button" class="channel-link" data-probe-record-name="' +
+                  escapeHtml(row.probeTargetRecordName) + '">' +
+                  escapeHtml(row.channelName || "") + '</button>'
+                : escapeHtml(row.channelName || "");
               const valueHtml =
                 '<div class="value-display ' + (isEditingValue ? 'hidden' : '') + '">' +
                   escapeHtml(row.value || "") +
@@ -11596,12 +12165,16 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
                   : '');
               const canPut = Boolean(row.canPut && row.key);
               return '<tr>' +
-                '<td>' + escapeHtml(row.channelName || "") + '</td>' +
+                '<td>' + channelNameHtml + '</td>' +
                 '<td class="value-cell ' + (canPut ? "" : "readonly") + '" data-put-key="' +
                 escapeHtml(row.key || "") + '">' + valueHtml + '</td>' +
                 '</tr>';
             }).join("") + '</tbody></table>'
-          : '<div class="empty">No channel rows are available.</div>';
+          : '<div class="empty">' + escapeHtml(
+              hasRowFilter && rows.length
+                ? 'No records match filter.'
+                : 'No channel rows are available.',
+            ) + '</div>';
 
         isRendering = true;
         content.className = overlayMode ? "content overlay-active" : "content";
@@ -11617,8 +12190,28 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             '</div>'
           : messageHtml +
             '<div class="section"><h2>Macros</h2>' + macrosHtml + '</div>' +
-            '<div class="section"><h2>Channels</h2>' + rowsHtml + '</div>';
+            '<div class="section"><div class="channel-controls"><h2>Channels</h2><input id="rowFilterInput" class="channel-filter" type="text" spellcheck="false" placeholder="Filter records" /></div>' + rowsHtml + '</div>';
         isRendering = false;
+
+        const rowFilterInput = document.getElementById("rowFilterInput");
+        if (rowFilterInput) {
+          rowFilterInput.value = currentRowFilter;
+          rowFilterInput.addEventListener("input", () => {
+            currentRowFilter = rowFilterInput.value;
+            render(currentState, {
+              focusRowFilter: true,
+              selectionStart: rowFilterInput.selectionStart ?? currentRowFilter.length,
+              selectionEnd: rowFilterInput.selectionEnd ?? currentRowFilter.length,
+            });
+          });
+          if (shouldRefocusRowFilter) {
+            rowFilterInput.focus();
+            rowFilterInput.setSelectionRange(
+              rowFilterSelectionStart,
+              rowFilterSelectionEnd,
+            );
+          }
+        }
 
         for (const draftInput of content.querySelectorAll(".bulk-input")) {
           draftInput.addEventListener("focus", () => {
@@ -11729,6 +12322,21 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
               type: "updatePvlistWidgetMacro",
               name: macroName,
               value: macroInput.value,
+            });
+          });
+        }
+
+        for (const channelLink of content.querySelectorAll(".channel-link")) {
+          channelLink.addEventListener("click", () => {
+            const recordName = channelLink.dataset.probeRecordName;
+            if (!recordName) {
+              return;
+            }
+            editingState = undefined;
+            pendingClick = undefined;
+            vscode.postMessage({
+              type: "openProbeRecord",
+              recordName,
             });
           });
         }
@@ -12732,6 +13340,23 @@ function getProbeEntryDisplayValue(entry) {
   return formatRuntimeDisplayValue(value);
 }
 
+function getProbeLinkTargetRecordName(fieldType, fieldValue) {
+  if (!PROBE_LINK_FIELD_TYPES.has(String(fieldType || "").toUpperCase())) {
+    return "";
+  }
+
+  const firstToken = String(fieldValue || "").trim().split(/\s+/, 1)[0] || "";
+  if (!firstToken || firstToken === "(connecting...)") {
+    return "";
+  }
+
+  return firstToken;
+}
+
+function getProbeConnectionStatusText(entry) {
+  return entry?.status === "subscribed" ? "Connected" : "Not connected";
+}
+
 function getProbeAccessLabel(entry, runtimeLibrary) {
   if (!entry) {
     return "(connecting...)";
@@ -13053,6 +13678,83 @@ function escapeInlineCode(value) {
 
 function escapeMarkdownText(value) {
   return String(value ?? "").replace(/([\\`*_{}\[\]()#+\-.!])/g, "\\$1");
+}
+
+function parseDbDumpRecordOutput(outputText) {
+  const records = [];
+  const lines = String(outputText || "")
+    .replace(/\r/g, "")
+    .split("\n");
+  let activeRecord = undefined;
+
+  const flushActiveRecord = () => {
+    if (!activeRecord?.recordName || !activeRecord.lines?.length) {
+      activeRecord = undefined;
+      return;
+    }
+    records.push({
+      recordType: activeRecord.recordType,
+      recordName: activeRecord.recordName,
+      recordDesc: activeRecord.recordDesc,
+      dumpText: activeRecord.lines.join("\n").trimEnd(),
+    });
+    activeRecord = undefined;
+  };
+
+  for (const line of lines) {
+    const recordMatch = line.match(/^\s*record\(\s*([^,]+?)\s*,\s*"([^"\n]+)"\s*\)\s*\{/);
+    if (recordMatch) {
+      flushActiveRecord();
+      activeRecord = {
+        recordType: String(recordMatch[1] || "").trim(),
+        recordName: String(recordMatch[2] || "").trim(),
+        recordDesc: "",
+        lines: [line],
+      };
+      continue;
+    }
+
+    if (!activeRecord) {
+      continue;
+    }
+
+    activeRecord.lines.push(line);
+    const descMatch = line.match(/^\s*field\(\s*DESC\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)/);
+    if (descMatch && !activeRecord.recordDesc) {
+      activeRecord.recordDesc = decodeDbDumpQuotedString(descMatch[1]);
+    }
+    if (/^\s*}\s*$/.test(line)) {
+      flushActiveRecord();
+    }
+  }
+
+  flushActiveRecord();
+  return records;
+}
+
+function decodeDbDumpQuotedString(value) {
+  const text = String(value ?? "");
+  let decodedText = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const currentChar = text[index];
+    if (currentChar !== "\\" || index + 1 >= text.length) {
+      decodedText += currentChar;
+      continue;
+    }
+
+    const escapedChar = text[index + 1];
+    if (escapedChar === "n") {
+      decodedText += "\n";
+    } else if (escapedChar === "r") {
+      decodedText += "\r";
+    } else if (escapedChar === "t") {
+      decodedText += "\t";
+    } else {
+      decodedText += escapedChar;
+    }
+    index += 1;
+  }
+  return decodedText;
 }
 
 module.exports = {

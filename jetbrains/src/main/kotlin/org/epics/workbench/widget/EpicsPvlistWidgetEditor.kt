@@ -18,6 +18,7 @@ import com.intellij.testFramework.LightVirtualFile
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
 import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
 import org.epics.workbench.pvlist.EpicsPvlistWidgetSupport
@@ -27,6 +28,7 @@ import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
@@ -35,6 +37,9 @@ import java.beans.PropertyChangeListener
 import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import javax.swing.AbstractCellEditor
 import javax.swing.BorderFactory
 import javax.swing.Box
@@ -47,8 +52,11 @@ import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.Timer
+import javax.swing.table.DefaultTableCellRenderer
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.TableCellEditor
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 internal class EpicsPvlistWidgetVirtualFile(
   initialModel: EpicsPvlistWidgetModel,
@@ -95,6 +103,11 @@ private class EpicsPvlistWidgetFileEditor(
   private val macroFields = LinkedHashMap<String, JTextField>()
   private val macrosTitleLabel = JLabel("Macros")
   private val channelsTitleLabel = JLabel("Channels")
+  private val channelFilterField = JBTextField().apply {
+    emptyText.text = "Filter records"
+    toolTipText = "Case-insensitive record-name filter. Spaces mean AND."
+    maximumSize = Dimension(320, preferredSize.height)
+  }
   private val overlayTitleLabel = JLabel("Configure Channels")
   private val addChannelsArea = PromptTextArea("One channel per line", 16, 28)
   private val addChannelsButton = JButton("OK")
@@ -174,6 +187,21 @@ private class EpicsPvlistWidgetFileEditor(
     }
 
     configureChannelsButton.addActionListener { showOverlay() }
+    channelFilterField.document.addDocumentListener(
+      object : DocumentListener {
+        override fun insertUpdate(event: DocumentEvent?) {
+          applyChannelFilter()
+        }
+
+        override fun removeUpdate(event: DocumentEvent?) {
+          applyChannelFilter()
+        }
+
+        override fun changedUpdate(event: DocumentEvent?) {
+          applyChannelFilter()
+        }
+      },
+    )
 
     sourceLabel.border = BorderFactory.createEmptyBorder(0, 0, 2, 0)
     messageLabel.border = BorderFactory.createEmptyBorder(0, 0, 10, 0)
@@ -200,11 +228,59 @@ private class EpicsPvlistWidgetFileEditor(
 
     channelTable.setShowGrid(false)
     channelTable.fillsViewportHeight = true
-    channelTable.rowHeight = (channelTable.font.size * 1.8).toInt().coerceAtLeast(24)
-    channelTable.columnModel.getColumn(0).preferredWidth = 320
-    channelTable.columnModel.getColumn(1).preferredWidth = 480
+    channelTable.rowHeight = (channelTable.font.size * 1.55).toInt().coerceAtLeast(20)
+    channelTable.rowMargin = 0
+    channelTable.intercellSpacing = Dimension(0, 0)
+    channelTable.columnModel.getColumn(0).preferredWidth = 280
+    channelTable.columnModel.getColumn(0).cellRenderer = PvlistChannelCellRenderer()
+    channelTable.columnModel.getColumn(1).preferredWidth = 420
+    channelTable.columnModel.getColumn(1).cellRenderer = PvlistValueCellRenderer()
     channelTable.columnModel.getColumn(1).cellEditor = channelEditor
     channelTable.putClientProperty("terminateEditOnFocusLost", false)
+    channelTable.addMouseMotionListener(
+      object : MouseMotionAdapter() {
+        override fun mouseMoved(event: MouseEvent) {
+          val row = channelTable.rowAtPoint(event.point)
+          val column = channelTable.columnAtPoint(event.point)
+          val channelName = row.takeIf { it >= 0 }
+            ?.let(channelTable::convertRowIndexToModel)
+            ?.let(tableModel::getRow)
+            ?.channelName
+            ?.trim()
+            .orEmpty()
+          channelTable.cursor =
+            if (column == 0 && channelName.isNotBlank()) {
+              Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            } else {
+              Cursor.getDefaultCursor()
+            }
+        }
+      },
+    )
+    channelTable.addMouseListener(
+      object : MouseAdapter() {
+        override fun mouseExited(event: MouseEvent) {
+          channelTable.cursor = Cursor.getDefaultCursor()
+        }
+
+        override fun mouseClicked(event: MouseEvent) {
+          if (event.button != MouseEvent.BUTTON1 || event.clickCount != 1) {
+            return
+          }
+          val row = channelTable.rowAtPoint(event.point)
+          val column = channelTable.columnAtPoint(event.point)
+          if (row < 0 || column != 0) {
+            return
+          }
+          val rowState = tableModel.getRow(channelTable.convertRowIndexToModel(row))
+          val recordName = rowState.channelName.trim()
+          if (recordName.isBlank()) {
+            return
+          }
+          openEpicsWidget(project, recordName)
+        }
+      },
+    )
 
     addChannelsButton.addActionListener {
       val previousMacros = file.model.macroNames.toList()
@@ -236,7 +312,11 @@ private class EpicsPvlistWidgetFileEditor(
     val channelsSection = JPanel().apply {
       layout = BoxLayout(this, BoxLayout.Y_AXIS)
       isOpaque = false
+      channelsTitleLabel.alignmentX = Component.LEFT_ALIGNMENT
+      channelFilterField.alignmentX = Component.LEFT_ALIGNMENT
       add(channelsTitleLabel)
+      add(Box.createVerticalStrut(6))
+      add(channelFilterField)
       add(Box.createVerticalStrut(8))
       add(JBScrollPane(channelTable).apply {
         border = BorderFactory.createEmptyBorder()
@@ -285,6 +365,7 @@ private class EpicsPvlistWidgetFileEditor(
       messageLabel,
       addChannelsArea,
       channelTable,
+      channelFilterField,
     ).forEach { component ->
       component.background = background
       component.foreground = foreground
@@ -382,6 +463,24 @@ private class EpicsPvlistWidgetFileEditor(
     if (!channelTable.isEditing) {
       tableModel.setRows(viewState.rows)
     }
+    updateChannelEmptyText()
+  }
+
+  private fun applyChannelFilter() {
+    if (channelTable.isEditing) {
+      channelTable.cellEditor?.cancelCellEditing()
+    }
+    tableModel.setFilterQuery(channelFilterField.text)
+    updateChannelEmptyText()
+  }
+
+  private fun updateChannelEmptyText() {
+    channelTable.emptyText.text =
+      if (tableModel.hasRows() && tableModel.isFilterActive()) {
+        "No records match filter."
+      } else {
+        "No channel rows are available."
+      }
   }
 
   private fun buildMonospaceEditorFont(fontName: String, fontSize: Int): Font {
@@ -394,12 +493,67 @@ private class EpicsPvlistWidgetFileEditor(
     }
   }
 
+  private inner class PvlistChannelCellRenderer : DefaultTableCellRenderer() {
+    override fun getTableCellRendererComponent(
+      table: JTable,
+      value: Any?,
+      isSelected: Boolean,
+      hasFocus: Boolean,
+      row: Int,
+      column: Int,
+    ): Component {
+      val component = super.getTableCellRendererComponent(
+        table,
+        value,
+        isSelected,
+        hasFocus,
+        row,
+        column,
+      )
+      val channelName = tableModel.getRow(table.convertRowIndexToModel(row)).channelName.trim()
+      border = BorderFactory.createEmptyBorder(1, 6, 1, 6)
+      foreground =
+        if (isSelected) {
+          table.selectionForeground
+        } else if (channelName.isNotBlank()) {
+          ColorUtil.mix(table.foreground, Color(0, 102, 204), 0.55)
+        } else {
+          table.foreground
+        }
+      toolTipText = if (channelName.isNotBlank()) "Open in Probe" else null
+      return component
+    }
+  }
+
+  private inner class PvlistValueCellRenderer : DefaultTableCellRenderer() {
+    override fun getTableCellRendererComponent(
+      table: JTable,
+      value: Any?,
+      isSelected: Boolean,
+      hasFocus: Boolean,
+      row: Int,
+      column: Int,
+    ): Component {
+      val component = super.getTableCellRendererComponent(
+        table,
+        value,
+        isSelected,
+        hasFocus,
+        row,
+        column,
+      )
+      border = BorderFactory.createEmptyBorder(1, 6, 1, 6)
+      return component
+    }
+  }
+
   private inner class PvlistValueCellEditor : AbstractCellEditor(), TableCellEditor {
     private val textField = JTextField()
     private var editingRowKey: String? = null
 
     init {
       textField.font = channelTable.font
+      textField.border = BorderFactory.createEmptyBorder(0, 6, 0, 6)
       textField.addActionListener { stopCellEditing() }
     }
 
@@ -437,7 +591,9 @@ private class EpicsPvlistWidgetFileEditor(
   }
 
   private class PvlistTableModel : AbstractTableModel() {
+    private val allRows = mutableListOf<EpicsPvlistWidgetRowViewState>()
     private val rows = mutableListOf<EpicsPvlistWidgetRowViewState>()
+    private var filterTerms = emptyList<String>()
 
     override fun getRowCount(): Int = rows.size
 
@@ -462,13 +618,41 @@ private class EpicsPvlistWidgetFileEditor(
       return columnIndex == 1 && rows.getOrNull(rowIndex)?.canPut == true
     }
 
+    fun setFilterQuery(value: String?) {
+      filterTerms = value.orEmpty()
+        .trim()
+        .lowercase(Locale.ROOT)
+        .split(Regex("\\s+"))
+        .filter(String::isNotBlank)
+      applyFilter()
+    }
+
     fun setRows(newRows: List<EpicsPvlistWidgetRowViewState>) {
-      rows.clear()
-      rows.addAll(newRows)
-      fireTableDataChanged()
+      allRows.clear()
+      allRows.addAll(newRows)
+      applyFilter()
     }
 
     fun getRow(rowIndex: Int): EpicsPvlistWidgetRowViewState = rows[rowIndex]
+
+    fun hasRows(): Boolean = allRows.isNotEmpty()
+
+    fun isFilterActive(): Boolean = filterTerms.isNotEmpty()
+
+    private fun applyFilter() {
+      rows.clear()
+      if (filterTerms.isEmpty()) {
+        rows.addAll(allRows)
+      } else {
+        rows.addAll(
+          allRows.filter { row ->
+            val channelName = row.channelName.lowercase(Locale.ROOT)
+            filterTerms.all(channelName::contains)
+          },
+        )
+      }
+      fireTableDataChanged()
+    }
   }
 
   private companion object {

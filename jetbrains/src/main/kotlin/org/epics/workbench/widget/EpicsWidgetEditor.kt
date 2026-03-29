@@ -80,6 +80,7 @@ private class EpicsWidgetFileEditor(
   private val probePanel = EpicsProbeViewPanel(
     stateProvider = { runtimeService.getWidgetProbeViewState(file.widgetId, currentRecordName) },
     putHandler = { key -> runtimeService.requestPutWidgetValue(file.widgetId, currentRecordName, key) },
+    openLinkedProbeHandler = { recordName -> openEpicsWidget(project, recordName) },
     isMonitoringActive = { runtimeService.isMonitoringActive() },
     startHandler = { runtimeService.startMonitoring() },
     stopHandler = { runtimeService.stopMonitoring() },

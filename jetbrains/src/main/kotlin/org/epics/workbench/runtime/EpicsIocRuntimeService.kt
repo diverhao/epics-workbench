@@ -53,6 +53,19 @@ data class EpicsIocRuntimeEnvironmentEntry(
   val value: String,
 )
 
+data class EpicsRunningIocStartup(
+  val startupPath: String,
+  val startupName: String,
+  val consoleTitle: String,
+)
+
+data class EpicsIocDumpRecordEntry(
+  val recordType: String,
+  val recordName: String,
+  val recordDesc: String,
+  val dumpText: String,
+)
+
 internal data class EpicsStartupValidation(
   val hasShebangCommand: Boolean,
   val missingExecutableName: String? = null,
@@ -77,6 +90,21 @@ class EpicsIocRuntimeService(
     val startupPath = normalizeStartupPath(startupFile) ?: return null
     synchronized(sessionLock) {
       return sessionsByStartupPath[startupPath]?.consoleTitle
+    }
+  }
+
+  fun listRunningIocStartups(): List<EpicsRunningIocStartup> {
+    return synchronized(sessionLock) {
+      sessionsByStartupPath.values
+        .filter { session -> session.isRunning }
+        .sortedBy { session -> session.startupPath.lowercase() }
+        .map { session ->
+          EpicsRunningIocStartup(
+            startupPath = session.startupPath,
+            startupName = session.startupName,
+            consoleTitle = session.consoleTitle,
+          )
+        }
     }
   }
 
@@ -251,6 +279,13 @@ class EpicsIocRuntimeService(
       PlainTextFileType.INSTANCE,
       content,
     )
+    ApplicationManager.getApplication().invokeLater {
+      FileEditorManager.getInstance(project).openFile(file, true, true)
+    }
+  }
+
+  fun openTemporaryOutputFile(fileName: String, content: String) {
+    val file = LightVirtualFile(fileName, content)
     ApplicationManager.getApplication().invokeLater {
       FileEditorManager.getInstance(project).openFile(file, true, true)
     }
@@ -622,12 +657,96 @@ class EpicsIocRuntimeService(
         .toList()
     }
 
+    fun parseDbDumpRecordOutput(output: String): List<EpicsIocDumpRecordEntry> {
+      val records = mutableListOf<EpicsIocDumpRecordEntry>()
+      var activeRecordType = ""
+      var activeRecordName = ""
+      var activeRecordDesc = ""
+      var activeLines = mutableListOf<String>()
+
+      fun flushRecord() {
+        if (activeRecordName.isBlank() || activeLines.isEmpty()) {
+          activeRecordType = ""
+          activeRecordName = ""
+          activeRecordDesc = ""
+          activeLines = mutableListOf()
+          return
+        }
+        records += EpicsIocDumpRecordEntry(
+          recordType = activeRecordType,
+          recordName = activeRecordName,
+          recordDesc = activeRecordDesc,
+          dumpText = activeLines.joinToString("\n").trimEnd(),
+        )
+        activeRecordType = ""
+        activeRecordName = ""
+        activeRecordDesc = ""
+        activeLines = mutableListOf()
+      }
+
+      output.replace("\r", "").lineSequence().forEach { line ->
+        val recordMatch = DB_DUMP_RECORD_HEADER_REGEX.matchEntire(line)
+        if (recordMatch != null) {
+          flushRecord()
+          activeRecordType = recordMatch.groupValues[1].trim()
+          activeRecordName = recordMatch.groupValues[2].trim()
+          activeLines += line
+          return@forEach
+        }
+
+        if (activeRecordName.isBlank()) {
+          return@forEach
+        }
+
+        activeLines += line
+        if (activeRecordDesc.isBlank()) {
+          val descMatch = DB_DUMP_RECORD_DESC_REGEX.matchEntire(line)
+          if (descMatch != null) {
+            activeRecordDesc = decodeDbDumpQuotedString(descMatch.groupValues[1])
+          }
+        }
+        if (line.trim() == "}") {
+          flushRecord()
+        }
+      }
+      flushRecord()
+      return records
+    }
+
     private fun sanitizeCapturedOutput(text: String): String {
       return ANSI_ESCAPE_REGEX.replace(text, "")
     }
 
+    private fun decodeDbDumpQuotedString(value: String): String {
+      val result = StringBuilder()
+      var index = 0
+      while (index < value.length) {
+        val current = value[index]
+        if (current != '\\' || index + 1 >= value.length) {
+          result.append(current)
+          index += 1
+          continue
+        }
+
+        when (val escaped = value[index + 1]) {
+          '\\' -> result.append('\\')
+          '"' -> result.append('"')
+          'n' -> result.append('\n')
+          'r' -> result.append('\r')
+          't' -> result.append('\t')
+          else -> result.append(escaped)
+        }
+        index += 2
+      }
+      return result.toString()
+    }
+
     private val COMMAND_NAME_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
     private val VARIABLE_LINE_REGEX = Regex("""^(.*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$""")
+    private val DB_DUMP_RECORD_HEADER_REGEX =
+      Regex("""^\s*record\(\s*([^,]+?)\s*,\s*"([^"\n]+)"\s*\)\s*\{\s*$""")
+    private val DB_DUMP_RECORD_DESC_REGEX =
+      Regex("""^\s*field\(\s*DESC\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)\s*$""")
   }
 
   private data class StartupShebangResolution(

@@ -66,7 +66,7 @@
                     "command": "vscode-epics.manageProjectStartupIoc"
                 },
                 {
-                    "when": "epicsWorkbench.activeStartupCanStopIoc",
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "0_epics-main@2",
                     "submenu": "vscode-epics.iocRuntimeMenu"
                 },
@@ -284,35 +284,45 @@
                     "command": "vscode-epics.manageProjectStartupIoc"
                 },
                 {
-                    "when": "resourceExtname == .xlsx || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .cmd || resourceExtname == .iocsh || resourceExtname == .sub || resourceExtname == .subs || resourceExtname == .substitutions || resourceExtname == .pvlist || resourceExtname == .probe || resourceExtname == .st || (epicsWorkbench.isEpicsProject && !explorerResourceIsFolder)",
+                    "when": "epicsWorkbench.hasRunningProjectIoc && !explorerResourceIsFolder",
                     "group": "navigation@29",
+                    "submenu": "vscode-epics.iocRuntimeMenu"
+                },
+                {
+                    "when": "resourceExtname == .xlsx || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .cmd || resourceExtname == .iocsh || resourceExtname == .sub || resourceExtname == .subs || resourceExtname == .substitutions || resourceExtname == .pvlist || resourceExtname == .probe || resourceExtname == .st || (epicsWorkbench.isEpicsProject && !explorerResourceIsFolder)",
+                    "group": "navigation@30",
                     "submenu": "vscode-epics.importExportMenu"
                 },
                 {
                     "when": "epicsWorkbench.activeCanBuildWithMakefile || epicsWorkbench.isEpicsProject",
-                    "group": "navigation@30",
+                    "group": "navigation@31",
                     "submenu": "vscode-epics.buildMenu"
                 },
                 {
                     "when": "resourceExtname == .tdl || resourceExtname == .edl || resourceExtname == .bob || resourceExtname == .stp || resourceExtname == .plt",
-                    "group": "navigation@31",
+                    "group": "navigation@32",
                     "command": "vscode-epics.openInTdm"
                 }
             ],
             "webview/context": [
                 {
-                    "when": "(webviewId == 'epicsWorkbench.runtimeWidget' || webviewId == 'epicsWorkbench.probeWidget' || webviewId == 'epicsWorkbench.pvlistWidget' || webviewId == 'epicsWorkbench.monitorWidget') && (epicsWorkbench.activeCanBuildWithMakefile || epicsWorkbench.isEpicsProject)",
+                    "when": "(webviewId == 'epicsWorkbench.probeWidget' || webviewId == 'epicsWorkbench.pvlistWidget' || webviewId == 'epicsWorkbench.monitorWidget') && epicsWorkbench.isEpicsProject",
                     "group": "0_epics-main@1",
+                    "command": "vscode-epics.manageProjectStartupIoc"
+                },
+                {
+                    "when": "(webviewId == 'epicsWorkbench.runtimeWidget' || webviewId == 'epicsWorkbench.probeWidget' || webviewId == 'epicsWorkbench.pvlistWidget' || webviewId == 'epicsWorkbench.monitorWidget') && (epicsWorkbench.activeCanBuildWithMakefile || epicsWorkbench.isEpicsProject)",
+                    "group": "0_epics-main@2",
                     "submenu": "vscode-epics.buildMenu"
                 },
                 {
                     "when": "webviewId == 'epicsWorkbench.runtimeWidget' || webviewId == 'epicsWorkbench.probeWidget' || webviewId == 'epicsWorkbench.pvlistWidget' || webviewId == 'epicsWorkbench.monitorWidget'",
-                    "group": "0_epics-main@2",
+                    "group": "0_epics-main@3",
                     "submenu": "vscode-epics.widgetsMenu"
                 },
                 {
                     "when": "(webviewId == 'epicsWorkbench.runtimeWidget' || webviewId == 'epicsWorkbench.probeWidget' || webviewId == 'epicsWorkbench.pvlistWidget' || webviewId == 'epicsWorkbench.monitorWidget') && (epicsWorkbench.isEpicsProject || editorLangId == database || editorLangId == startup || editorLangId == substitutions || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer || editorLangId == dbd)",
-                    "group": "0_epics-main@3",
+                    "group": "0_epics-main@4",
                     "submenu": "vscode-epics.importExportMenu"
                 }
             ],
@@ -396,24 +406,44 @@
             ],
             "vscode-epics.iocRuntimeMenu": [
                 {
-                    "when": "epicsWorkbench.activeStartupCanStopIoc",
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "1_main@1",
                     "command": "vscode-epics.showActiveStartupIocTerminal"
                 },
                 {
-                    "when": "epicsWorkbench.activeStartupCanStopIoc",
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "1_main@2",
                     "command": "vscode-epics.openActiveStartupIocCommands"
                 },
                 {
-                    "when": "epicsWorkbench.activeStartupCanStopIoc",
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "1_main@3",
                     "command": "vscode-epics.openActiveStartupIocVariables"
                 },
                 {
-                    "when": "epicsWorkbench.activeStartupCanStopIoc",
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "1_main@4",
                     "command": "vscode-epics.openActiveStartupIocEnvironment"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "2_dump@1",
+                    "command": "vscode-epics.dumpAllIocRecords"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "2_dump@2",
+                    "command": "vscode-epics.dumpIocRecord"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "3_widgets@1",
+                    "command": "vscode-epics.probeIocRecord"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "3_widgets@2",
+                    "command": "vscode-epics.pvlistAllIocRecords"
                 }
             ],
             "vscode-epics.buildMenu": [
@@ -919,6 +949,30 @@
                 "category": "EPICS",
                 "icon": "$(symbol-field)"
             },
+            {
+                "title": "Dump All Records",
+                "command": "vscode-epics.dumpAllIocRecords",
+                "category": "EPICS",
+                "icon": "$(list-tree)"
+            },
+            {
+                "title": "Dump Record",
+                "command": "vscode-epics.dumpIocRecord",
+                "category": "EPICS",
+                "icon": "$(symbol-field)"
+            },
+            {
+                "title": "Probe a Record",
+                "command": "vscode-epics.probeIocRecord",
+                "category": "EPICS",
+                "icon": "$(debug-alt-small)"
+            },
+            {
+                "title": "PV List All Records",
+                "command": "vscode-epics.pvlistAllIocRecords",
+                "category": "EPICS",
+                "icon": "$(list-selection)"
+            },
                 {
                     "title": "EPICS IOC - Start",
                     "command": "vscode-epics.startActiveStartupIoc",
@@ -1038,6 +1092,10 @@
         "onCommand:vscode-epics.runIocShellCommand",
         "onCommand:vscode-epics.runIocShellDbl",
         "onCommand:vscode-epics.runIocShellDbprCurrentRecord",
+        "onCommand:vscode-epics.dumpAllIocRecords",
+        "onCommand:vscode-epics.dumpIocRecord",
+        "onCommand:vscode-epics.probeIocRecord",
+        "onCommand:vscode-epics.pvlistAllIocRecords",
         "onCommand:vscode-epics.startActiveStartupIoc",
         "onCommand:vscode-epics.manageProjectStartupIoc",
         "onCommand:vscode-epics.stopActiveStartupIoc",

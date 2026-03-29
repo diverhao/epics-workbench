@@ -7,7 +7,9 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.actionSystem.ex.ActionUtil
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.DumbAware
+import org.epics.workbench.runtime.EpicsIocRuntimeService
 
 abstract class AbstractEpicsPopupGroup(
   private vararg val childActionIds: String,
@@ -78,4 +80,16 @@ class EpicsIocRuntimePopupGroup : AbstractEpicsPopupGroup(
   "org.epics.workbench.OpenIocRuntimeCommandsAction",
   "org.epics.workbench.OpenIocRuntimeVariablesAction",
   "org.epics.workbench.OpenIocRuntimeEnvironmentAction",
-)
+  SEPARATOR,
+  "org.epics.workbench.DumpAllRecordsAction",
+  "org.epics.workbench.DumpRecordAction",
+  SEPARATOR,
+  "org.epics.workbench.ProbeRecordAction",
+  "org.epics.workbench.PvlistAllRecordsAction",
+) {
+  override fun update(event: AnActionEvent) {
+    val project = event.project
+    event.presentation.isEnabledAndVisible =
+      project != null && project.service<EpicsIocRuntimeService>().listRunningIocStartups().isNotEmpty()
+  }
+}

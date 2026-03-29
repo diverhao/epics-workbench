@@ -10,6 +10,7 @@ import org.epics.workbench.export.exportDatabaseFileToExcel
 import org.epics.workbench.export.promptImportEpicsExcelWorkbook
 import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
 import org.epics.workbench.pvlist.EpicsPvlistWidgetSourceKind
+import org.epics.workbench.runtime.showProjectIocChooser
 import java.awt.Component
 import java.nio.file.Path
 import java.awt.event.ContainerAdapter
@@ -61,6 +62,15 @@ private fun rebuildWidgetPopupMenu(
 ) {
   popupMenu.removeAll()
 
+  popupMenu.add(
+    JMenuItem("EPICS IOC Start/Stop").apply {
+      isEnabled = projectHasEpicsRoot(project)
+      addActionListener {
+        showProjectIocChooser(project, null)
+      }
+    },
+  )
+  popupMenu.addSeparator()
   popupMenu.add(buildBuildMenu(project))
   popupMenu.add(buildWidgetsMenu(project, channelsProvider, primaryChannelProvider, sourceLabelProvider))
   popupMenu.add(buildImportExportMenu(project, exportFileProvider))

@@ -436,6 +436,30 @@
       text="IOC Runtime Environment"
       description="Open IOC runtime environment variables for the running startup file"
     />
+    <action
+      id="org.epics.workbench.DumpAllRecordsAction"
+      class="org.epics.workbench.runtime.DumpAllRecordsAction"
+      text="Dump All Records"
+      description="Choose a running IOC and open its dbDumpRecord output in a temporary tab"
+    />
+    <action
+      id="org.epics.workbench.DumpRecordAction"
+      class="org.epics.workbench.runtime.DumpRecordAction"
+      text="Dump Record"
+      description="Collect dbDumpRecord output from running IOCs, filter records, and open the selected record"
+    />
+    <action
+      id="org.epics.workbench.ProbeRecordAction"
+      class="org.epics.workbench.runtime.ProbeRecordAction"
+      text="Probe a Record"
+      description="Collect dbDumpRecord output from running IOCs, filter records, and open the selected record in Probe"
+    />
+    <action
+      id="org.epics.workbench.PvlistAllRecordsAction"
+      class="org.epics.workbench.runtime.PvlistAllRecordsAction"
+      text="PV List All Records"
+      description="Choose a running IOC and open all of its records in a PvList widget"
+    />
     <group
       id="org.epics.workbench.ProjectIocStartPopupGroup"
       class="org.epics.workbench.runtime.EpicsProjectIocStartPopupGroup"

@@ -17,10 +17,12 @@ internal data class EpicsProbeFieldViewState(
   val value: String,
   val updated: String,
   val canPut: Boolean,
+  val probeTargetRecordName: String? = null,
 )
 
 internal data class EpicsProbeViewState(
   val recordName: String,
+  val isConnected: Boolean = false,
   val recordType: String,
   val value: String,
   val valueKey: String?,
@@ -62,6 +64,7 @@ internal class EpicsProbeRuntimeSession(
     val resolvedRecordType = getResolvedRecordType()
     return EpicsProbeViewState(
       recordName = analysis.recordName.orEmpty(),
+      isConnected = mainState.isConnected,
       recordType = resolvedRecordType ?: "(connecting...)",
       value = mainState.displayValue,
       valueKey = mainState.key,
@@ -75,6 +78,7 @@ internal class EpicsProbeRuntimeSession(
           value = state.displayValue,
           updated = state.lastUpdated.orEmpty(),
           canPut = state.canPut,
+          probeTargetRecordName = state.getProbeTargetRecordName(),
         )
       },
       message = null,
@@ -111,11 +115,13 @@ internal class EpicsProbeRuntimeSession(
           ?.equals("DBF_NOACCESS", ignoreCase = true) == true
       }
     val states = fieldNames.map { fieldName ->
+      val fieldType = EpicsRecordCompletionSupport.getFieldType(resolvedRecordType, fieldName)
       ProbeValueState(
         protocol = protocol,
         pvName = "${analysis.recordName.orEmpty()}.$fieldName",
         key = "field:$fieldName",
         fieldName = fieldName,
+        dbfType = fieldType,
       )
     }
     fieldStates = states
@@ -139,6 +145,7 @@ internal class ProbeValueState(
   override val pvName: String,
   val key: String,
   val fieldName: String = pvName.substringAfterLast('.', pvName),
+  private val dbfType: String? = null,
 ) : RuntimeValueState {
   private var enumChoices: List<String> = emptyList()
   private var putInitialValue: String = ""
@@ -159,6 +166,22 @@ internal class ProbeValueState(
   var canPut: Boolean = false
     private set
 
+  @Volatile
+  var isConnected: Boolean = false
+    private set
+
+  fun getProbeTargetRecordName(): String? {
+    if (!PROBE_LINK_FIELD_TYPES.contains(dbfType?.uppercase())) {
+      return null
+    }
+
+    val firstToken = displayValue.trim().split(PROBE_LINK_VALUE_SPLIT_REGEX, limit = 2).firstOrNull().orEmpty()
+    if (firstToken.isBlank() || firstToken == CONNECTING_DISPLAY) {
+      return null
+    }
+    return firstToken
+  }
+
   override fun install() = Unit
 
   override fun matchesDoubleClick(event: com.intellij.openapi.editor.event.EditorMouseEvent): Boolean = false
@@ -173,6 +196,7 @@ internal class ProbeValueState(
 
   override fun setValue(value: String) {
     displayValue = value
+    isConnected = true
     putInitialValue = value
     lastUpdated = DATE_FORMATTER.format(LocalTime.now())
   }
@@ -181,11 +205,13 @@ internal class ProbeValueState(
     displayValue = CONNECTING_DISPLAY
     accessLabel = CONNECTING_DISPLAY
     canPut = false
+    isConnected = false
   }
 
   override fun setAccess(accessLabel: String, canPut: Boolean) {
     this.accessLabel = accessLabel
     this.canPut = canPut
+    isConnected = true
   }
 
   override fun dispose() = Unit
@@ -193,6 +219,8 @@ internal class ProbeValueState(
   private companion object {
     private const val CONNECTING_DISPLAY = "(connecting...)"
     private val DATE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+    private val PROBE_LINK_VALUE_SPLIT_REGEX = Regex("\\s+")
+    private val PROBE_LINK_FIELD_TYPES = setOf("DBF_INLINK", "DBF_OUTLINK", "DBF_FWDLINK")
   }
 }
 
