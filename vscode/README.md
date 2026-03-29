@@ -1,55 +1,202 @@
 # EPICS Workbench for VS Code
 
-This document describes what the VS Code extension can do today and how to use it in practice.
+- [EPICS Workbench for VS Code](#epics-workbench-for-vs-code)
+  - [How To Start](#how-to-start)
+  - [Static Scope](#static-scope)
+  - [IOC Runtime Scope](#ioc-runtime-scope)
+  - [TDM Integration](#tdm-integration)
+    - [Required Settings](#required-settings)
+    - [Updating The Vendored TDM Copy](#updating-the-vendored-tdm-copy)
+    - [How To Use It](#how-to-use-it)
+  - [Database Files: `.db`, `.vdb`, `.template`](#database-files-db-vdb-template)
+    - [What You Can Do](#what-you-can-do)
+    - [Practical Example: Record References](#practical-example-record-references)
+    - [Practical Example: Macro-Aware Record References](#practical-example-macro-aware-record-references)
+    - [Practical Example: Invalid Field Quick Fix](#practical-example-invalid-field-quick-fix)
+    - [Practical Example: Invalid Menu Value Quick Fix](#practical-example-invalid-menu-value-quick-fix)
+  - [Startup Files: `st.cmd`, `.cmd`, `.iocsh`](#startup-files-stcmd-cmd-iocsh)
+    - [What You Can Do](#what-you-can-do-1)
+    - [Practical Example: `dbLoadRecords(...)` Completion](#practical-example-dbloadrecords-completion)
+    - [Practical Example: `dbpf(...)` Completion](#practical-example-dbpf-completion)
+    - [Practical Example: IOC Registration Quick Fix](#practical-example-ioc-registration-quick-fix)
+  - [Substitutions Files: `.sub`, `.subs`, `.substitutions`](#substitutions-files-sub-subs-substitutions)
+    - [What You Can Do](#what-you-can-do-2)
+    - [Practical Example](#practical-example)
+  - [PV List Widget](#pv-list-widget)
+    - [What It Does](#what-it-does)
+    - [What You Can Do](#what-you-can-do-3)
+    - [Practical Example](#practical-example-1)
+  - [Probe Widget](#probe-widget)
+    - [What It Does](#what-it-does-1)
+    - [What You Can Do](#what-you-can-do-4)
+    - [Practical Example](#practical-example-2)
+  - [PV Monitor Widget](#pv-monitor-widget)
+    - [What It Does](#what-it-does-2)
+    - [What You Can Do](#what-you-can-do-5)
+    - [Practical Example](#practical-example-3)
+  - [`.pvlist` Files](#pvlist-files)
+    - [What They Are For](#what-they-are-for)
+    - [What You Can Do](#what-you-can-do-6)
+    - [Practical Example](#practical-example-4)
+  - [`.dbd` And EPICS Source Files](#dbd-and-epics-source-files)
+    - [What You Can Do](#what-you-can-do-7)
+    - [Practical Example: DBD / Source Cross-Reference](#practical-example-dbd--source-cross-reference)
+  - [Build Model And Project Understanding](#build-model-and-project-understanding)
+    - [What It Does](#what-it-does-3)
+    - [Direct Debugging Use](#direct-debugging-use)
+  - [Safe Edit / Refactor Features](#safe-edit--refactor-features)
+    - [What Is Implemented Today](#what-is-implemented-today)
+    - [Practical Example: Conflict Check](#practical-example-conflict-check)
+  - [Known Scope Limits](#known-scope-limits)
+  - [Recommended Manual Test Set](#recommended-manual-test-set)
 
-This work is sponsored by Oak Ridge National Laboratory.
-
-The examples below use the sample project in `appTest/`.
-
-## What The Extension Understands
-
-The extension understands these EPICS-oriented file types:
-
-- `.db`, `.vdb`, `.template`
-- `.sub`, `.subs`, `.substitutions`
-- `st.cmd`, `.cmd`, `.iocsh`
-- `.dbd`
-- `.proto`
-- `.pvlist`
-- `.probe`
-- EPICS C/C++ source files used by DBD exports
-- EPICS `Makefile`, `configure/RELEASE`, and `configure/RELEASE.local`
-
-It builds an internal EPICS project model automatically. That model is used for:
-
-- navigation
-- hover and peeker popups
-- validation and diagnostics
-- completion
-- rename and find-references
-- widgets such as Probe, PV List, and PV Monitor
-
-The build-model layer also interrogates EPICS Makefiles with `make -pn` when possible. If that fails, the extension falls back to file-based project discovery automatically.
 
 ## How To Start
 
-Open an EPICS application folder in VS Code, for example:
+Open an [EPICS](https://epics-controls.org/) application folder in VS Code, for example:
 
 ```bash
-code /Users/1h7/projects/epics-workbench/appTest
+code /home/abc/appTest/
 ```
 
-For extension development, open the extension source and run the Extension Development Host:
+## Static Scope
 
-```bash
-code /Users/1h7/projects/epics-workbench/vscode
+Static scope covers everything EPICS Workbench can resolve from workspace files and the EPICS build model, without connecting to a running IOC.
+
+File types covered directly in the editor:
+
+- database files: `.db`, `.vdb`, `.template`
+- substitutions files: `.sub`, `.subs`, `.substitutions`
+- startup files: `.cmd`, `.iocsh`, `st.cmd`
+- database definition files: `.dbd`
+- StreamDevice protocol files: `.proto`
+- sequencer files: `.st`
+- PV list files: `.pvlist`
+- probe files: `.probe`
+
+Workspace assets also indexed for static resolution:
+
+- `Makefile`
+- `configure/RELEASE`, `configure/RELEASE.local`, `configure/RULES_TOP`
+- EPICS C/C++ source and header files
+- `envPaths*`
+
+Across this scope, the extension provides:
+
+- syntax highlighting for all supported EPICS text formats
+- completion in database, startup, substitutions, `.dbd`, and `Makefile` files
+- `Go to Definition` in database, startup, substitutions, sequencer, and `Makefile` files
+- `Find All References` and `Rename Symbol` across database, startup, substitutions, `.dbd`, `.pvlist`, `.probe`, sequencer, and indexed EPICS C/C++ source files
+- hover information in database, startup, substitutions, `.pvlist`, sequencer, `Makefile`, and `envPaths*`
+- quick fixes in database and startup files
+- diagnostics for database, startup, substitutions, and source `Makefile` files
+- formatting for database, substitutions, startup, `Makefile`, `.proto`, and sequencer files
+- semantic highlighting and outline symbols for database files
+
+The static index also uses `.dbd`, build files, `configure/RELEASE*`, and EPICS C/C++ source to resolve record types, device support, registrars, drivers, functions, variables, install targets, and startup load paths before runtime.
+
+## IOC Runtime Scope
+
+Runtime scope covers everything EPICS Workbench does against a live EPICS runtime, either through CA/PVA channel access or through a tracked IOC shell terminal.
+
+There are two runtime layers in the extension:
+
+- channel runtime: via widgets `Probe`, `PV List`, and `PV Monitor`
+- IOC shell runtime: startup-file-driven IOC launch, shell commands, and IOC process inspection
+
+Channel runtime features include:
+ - choose `ca` or `pva` as the default protocol
+ - monitor and control channels, inspect live values, and write values back via widgets `Probe`, `PV List`, and `PV Monitor` from database, startup, and substitutions.
+
+IOC shell runtime features include:
+
+- start and stop an IOC from the active startup file under `iocBoot`
+- keep the IOC attached to a tracked VS Code terminal and bring that terminal back to front
+- choose the IOC shell terminal explicitly with `Set IOC Shell Terminal`
+- send arbitrary shell commands with `Run IOC Command...`
+- run shortcut actions for `dbl` and `dbpr` on the current record when one can be resolved
+- open `IOC Runtime Commands` to browse commands discovered from the running IOC
+- open `IOC Runtime Variables` to inspect and update `var` values
+- open `IOC Runtime Environment` to inspect and update `epicsEnvShow` and `epicsEnvSet` values
+
+## TDM Integration
+
+[TDM](https://github.com/diverhao/tdm) is a web-based EPICS display manager. Its browser-driven runtime fits naturally into VS Code, which makes it a practical way to bring operator displays into the editor alongside the rest of the EPICS workflow.
+
+In EPICS Workbench, TDM integration focuses on opening operator interface displays from the workspace without leaving VS Code. The extension runs a local TDM web runtime, maps display navigation into editor tabs, and keeps the display workflow close to source files, IOC assets, and other EPICS tools already available in the editor.
+
+TDM scope covers display files hosted inside VS Code through a custom editor backed by a local TDM web runtime.
+
+- open `.tdl`, `.edl`, `.bob`, `.stp`, and `.plt` files directly in VS Code
+- launch displays from the editor, explorer, or `EPICS: Open in TDM`
+- use the vendored runtime under `vscode/vendor/tdm` by default, with `externalBinary` as a fallback
+- load TDM profile settings from `~/.tdm/profiles.json` or explicit `epicsWorkbench.tdm.*` settings
+- open popup displays in additional VS Code tabs instead of separate native windows
+
+How it works:
+
+- EPICS Workbench starts TDM in `web` mode
+- it creates a display window agent through TDM's `/command` API
+- it hosts the resulting `DisplayWindow.html?...` page inside a VS Code webview tab
+- when that TDM display opens another display, the extension intercepts the popup request and opens another VS Code tab instead
+
+The vendored runtime is started through a Node launcher owned by the extension instead of a separately managed TDM binary. The old executable-based launch path is still available as an explicit fallback.
+
+### Required Settings
+
+Set these in VS Code if auto-detection is not enough:
+
+- `epicsWorkbench.tdm.runtimeMode`
+- `epicsWorkbench.tdm.rootPath`
+- `epicsWorkbench.tdm.executablePath`
+- `epicsWorkbench.tdm.profilesPath`
+- `epicsWorkbench.tdm.profile`
+
+If you want the extension-owned runtime, leave `epicsWorkbench.tdm.runtimeMode` at `vendoredSource`.
+
+If you need to fall back to a separately built TDM checkout, switch `epicsWorkbench.tdm.runtimeMode` to `externalBinary` and point `epicsWorkbench.tdm.executablePath` at a runnable launcher if auto-detection is not enough.
+
+The extension defaults to:
+
+- `vendoredSource` launch mode when `vscode/vendor/tdm` exists
+- `externalBinary` only when explicitly selected or when the vendored runtime is missing
+- `TDM_ROOT`
+- a sibling `../tdm` checkout next to the current workspace for `externalBinary`
+- `~/.tdm/profiles.json`
+- the first non-`For All Profiles` profile in that file
+
+### Updating The Vendored TDM Copy
+
+To refresh the copied TDM tree from a local checkout without editing the original source in place, run:
+
+```sh
+npm run sync:tdm-vendor
 ```
 
-Then press `F5`, and in the Extension Development Host open:
+or:
 
-```bash
-/Users/1h7/projects/epics-workbench/appTest
+```sh
+python3 ./scripts/sync-vendored-tdm.py
 ```
+
+The sync script copies a runtime-focused vendored snapshot:
+
+- top-level TDM metadata needed to identify and launch the vendored runtime
+- the built web assets and runtime layout under `vscode/vendor/tdm/dist`
+- the runtime dependency closure needed by the vendored Node-hosted web mode
+
+It intentionally does not copy `vscode/vendor/tdm/src`, because the current VS Code vendored runtime launches from `dist` and reads runtime assets from `dist/common/resources`.
+
+### How To Use It
+
+Open a supported TDM display file in VS Code, or run:
+
+- `EPICS: Open in TDM`
+
+You can also right-click a supported display file in the explorer and choose:
+
+- `Open in TDM`
+
 
 ## Database Files: `.db`, `.vdb`, `.template`
 
@@ -65,8 +212,8 @@ Then press `F5`, and in the Extension Development Host open:
 - `Probe`
 - `PV List`
 - `PV Monitor`
-- `Export Excel`
-- `Import Excel as EPICS DB`
+- `Export Database File to Excel`
+- `Import Excel as Database`
 - `Format File`
 
 ### Practical Example: Record References
@@ -476,86 +623,6 @@ Expected result:
 
 - rename is rejected because `abcd3` already exists in the workspace
 
-## TDM Display Integration
-
-The extension can open TDM display files directly inside VS Code tabs through a custom editor.
-
-Supported file types:
-
-- `.tdl`
-- `.edl`
-- `.bob`
-- `.stp`
-- `.plt`
-
-How it works:
-
-- EPICS Workbench starts TDM in `web` mode
-- it creates a display window agent through TDM's `/command` API
-- it hosts the resulting `DisplayWindow.html?...` page inside a VS Code webview tab
-- when that TDM display opens another display, the extension intercepts the popup request and opens another VS Code tab instead
-
-By default, the extension now prefers the vendored TDM runtime copied into:
-
-- `vscode/vendor/tdm`
-
-That vendored runtime is started through a Node launcher owned by the extension instead of a separately managed TDM binary. The old executable-based launch path is still available as an explicit fallback.
-
-### Required Settings
-
-Set these in VS Code if auto-detection is not enough:
-
-- `epicsWorkbench.tdm.runtimeMode`
-- `epicsWorkbench.tdm.rootPath`
-- `epicsWorkbench.tdm.executablePath`
-- `epicsWorkbench.tdm.profilesPath`
-- `epicsWorkbench.tdm.profile`
-
-If you want the extension-owned runtime, leave `epicsWorkbench.tdm.runtimeMode` at `vendoredSource`.
-
-If you need to fall back to a separately built TDM checkout, switch `epicsWorkbench.tdm.runtimeMode` to `externalBinary` and point `epicsWorkbench.tdm.executablePath` at a runnable launcher if auto-detection is not enough.
-
-The extension defaults to:
-
-- `vendoredSource` launch mode when `vscode/vendor/tdm` exists
-- `externalBinary` only when explicitly selected or when the vendored runtime is missing
-- `TDM_ROOT`
-- a sibling `../tdm` checkout next to the current workspace for `externalBinary`
-- `~/.tdm/profiles.json`
-- the first non-`For All Profiles` profile in that file
-
-### Updating The Vendored TDM Copy
-
-To refresh the copied TDM tree from a local checkout without editing the original source in place, run:
-
-```sh
-npm run sync:tdm-vendor
-```
-
-or:
-
-```sh
-python3 ./scripts/sync-vendored-tdm.py
-```
-
-The sync script copies a runtime-focused vendored snapshot:
-
-- top-level TDM metadata needed to identify and launch the vendored runtime
-- the built web assets and runtime layout under `vscode/vendor/tdm/dist`
-- the runtime dependency closure needed by the vendored Node-hosted web mode
-
-It intentionally does not copy `vscode/vendor/tdm/src`, because the current VS Code vendored runtime launches from `dist` and reads runtime assets from `dist/common/resources`.
-
-### How To Use It
-
-Open a supported TDM display file in VS Code, or run:
-
-- `EPICS: Open in TDM`
-
-You can also right-click a supported display file in the explorer and choose:
-
-- `Open in TDM`
-
 ## Known Scope Limits
 
 - DB TOC macro-aware record lookup is implemented for database record references. The references panel still shows the literal source text from the file.
@@ -585,3 +652,6 @@ For each one, test:
 - `Rename Symbol`
 - quick fix where applicable
 - context-menu widgets where applicable
+
+
+This work is sponsored by Oak Ridge National Laboratory.

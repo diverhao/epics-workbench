@@ -75,6 +75,7 @@ const PROJECT_INDEX_GLOBS = [
   "**/Makefile",
   "**/configure/RELEASE",
   "**/configure/RELEASE.local",
+  "**/configure/RULES_TOP",
 ];
 const EPICS_PROJECT_MARKER_SEGMENTS = [
   ["Makefile"],
@@ -10654,7 +10655,7 @@ async function buildWithLocalMakefile(resourceUri, outputChannel) {
     buildDirectory,
     outputChannel,
     `Build ${path.basename(buildDirectory)}`,
-    [["clean"]],
+    [[]],
   );
 }
 
@@ -10670,7 +10671,7 @@ async function cleanWithLocalMakefile(resourceUri, outputChannel) {
     buildDirectory,
     outputChannel,
     `Clean ${path.basename(buildDirectory)}`,
-    [[]],
+    [["clean"]],
   );
 }
 
@@ -16862,6 +16863,9 @@ function isProjectModelUri(uri) {
     path.basename(path.dirname(uri.fsPath)) === "configure"
   ) || (
     baseName === "RELEASE.local" &&
+    path.basename(path.dirname(uri.fsPath)) === "configure"
+  ) || (
+    baseName === "RULES_TOP" &&
     path.basename(path.dirname(uri.fsPath)) === "configure"
   );
 }
