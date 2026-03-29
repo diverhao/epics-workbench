@@ -433,6 +433,11 @@
                 {
                     "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "2_dump@2",
+                    "command": "vscode-epics.dumpAllIocRecordNames"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "2_dump@3",
                     "command": "vscode-epics.dumpIocRecord"
                 },
                 {
@@ -443,6 +448,16 @@
                 {
                     "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "3_widgets@2",
+                    "command": "vscode-epics.runIocRuntimeCommand"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "3_widgets@3",
+                    "command": "vscode-epics.openIocCommandHistory"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "3_widgets@4",
                     "command": "vscode-epics.pvlistAllIocRecords"
                 }
             ],
@@ -956,6 +971,12 @@
                 "icon": "$(list-tree)"
             },
             {
+                "title": "Dump All Record Names",
+                "command": "vscode-epics.dumpAllIocRecordNames",
+                "category": "EPICS",
+                "icon": "$(list-unordered)"
+            },
+            {
                 "title": "Dump Record",
                 "command": "vscode-epics.dumpIocRecord",
                 "category": "EPICS",
@@ -966,6 +987,18 @@
                 "command": "vscode-epics.probeIocRecord",
                 "category": "EPICS",
                 "icon": "$(debug-alt-small)"
+            },
+            {
+                "title": "Run Command",
+                "command": "vscode-epics.runIocRuntimeCommand",
+                "category": "EPICS",
+                "icon": "$(play)"
+            },
+            {
+                "title": "Command History",
+                "command": "vscode-epics.openIocCommandHistory",
+                "category": "EPICS",
+                "icon": "$(history)"
             },
             {
                 "title": "PV List All Records",
@@ -1020,6 +1053,18 @@
                 "command": "vscode-epics.openInTdm",
                 "category": "EPICS",
                 "icon": "$(device-desktop)"
+            }
+        ],
+        "keybindings": [
+            {
+                "key": "tab",
+                "command": "vscode-epics.acceptRunIocRuntimeQuickPickItem",
+                "when": "inQuickOpen && epicsWorkbench.runIocRuntimeQuickPickVisible"
+            },
+            {
+                "key": "enter",
+                "command": "vscode-epics.submitRunIocRuntimeQuickPick",
+                "when": "inQuickOpen && epicsWorkbench.runIocRuntimeQuickPickVisible"
             }
         ],
         "submenus": [
@@ -1093,8 +1138,11 @@
         "onCommand:vscode-epics.runIocShellDbl",
         "onCommand:vscode-epics.runIocShellDbprCurrentRecord",
         "onCommand:vscode-epics.dumpAllIocRecords",
+        "onCommand:vscode-epics.dumpAllIocRecordNames",
         "onCommand:vscode-epics.dumpIocRecord",
         "onCommand:vscode-epics.probeIocRecord",
+        "onCommand:vscode-epics.runIocRuntimeCommand",
+        "onCommand:vscode-epics.openIocCommandHistory",
         "onCommand:vscode-epics.pvlistAllIocRecords",
         "onCommand:vscode-epics.startActiveStartupIoc",
         "onCommand:vscode-epics.manageProjectStartupIoc",

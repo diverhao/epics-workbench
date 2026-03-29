@@ -82,9 +82,12 @@ class EpicsIocRuntimePopupGroup : AbstractEpicsPopupGroup(
   "org.epics.workbench.OpenIocRuntimeEnvironmentAction",
   SEPARATOR,
   "org.epics.workbench.DumpAllRecordsAction",
+  "org.epics.workbench.DumpAllRecordNamesAction",
   "org.epics.workbench.DumpRecordAction",
   SEPARATOR,
   "org.epics.workbench.ProbeRecordAction",
+  "org.epics.workbench.RunCommandAction",
+  "org.epics.workbench.CommandHistoryAction",
   "org.epics.workbench.PvlistAllRecordsAction",
 ) {
   override fun update(event: AnActionEvent) {

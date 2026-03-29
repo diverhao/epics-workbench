@@ -16,6 +16,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -23,6 +24,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
 import com.intellij.util.messages.Topic
 import com.intellij.util.execution.ParametersListUtil
+import org.epics.workbench.filetypes.EpicsMonitorFileType
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -77,6 +79,8 @@ class EpicsIocRuntimeService(
 ) : Disposable {
   private val sessionsByStartupPath = linkedMapOf<String, IocProcessSession>()
   private val sessionLock = Any()
+  private val commandHistoryLock = Any()
+  private val commandHistoryEntries = mutableListOf<String>()
   private val configurationService = project.service<EpicsRuntimeProjectConfigurationService>()
 
   fun isRunning(startupFile: VirtualFile): Boolean {
@@ -203,7 +207,7 @@ class EpicsIocRuntimeService(
   fun getCommandNames(startupFile: VirtualFile): List<String> {
     val session = getRequiredSession(startupFile)
     session.commandNames.get()?.let { return it }
-    val output = captureRawCommand(session, "help")
+    val output = captureRawCommand(session, "help", recordHistory = false)
     val commands = parseCommandNames(output)
     session.commandNames.compareAndSet(null, commands)
     return session.commandNames.get().orEmpty()
@@ -223,7 +227,11 @@ class EpicsIocRuntimeService(
       }
       val missing = commandNames.filterNot { result.containsKey(it) }
       missing.chunked(HELP_BATCH_SIZE).forEach { batch ->
-        val output = captureRawCommandLocked(session, "help ${batch.joinToString(" ")}")
+        val output = captureRawCommandLocked(
+          session,
+          "help ${batch.joinToString(" ")}",
+          recordHistory = false,
+        )
         parseCommandHelp(batch, output).forEach { (commandName, helpText) ->
           session.commandHelp[commandName] = helpText
           result[commandName] = helpText
@@ -234,7 +242,7 @@ class EpicsIocRuntimeService(
   }
 
   fun listRuntimeVariables(startupFile: VirtualFile): List<EpicsIocRuntimeVariable> {
-    val output = captureCommandOutput(startupFile, "var")
+    val output = captureCommandOutput(startupFile, "var", recordHistory = false)
     return parseRuntimeVariables(output)
   }
 
@@ -243,7 +251,7 @@ class EpicsIocRuntimeService(
   }
 
   fun listRuntimeEnvironment(startupFile: VirtualFile): List<EpicsIocRuntimeEnvironmentEntry> {
-    val output = captureCommandOutput(startupFile, "epicsEnvShow")
+    val output = captureCommandOutput(startupFile, "epicsEnvShow", recordHistory = false)
     return parseRuntimeEnvironment(output)
   }
 
@@ -252,16 +260,59 @@ class EpicsIocRuntimeService(
     sendCommandText(startupFile, "epicsEnvSet $name \"$escaped\"")
   }
 
-  fun sendCommandText(startupFile: VirtualFile, commandText: String) {
+  fun sendCommandText(
+    startupFile: VirtualFile,
+    commandText: String,
+    recordHistory: Boolean = true,
+    historyCommandText: String? = null,
+  ) {
     val session = getRequiredSession(startupFile)
+    val trimmedCommand = commandText.trim()
+    if (trimmedCommand.isEmpty()) {
+      return
+    }
+    val trimmedHistoryCommand =
+      historyCommandText?.trim()?.takeIf(String::isNotEmpty) ?: trimmedCommand
     synchronized(session.commandLock) {
-      sendLine(session, commandText)
+      if (recordHistory) {
+        appendCommandHistory(trimmedHistoryCommand)
+      }
+      sendLine(session, trimmedCommand)
     }
   }
 
-  fun captureCommandOutput(startupFile: VirtualFile, commandText: String): String {
+  fun captureCommandOutput(
+    startupFile: VirtualFile,
+    commandText: String,
+    recordHistory: Boolean = true,
+    historyCommandText: String? = null,
+  ): String {
     val session = getRequiredSession(startupFile)
-    return captureRawCommand(session, commandText)
+    return captureRawCommand(
+      session,
+      commandText,
+      recordHistory = recordHistory,
+      historyCommandText = historyCommandText,
+    )
+  }
+
+  fun readCommandHistory(): List<String> {
+    synchronized(commandHistoryLock) {
+      return commandHistoryEntries.asReversed().toList()
+    }
+  }
+
+  private fun appendCommandHistory(commandText: String) {
+    synchronized(commandHistoryLock) {
+      commandHistoryEntries += commandText
+      while (commandHistoryEntries.size > COMMAND_HISTORY_MAX_LENGTH) {
+        commandHistoryEntries.removeAt(0)
+      }
+    }
+  }
+
+  fun getWorkingDirectory(startupFile: VirtualFile): Path {
+    return getRequiredSession(startupFile).workingDirectory
   }
 
   fun openCapturedOutput(startupFile: VirtualFile, titlePrefix: String, commandText: String, output: String) {
@@ -284,11 +335,23 @@ class EpicsIocRuntimeService(
     }
   }
 
-  fun openTemporaryOutputFile(fileName: String, content: String) {
-    val file = LightVirtualFile(fileName, content)
+  fun openTemporaryOutputFile(
+    fileName: String,
+    content: String,
+    fileType: FileType? = null,
+  ) {
+    val file = if (fileType != null) {
+      LightVirtualFile(fileName, fileType, content)
+    } else {
+      LightVirtualFile(fileName, content)
+    }
     ApplicationManager.getApplication().invokeLater {
       FileEditorManager.getInstance(project).openFile(file, true, true)
     }
+  }
+
+  fun openTemporaryPvlistOutputFile(fileName: String, content: String) {
+    openTemporaryOutputFile(fileName, content, EpicsMonitorFileType.INSTANCE)
   }
 
   override fun dispose() {
@@ -310,17 +373,41 @@ class EpicsIocRuntimeService(
       ?: throw IllegalStateException("${startupFile.name} is not running in EPICS Workbench.")
   }
 
-  private fun captureRawCommand(session: IocProcessSession, commandText: String): String {
+  private fun captureRawCommand(
+    session: IocProcessSession,
+    commandText: String,
+    recordHistory: Boolean = true,
+    historyCommandText: String? = null,
+  ): String {
     synchronized(session.commandLock) {
-      return captureRawCommandLocked(session, commandText)
+      return captureRawCommandLocked(
+        session,
+        commandText,
+        recordHistory = recordHistory,
+        historyCommandText = historyCommandText,
+      )
     }
   }
 
-  private fun captureRawCommandLocked(session: IocProcessSession, commandText: String): String {
+  private fun captureRawCommandLocked(
+    session: IocProcessSession,
+    commandText: String,
+    recordHistory: Boolean = true,
+    historyCommandText: String? = null,
+  ): String {
+    val trimmedCommand = commandText.trim()
+    if (trimmedCommand.isEmpty()) {
+      return ""
+    }
+    val trimmedHistoryCommand =
+      historyCommandText?.trim()?.takeIf(String::isNotEmpty) ?: trimmedCommand
     val tempFile = Files.createTempFile(TEMP_FILE_PREFIX, ".txt")
     val output = runCatching {
       Files.deleteIfExists(tempFile)
-      sendLine(session, "$commandText > ${tempFile.toAbsolutePath()}")
+      if (recordHistory) {
+        appendCommandHistory(trimmedHistoryCommand)
+      }
+      sendLine(session, "$trimmedCommand > ${tempFile.toAbsolutePath()}")
       waitForCapturedOutput(tempFile)
       sanitizeCapturedOutput(Files.readString(tempFile))
     }.also {
@@ -461,6 +548,7 @@ class EpicsIocRuntimeService(
   companion object {
     private const val NOTIFICATION_GROUP_ID = "EPICS Workbench Notifications"
     private const val TEMP_FILE_PREFIX = "epics-workbench-ioc-output-"
+    private const val COMMAND_HISTORY_MAX_LENGTH = 500
     private const val CAPTURE_TIMEOUT_MS = 8_000L
     private const val CAPTURE_POLL_INTERVAL_MS = 50L
     private const val HELP_BATCH_SIZE = 24

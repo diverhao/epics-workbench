@@ -443,6 +443,12 @@
       description="Choose a running IOC and open its dbDumpRecord output in a temporary tab"
     />
     <action
+      id="org.epics.workbench.DumpAllRecordNamesAction"
+      class="org.epics.workbench.runtime.DumpAllRecordNamesAction"
+      text="Dump All Record Names"
+      description="Choose a running IOC and open its dbl output in a temporary tab"
+    />
+    <action
       id="org.epics.workbench.DumpRecordAction"
       class="org.epics.workbench.runtime.DumpRecordAction"
       text="Dump Record"
@@ -453,6 +459,18 @@
       class="org.epics.workbench.runtime.ProbeRecordAction"
       text="Probe a Record"
       description="Collect dbDumpRecord output from running IOCs, filter records, and open the selected record in Probe"
+    />
+    <action
+      id="org.epics.workbench.RunCommandAction"
+      class="org.epics.workbench.runtime.RunCommandAction"
+      text="Run Command"
+      description="Choose a running IOC, filter its runtime commands, and send a command"
+    />
+    <action
+      id="org.epics.workbench.CommandHistoryAction"
+      class="org.epics.workbench.runtime.CommandHistoryAction"
+      text="Command History"
+      description="Choose a running IOC and resend a command from shared command history"
     />
     <action
       id="org.epics.workbench.PvlistAllRecordsAction"

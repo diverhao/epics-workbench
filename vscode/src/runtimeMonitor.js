@@ -28,8 +28,16 @@ const RUN_IOC_SHELL_DBL_COMMAND = "vscode-epics.runIocShellDbl";
 const RUN_IOC_SHELL_DBPR_CURRENT_RECORD_COMMAND =
   "vscode-epics.runIocShellDbprCurrentRecord";
 const DUMP_ALL_IOC_RECORDS_COMMAND = "vscode-epics.dumpAllIocRecords";
+const DUMP_ALL_IOC_RECORD_NAMES_COMMAND =
+  "vscode-epics.dumpAllIocRecordNames";
 const DUMP_IOC_RECORD_COMMAND = "vscode-epics.dumpIocRecord";
 const PROBE_IOC_RECORD_COMMAND = "vscode-epics.probeIocRecord";
+const RUN_IOC_RUNTIME_COMMAND_COMMAND = "vscode-epics.runIocRuntimeCommand";
+const IOC_COMMAND_HISTORY_COMMAND = "vscode-epics.openIocCommandHistory";
+const ACCEPT_RUN_IOC_RUNTIME_QUICK_PICK_ITEM_COMMAND =
+  "vscode-epics.acceptRunIocRuntimeQuickPickItem";
+const SUBMIT_RUN_IOC_RUNTIME_QUICK_PICK_COMMAND =
+  "vscode-epics.submitRunIocRuntimeQuickPick";
 const PVLIST_ALL_IOC_RECORDS_COMMAND = "vscode-epics.pvlistAllIocRecords";
 const START_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.startActiveStartupIoc";
 const STOP_ACTIVE_STARTUP_IOC_COMMAND = "vscode-epics.stopActiveStartupIoc";
@@ -81,6 +89,36 @@ const PROBE_LINK_FIELD_TYPES = new Set([
 ]);
 const STARTUP_TERMINAL_OUTPUT_MAX_LENGTH = 250000;
 const IOC_RUNTIME_COMMANDS_FETCH_TIMEOUT_MS = 5000;
+const PROJECT_IOC_COMMAND_HISTORY_MAX_LENGTH = 500;
+const IOC_RUNTIME_RECORD_ARGUMENT_COMMANDS = new Set([
+  "dbpf",
+  "dba",
+  "dbb",
+  "dbap",
+  "dbc",
+  "dbcar",
+  "dbd",
+  "dbel",
+  "dbgf",
+  "dbgrep",
+  "dbjlr",
+  "dblsr",
+  "dbp",
+  "dbpr",
+  "dbs",
+  "dbtgf",
+  "dbtpf",
+  "dbtpn",
+  "dbtr",
+  "gft",
+  "pft",
+  "tpn",
+]);
+const IOC_RUNTIME_ENVIRONMENT_ARGUMENT_COMMANDS = new Set([
+  "epicsenvset",
+  "epicsenvshow",
+  "epicsenvunset",
+]);
 const STARTUP_RUNNING_WATERMARK_LINE_INTERVAL = 6;
 const CONTEXT_INITIALIZATION_CANCELLED_MESSAGE =
   "EPICS runtime context initialization was cancelled.";
@@ -94,6 +132,8 @@ const ACTIVE_STARTUP_CAN_STOP_IOC_CONTEXT_KEY =
   "epicsWorkbench.activeStartupCanStopIoc";
 const HAS_RUNNING_PROJECT_IOC_CONTEXT_KEY =
   "epicsWorkbench.hasRunningProjectIoc";
+const RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY =
+  "epicsWorkbench.runIocRuntimeQuickPickVisible";
 const STARTUP_IOC_PICKER_START_BUTTON = {
   iconPath: new vscode.ThemeIcon("play"),
   tooltip: "Start",
@@ -308,8 +348,26 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
+      ACCEPT_RUN_IOC_RUNTIME_QUICK_PICK_ITEM_COMMAND,
+      async () => controller.acceptRunIocRuntimeQuickPickItem(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      SUBMIT_RUN_IOC_RUNTIME_QUICK_PICK_COMMAND,
+      async () => controller.submitRunIocRuntimeQuickPick(),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
       DUMP_ALL_IOC_RECORDS_COMMAND,
       async (resourceUri) => controller.dumpAllIocRecords(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      DUMP_ALL_IOC_RECORD_NAMES_COMMAND,
+      async (resourceUri) => controller.dumpAllIocRecordNames(resourceUri),
     ),
   );
   extensionContext.subscriptions.push(
@@ -322,6 +380,18 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
     vscode.commands.registerCommand(
       PROBE_IOC_RECORD_COMMAND,
       async (resourceUri) => controller.probeIocRecord(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      RUN_IOC_RUNTIME_COMMAND_COMMAND,
+      async (resourceUri) => controller.runIocRuntimeCommand(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
+      IOC_COMMAND_HISTORY_COMMAND,
+      async (resourceUri) => controller.openIocCommandHistory(resourceUri),
     ),
   );
   extensionContext.subscriptions.push(
@@ -538,6 +608,9 @@ class EpicsRuntimeMonitorController {
     this.iocRuntimeVariablesPanelState = undefined;
     this.iocRuntimeEnvironmentPanel = undefined;
     this.iocRuntimeEnvironmentPanelState = undefined;
+    this.runIocRuntimeQuickPick = undefined;
+    this.runIocRuntimeQuickPickApplySelection = undefined;
+    this.runIocRuntimeQuickPickSubmit = undefined;
     this.probeWidgets = new Map();
     this.pvlistWidgets = new Map();
     this.monitorWidgets = new Map();
@@ -554,6 +627,8 @@ class EpicsRuntimeMonitorController {
     this.iocRuntimeVariablesByTerminal = new Map();
     this.iocRuntimeVariablesReloadTimer = undefined;
     this.iocRuntimeEnvironmentByTerminal = new Map();
+    this.iocRecordNamesByTerminal = new Map();
+    this.projectIocCommandHistoryByScope = new Map();
     this.iocRuntimeEnvironmentReloadTimer = undefined;
   }
 
@@ -594,6 +669,15 @@ class EpicsRuntimeMonitorController {
     this.iocRuntimeEnvironmentPanel?.dispose();
     this.iocRuntimeEnvironmentPanel = undefined;
     this.iocRuntimeEnvironmentPanelState = undefined;
+    this.runIocRuntimeQuickPick?.dispose();
+    this.runIocRuntimeQuickPick = undefined;
+    this.runIocRuntimeQuickPickApplySelection = undefined;
+    this.runIocRuntimeQuickPickSubmit = undefined;
+    void vscode.commands.executeCommand(
+      "setContext",
+      RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+      false,
+    );
     for (const widgetState of this.probeWidgets.values()) {
       widgetState.panel.dispose();
     }
@@ -616,6 +700,8 @@ class EpicsRuntimeMonitorController {
     this.iocRuntimeVariablesByTerminal.clear();
     this.disposeIocRuntimeVariablesReloadTimer();
     this.iocRuntimeEnvironmentByTerminal.clear();
+    this.projectIocCommandHistoryByScope.clear();
+    this.iocRecordNamesByTerminal.clear();
     this.disposeIocRuntimeEnvironmentReloadTimer();
     this.runtimeConfigurationPanel?.dispose();
     this.runtimeConfigurationPanel = undefined;
@@ -640,6 +726,7 @@ class EpicsRuntimeMonitorController {
     this.iocRuntimeCommandHelpByTerminal.delete(terminal);
     this.iocRuntimeVariablesByTerminal.delete(terminal);
     this.iocRuntimeEnvironmentByTerminal.delete(terminal);
+    this.iocRecordNamesByTerminal.delete(terminal);
     if (this.iocShellTerminal === terminal) {
       this.iocShellTerminal = undefined;
       this.refresh(this.contextNode);
@@ -824,7 +911,10 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
-    await this.sendIocShellCommand(commandText);
+    await this.sendIocShellCommand(commandText, undefined, {
+      normalizeRuntimeCommand: true,
+      historyCommandText: commandText,
+    });
   }
 
   async sendNamedIocShellCommand(commandText) {
@@ -840,12 +930,67 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
-    await this.sendIocShellCommand(`dbpr ${recordName}`);
+    await this.sendIocShellCommand(`dbpr ${recordName}`, undefined, {
+      normalizeRuntimeCommand: true,
+      historyCommandText: `dbpr ${recordName}`,
+    });
   }
 
-  async sendIocShellCommand(commandText, terminalOverride) {
+  resolveIocCommandHistoryScopeKeyForTerminal(terminal) {
+    const startupDocumentPath = this.iocStartupDocumentPathByTerminal.get(terminal);
+    if (startupDocumentPath) {
+      const projectRootPath = findContainingEpicsProjectRootPath(startupDocumentPath);
+      return projectRootPath || `startup:${startupDocumentPath}`;
+    }
+
+    const workingDirectory = this.getTerminalCurrentDirectory(terminal);
+    if (!workingDirectory) {
+      return undefined;
+    }
+    const projectRootPath = findContainingEpicsProjectRootPath(workingDirectory);
+    return projectRootPath || `cwd:${workingDirectory}`;
+  }
+
+  async appendProjectIocCommandHistory(commandText, terminal) {
     const trimmedCommand = String(commandText || "").trim();
     if (!trimmedCommand) {
+      return;
+    }
+
+    const scopeKey = this.resolveIocCommandHistoryScopeKeyForTerminal(terminal);
+    if (!scopeKey) {
+      return;
+    }
+
+    const historyEntries = [
+      ...(this.projectIocCommandHistoryByScope.get(scopeKey) || []),
+      trimmedCommand,
+    ];
+    if (historyEntries.length > PROJECT_IOC_COMMAND_HISTORY_MAX_LENGTH) {
+      this.projectIocCommandHistoryByScope.set(
+        scopeKey,
+        historyEntries.slice(
+          historyEntries.length - PROJECT_IOC_COMMAND_HISTORY_MAX_LENGTH,
+        ),
+      );
+      return;
+    }
+
+    this.projectIocCommandHistoryByScope.set(scopeKey, historyEntries);
+  }
+
+  async readProjectIocCommandHistory(terminal) {
+    const scopeKey = this.resolveIocCommandHistoryScopeKeyForTerminal(terminal);
+    if (!scopeKey) {
+      return [];
+    }
+
+    return [...(this.projectIocCommandHistoryByScope.get(scopeKey) || [])].reverse();
+  }
+
+  async sendIocShellCommand(commandText, terminalOverride, options = {}) {
+    const rawCommandText = String(commandText || "").trim();
+    if (!rawCommandText) {
       return false;
     }
 
@@ -857,11 +1002,25 @@ class EpicsRuntimeMonitorController {
       return false;
     }
 
+    const executionCommandText = options?.normalizeRuntimeCommand
+      ? await this.normalizeRunIocRuntimeCommandForExecution(
+          rawCommandText,
+          terminal,
+          options?.knownCommandNames,
+        )
+      : rawCommandText;
+
+    const historyCommandText = String(
+      options?.historyCommandText || rawCommandText,
+    ).trim();
     this.iocShellTerminal = terminal;
-    this.lastIocShellCommand = trimmedCommand;
-    terminal.sendText(trimmedCommand, true);
+    this.lastIocShellCommand = historyCommandText || rawCommandText;
+    terminal.sendText(executionCommandText || rawCommandText, true);
+    if (options?.recordHistory !== false && historyCommandText) {
+      void this.appendProjectIocCommandHistory(historyCommandText, terminal);
+    }
     this.refresh(this.contextNode);
-    vscode.window.setStatusBarMessage(`IOC> ${trimmedCommand}`, 2500);
+    vscode.window.setStatusBarMessage(`IOC> ${historyCommandText || rawCommandText}`, 2500);
     return true;
   }
 
@@ -932,7 +1091,9 @@ class EpicsRuntimeMonitorController {
       return cachedCommands;
     }
 
-    const helpOutput = await this.captureIocShellCommandOutput("help", terminal);
+    const helpOutput = await this.captureIocShellCommandOutput("help", terminal, {
+      recordHistory: false,
+    });
     if (helpOutput === undefined) {
       return [];
     }
@@ -1018,6 +1179,7 @@ class EpicsRuntimeMonitorController {
       const helpOutput = await this.captureIocShellCommandOutput(
         `help ${missingCommandNames.join(" ")}`,
         terminal,
+        { recordHistory: false },
       );
       const parsedHelp =
         helpOutput === undefined
@@ -1133,7 +1295,9 @@ class EpicsRuntimeMonitorController {
       return cachedVariables;
     }
 
-    const variableOutput = await this.captureIocShellCommandOutput("var", terminal);
+    const variableOutput = await this.captureIocShellCommandOutput("var", terminal, {
+      recordHistory: false,
+    });
     if (variableOutput === undefined) {
       return [];
     }
@@ -1184,7 +1348,11 @@ class EpicsRuntimeMonitorController {
       return cachedEntries;
     }
 
-    const outputText = await this.captureIocShellCommandOutput("epicsEnvShow", terminal);
+    const outputText = await this.captureIocShellCommandOutput(
+      "epicsEnvShow",
+      terminal,
+      { recordHistory: false },
+    );
     if (outputText === undefined) {
       return [];
     }
@@ -1193,6 +1361,58 @@ class EpicsRuntimeMonitorController {
       this.iocRuntimeEnvironmentByTerminal.set(terminal, parsedEntries);
     }
     return parsedEntries;
+  }
+
+  extractIocRuntimeCommandSummary(helpText) {
+    return truncateText(
+      String(helpText || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean) || "No detailed help is available.",
+      160,
+    );
+  }
+
+  parseIocRuntimeRecordNamesOutput(outputText) {
+    const sanitizedText = stripAnsiTerminalText(outputText)
+      .replace(/\r/g, "")
+      .replace(/\u0000/g, "");
+    const recordNames = [];
+    const seenNames = new Set();
+
+    for (const rawLine of sanitizedText.split("\n")) {
+      const recordName = String(rawLine || "").trim();
+      if (!recordName || /^epics>/.test(recordName) || seenNames.has(recordName)) {
+        continue;
+      }
+      seenNames.add(recordName);
+      recordNames.push(recordName);
+    }
+
+    return recordNames;
+  }
+
+  async fetchIocRecordNamesForTerminal(terminal) {
+    if (!terminal || !vscode.window.terminals.includes(terminal)) {
+      return [];
+    }
+
+    const cachedRecordNames = this.iocRecordNamesByTerminal.get(terminal);
+    if (Array.isArray(cachedRecordNames) && cachedRecordNames.length) {
+      return cachedRecordNames;
+    }
+
+    const outputText = await this.captureIocShellCommandOutput("dbl", terminal, {
+      recordHistory: false,
+    });
+    if (outputText === undefined) {
+      return [];
+    }
+    const parsedRecordNames = this.parseIocRuntimeRecordNamesOutput(outputText);
+    if (parsedRecordNames.length) {
+      this.iocRecordNamesByTerminal.set(terminal, parsedRecordNames);
+    }
+    return parsedRecordNames;
   }
 
   disposeIocRuntimeVariablesReloadTimer() {
@@ -1235,7 +1455,220 @@ class EpicsRuntimeMonitorController {
       .replace(/\n/g, "\\n")}"`;
   }
 
-  async captureIocShellCommandOutput(commandText, terminal) {
+  containsRunIocRuntimeShellControlSyntax(text) {
+    let inDoubleQuote = false;
+    let escaped = false;
+    let nestedParentheses = 0;
+    for (const character of String(text || "")) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (inDoubleQuote && character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        inDoubleQuote = !inDoubleQuote;
+        continue;
+      }
+      if (inDoubleQuote) {
+        continue;
+      }
+      if (character === "(") {
+        nestedParentheses += 1;
+        continue;
+      }
+      if (character === ")") {
+        if (nestedParentheses > 0) {
+          nestedParentheses -= 1;
+        }
+        continue;
+      }
+      if (
+        nestedParentheses === 0 &&
+        (character === ">" ||
+          character === "<" ||
+          character === "|" ||
+          character === "&" ||
+          character === ";")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  extractWrappedRunIocRuntimeArgumentText(text) {
+    const trimmedText = String(text || "").trim();
+    if (!trimmedText.startsWith("(")) {
+      return undefined;
+    }
+
+    let inDoubleQuote = false;
+    let escaped = false;
+    let depth = 0;
+    for (let index = 0; index < trimmedText.length; index += 1) {
+      const character = trimmedText[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (inDoubleQuote && character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        inDoubleQuote = !inDoubleQuote;
+        continue;
+      }
+      if (inDoubleQuote) {
+        continue;
+      }
+      if (character === "(") {
+        depth += 1;
+        continue;
+      }
+      if (character === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          if (index !== trimmedText.length - 1) {
+            return undefined;
+          }
+          return trimmedText.slice(1, index);
+        }
+        if (depth < 0) {
+          return undefined;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  splitRunIocRuntimeArgumentTokens(argumentText) {
+    const args = [];
+    let currentToken = "";
+    let inDoubleQuote = false;
+    let escaped = false;
+    let nestedParentheses = 0;
+
+    const flushCurrentToken = () => {
+      const trimmedToken = currentToken.trim();
+      if (trimmedToken) {
+        args.push(trimmedToken);
+      }
+      currentToken = "";
+    };
+
+    for (const character of String(argumentText || "")) {
+      if (escaped) {
+        currentToken += character;
+        escaped = false;
+        continue;
+      }
+      if (inDoubleQuote && character === "\\") {
+        currentToken += character;
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        currentToken += character;
+        inDoubleQuote = !inDoubleQuote;
+        continue;
+      }
+      if (!inDoubleQuote) {
+        if (character === "(") {
+          nestedParentheses += 1;
+          currentToken += character;
+          continue;
+        }
+        if (character === ")") {
+          if (nestedParentheses <= 0) {
+            return undefined;
+          }
+          nestedParentheses -= 1;
+          currentToken += character;
+          continue;
+        }
+        if (nestedParentheses === 0 && (character === "," || /\s/.test(character))) {
+          flushCurrentToken();
+          continue;
+        }
+      }
+      currentToken += character;
+    }
+
+    if (escaped || inDoubleQuote || nestedParentheses !== 0) {
+      return undefined;
+    }
+    flushCurrentToken();
+    return args;
+  }
+
+  async normalizeRunIocRuntimeCommandForExecution(
+    commandText,
+    terminal,
+    knownCommandNames,
+  ) {
+    const trimmedText = String(commandText || "").trim();
+    if (!trimmedText) {
+      return "";
+    }
+
+    const commandMatch = trimmedText.match(/^([A-Za-z_][A-Za-z0-9_]*)([\s\S]*)$/);
+    if (!commandMatch) {
+      return trimmedText;
+    }
+
+    const commandName = commandMatch[1];
+    const remainderText = String(commandMatch[2] || "");
+    if (!remainderText.trim()) {
+      return trimmedText;
+    }
+    if (this.containsRunIocRuntimeShellControlSyntax(remainderText)) {
+      return trimmedText;
+    }
+
+    const availableCommandNames =
+      Array.isArray(knownCommandNames) && knownCommandNames.length
+        ? knownCommandNames
+        : terminal
+          ? await this.fetchIocRuntimeCommandsForTerminal(terminal)
+          : [];
+    const normalizedAvailableCommandNames = new Set(
+      availableCommandNames
+        .map((name) => String(name || "").trim().toLowerCase())
+        .filter(Boolean),
+    );
+    if (
+      !normalizedAvailableCommandNames.size ||
+      !normalizedAvailableCommandNames.has(commandName.toLowerCase())
+    ) {
+      return trimmedText;
+    }
+
+    const trimmedRemainder = remainderText.trim();
+    const wrappedArgumentText = trimmedRemainder.startsWith("(")
+      ? this.extractWrappedRunIocRuntimeArgumentText(trimmedRemainder)
+      : undefined;
+    if (trimmedRemainder.startsWith("(") && wrappedArgumentText === undefined) {
+      return trimmedText;
+    }
+
+    const argumentTokens = this.splitRunIocRuntimeArgumentTokens(
+      wrappedArgumentText !== undefined ? wrappedArgumentText : trimmedRemainder,
+    );
+    if (!Array.isArray(argumentTokens)) {
+      return trimmedText;
+    }
+    if (!argumentTokens.length) {
+      return wrappedArgumentText !== undefined ? `${commandName}()` : commandName;
+    }
+
+    return `${commandName}(${argumentTokens.join(", ")})`;
+  }
+
+  async captureIocShellCommandOutput(commandText, terminal, options = {}) {
     const trimmedCommand = String(commandText || "").trim();
     if (!trimmedCommand) {
       return undefined;
@@ -1243,6 +1676,14 @@ class EpicsRuntimeMonitorController {
     if (!terminal || !vscode.window.terminals.includes(terminal)) {
       return undefined;
     }
+
+    const executionCommandText = options?.normalizeRuntimeCommand
+      ? await this.normalizeRunIocRuntimeCommandForExecution(
+          trimmedCommand,
+          terminal,
+          options?.knownCommandNames,
+        )
+      : trimmedCommand;
 
     const outputFilePath = path.join(
       os.tmpdir(),
@@ -1254,8 +1695,11 @@ class EpicsRuntimeMonitorController {
       // Ignore cleanup failures before capture.
     }
 
-    const redirectedCommand = `${trimmedCommand} > ${outputFilePath}`;
-    const sent = await this.sendIocShellCommand(redirectedCommand, terminal);
+    const redirectedCommand = `${executionCommandText} > ${outputFilePath}`;
+    const sent = await this.sendIocShellCommand(redirectedCommand, terminal, {
+      historyCommandText: String(options?.historyCommandText || trimmedCommand).trim(),
+      recordHistory: options?.recordHistory !== false,
+    });
     if (!sent) {
       return undefined;
     }
@@ -1287,15 +1731,29 @@ class EpicsRuntimeMonitorController {
     return outputText;
   }
 
-  async runIocShellCommandWithCapturedOutput(commandText, terminal) {
+  async runIocShellCommandWithCapturedOutput(commandText, terminal, options = {}) {
     const trimmedCommand = String(commandText || "").trim();
-    const outputText = await this.captureIocShellCommandOutput(trimmedCommand, terminal);
+    if (!trimmedCommand) {
+      return undefined;
+    }
+    const executionCommandText = options?.normalizeRuntimeCommand
+      ? await this.normalizeRunIocRuntimeCommandForExecution(
+          trimmedCommand,
+          terminal,
+          options?.knownCommandNames,
+        )
+      : trimmedCommand;
+    const outputText = await this.captureIocShellCommandOutput(executionCommandText, terminal, {
+      ...options,
+      historyCommandText: String(options?.historyCommandText || trimmedCommand).trim(),
+      normalizeRuntimeCommand: false,
+    });
     if (outputText === undefined) {
       return undefined;
     }
 
     await this.openTemporaryIocOutputDocument(
-      `# ${trimmedCommand}\n\n${outputText || ""}`,
+      `# ${executionCommandText}\n\n${outputText || ""}`,
       { language: "plaintext" },
     );
     return outputText;
@@ -1800,7 +2258,6 @@ class EpicsRuntimeMonitorController {
       notifyIfMissing = true,
     } = {},
   ) {
-    await this.openStartupDocumentPath(startupDocumentPath, true);
     const terminal = await this.resolveRunningStartupIocTerminal(
       startupDocumentPath,
       {
@@ -1831,7 +2288,6 @@ class EpicsRuntimeMonitorController {
       notifyIfMissing = true,
     } = {},
   ) {
-    await this.openStartupDocumentPath(startupDocumentPath, true);
     const terminal = await this.resolveRunningStartupIocTerminal(
       startupDocumentPath,
       {
@@ -1895,6 +2351,28 @@ class EpicsRuntimeMonitorController {
   }
 
   async showProjectStartupIocPicker(resourceUri) {
+    const resourceFsPath = normalizeFsPath(
+      getCommandResourceFsPath(resourceUri) ||
+      vscode.window.activeTextEditor?.document?.uri?.fsPath,
+    );
+    if (isStcmdLikeFilePath(resourceFsPath)) {
+      const isRunning =
+        this.getCandidateRunningStartupIocTerminals(resourceFsPath)
+          .filter((terminal) => vscode.window.terminals.includes(terminal))
+          .length > 0;
+      if (isRunning) {
+        await this.stopStartupIocForDocumentPath(resourceFsPath, {
+          promptIfAmbiguous: false,
+        });
+      } else {
+        await this.startStartupIocForDocumentPath(resourceFsPath, {
+          showTerminal: true,
+          notify: true,
+        });
+      }
+      return;
+    }
+
     const resolvedProjectStartupPaths =
       await this.resolveProjectStartupDocumentPaths(resourceUri);
     if (!resolvedProjectStartupPaths) {
@@ -2233,6 +2711,9 @@ class EpicsRuntimeMonitorController {
     if (!runningItems.length) {
       vscode.window.showWarningMessage("No running IOCs are available.");
       return undefined;
+    }
+    if (runningItems.length === 1) {
+      return runningItems[0];
     }
 
     return vscode.window.showQuickPick(runningItems, {
@@ -2853,6 +3334,10 @@ class EpicsRuntimeMonitorController {
             const outputText = await this.runIocShellCommandWithCapturedOutput(
               commandText,
               targetTerminal,
+              {
+                normalizeRuntimeCommand: true,
+                historyCommandText: commandText,
+              },
             );
             if (outputText === undefined) {
               vscode.window.showWarningMessage(
@@ -2861,7 +3346,10 @@ class EpicsRuntimeMonitorController {
             }
             return;
           }
-          await this.sendIocShellCommand(commandText, targetTerminal);
+          await this.sendIocShellCommand(commandText, targetTerminal, {
+            normalizeRuntimeCommand: true,
+            historyCommandText: commandText,
+          });
         }
       });
     } else {
@@ -3296,6 +3784,39 @@ class EpicsRuntimeMonitorController {
     );
   }
 
+  async dumpAllIocRecordNames(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "Dump All Record Names",
+      placeHolder: "Select the running IOC to dump all record names from",
+    });
+    if (!selectedIoc?.terminal) {
+      return;
+    }
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Dumping all record names from ${selectedIoc.label}`,
+      },
+      async () => {
+        const outputText = await this.captureIocShellCommandOutput(
+          "dbl",
+          selectedIoc.terminal,
+        );
+        if (outputText === undefined) {
+          vscode.window.showWarningMessage(
+            `Could not capture dbl output from ${selectedIoc.label}.`,
+          );
+          return;
+        }
+
+        await this.openTemporaryIocOutputDocument(outputText, {
+          language: "pvlist",
+        });
+      },
+    );
+  }
+
   async loadProjectIocDumpRecordItems(selectedIoc) {
     if (!selectedIoc?.terminal) {
       return undefined;
@@ -3318,8 +3839,10 @@ class EpicsRuntimeMonitorController {
 
         return parseDbDumpRecordOutput(outputText).map((recordEntry) => ({
           label: recordEntry.recordName,
-          description: selectedIoc.label,
-          detail: truncateText(recordEntry.recordDesc || "(No DESC)", 120),
+          description: "",
+          detail: recordEntry.recordDesc
+            ? truncateText(recordEntry.recordDesc, 120)
+            : "",
           recordName: recordEntry.recordName,
           recordDesc: recordEntry.recordDesc || "",
           startupDocumentPath: selectedIoc.startupDocumentPath,
@@ -3383,17 +3906,789 @@ class EpicsRuntimeMonitorController {
   }
 
   async probeIocRecord(resourceUri) {
-    const selectedRecord = await this.pickProjectIocDumpRecord(resourceUri, {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
       title: "Probe a Record",
-      placeHolder: "Filter and select a record to open in Probe",
+      placeHolder: "Select the running IOC to browse records from",
     });
-    if (!selectedRecord?.recordName) {
+    if (!selectedIoc?.terminal) {
       return;
     }
 
-    await this.openProbeWidget({
-      recordName: selectedRecord.recordName,
+    const dumpState = await this.loadProjectIocDumpRecordItems(selectedIoc);
+    if (!dumpState?.length) {
+      vscode.window.showWarningMessage(
+        `Could not read any record definitions from dbDumpRecord output for ${selectedIoc.label}.`,
+      );
+      return;
+    }
+
+    this.runIocRuntimeQuickPick?.dispose();
+    this.runIocRuntimeQuickPick = undefined;
+    this.runIocRuntimeQuickPickApplySelection = undefined;
+    this.runIocRuntimeQuickPickSubmit = undefined;
+    const quickPick = vscode.window.createQuickPick();
+    this.runIocRuntimeQuickPick = quickPick;
+    this.runIocRuntimeQuickPickApplySelection = (activeQuickPick, activeItem) => {
+      if (activeItem?.recordName) {
+        activeQuickPick.value = activeItem.recordName;
+      }
+    };
+    this.runIocRuntimeQuickPickSubmit = async () => {
+      const typedRecordName = String(quickPick.value || "").trim();
+      const activeRecordItem =
+        quickPick.selectedItems?.find((item) => item?.recordName) ||
+        quickPick.activeItems?.find((item) => item?.recordName);
+      const selectedRecord =
+        dumpState.find(
+          (item) => item.recordName.toLowerCase() === typedRecordName.toLowerCase(),
+        ) || activeRecordItem;
+      if (!selectedRecord?.recordName) {
+        return;
+      }
+
+      if (this.runIocRuntimeQuickPick === quickPick) {
+        quickPick.hide();
+      }
+      await this.openProbeWidget({
+        recordName: selectedRecord.recordName,
+      });
+    };
+    await vscode.commands.executeCommand(
+      "setContext",
+      RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+      true,
+    );
+
+    quickPick.title = "Probe a Record";
+    quickPick.placeholder =
+      "Filter records, press Tab to fill the selected record, then Enter to open Probe.";
+    quickPick.ignoreFocusOut = false;
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    quickPick.items = dumpState.map((item) => ({
+      ...item,
+      insertText: item.recordName,
+      alwaysShow: true,
+    }));
+    if (quickPick.items.length) {
+      quickPick.activeItems = [quickPick.items[0]];
+    }
+    quickPick.onDidAccept(() => {});
+    quickPick.onDidHide(() => {
+      if (this.runIocRuntimeQuickPick === quickPick) {
+        this.runIocRuntimeQuickPick = undefined;
+        this.runIocRuntimeQuickPickApplySelection = undefined;
+        this.runIocRuntimeQuickPickSubmit = undefined;
+      }
+      void vscode.commands.executeCommand(
+        "setContext",
+        RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+        false,
+      );
+      quickPick.dispose();
     });
+    quickPick.show();
+  }
+
+  parseRunIocRuntimeCommandContext(commandText) {
+    const trimmedText = String(commandText || "").replace(/^\s+/, "");
+    const commandMatch = trimmedText.match(/^([A-Za-z_][A-Za-z0-9_]*)(\s+)([\s\S]*)$/);
+    if (!commandMatch) {
+      return undefined;
+    }
+
+    const commandName = commandMatch[1];
+    const normalizedCommandName = commandName.toLowerCase();
+    const rawArgumentText = commandMatch[3];
+    if (normalizedCommandName === "cd") {
+      return {
+        commandName,
+        suggestionType: "path",
+        partialText: rawArgumentText,
+      };
+    }
+
+    const trimmedArgumentText = rawArgumentText.trim();
+    if (trimmedArgumentText && (/\s$/.test(rawArgumentText) || /\s/.test(trimmedArgumentText))) {
+      return undefined;
+    }
+    if (IOC_RUNTIME_RECORD_ARGUMENT_COMMANDS.has(normalizedCommandName)) {
+      return {
+        commandName,
+        suggestionType: "record",
+        partialText: trimmedArgumentText,
+      };
+    }
+    if (IOC_RUNTIME_ENVIRONMENT_ARGUMENT_COMMANDS.has(normalizedCommandName)) {
+      return {
+        commandName,
+        suggestionType: "environment",
+        partialText: trimmedArgumentText,
+      };
+    }
+
+    return undefined;
+  }
+
+  formatRunIocRuntimePathSuggestion(pathText) {
+    const normalizedText = String(pathText || "");
+    if (!/\s/.test(normalizedText)) {
+      return normalizedText;
+    }
+    return `"${normalizedText.replace(/"/g, '\\"')}"`;
+  }
+
+  async collectRunIocRuntimePathSuggestions(baseDirectory, partialText) {
+    const rawPartialText = String(partialText || "");
+    const lookupPrefix = rawPartialText.startsWith("~")
+      ? path.join(os.homedir(), rawPartialText.slice(1))
+      : rawPartialText;
+    const rawDirectoryPrefix =
+      /[\\/]/.test(rawPartialText) || /[\\/]$/.test(rawPartialText)
+        ? rawPartialText.replace(/[^\\/]*$/, "")
+        : "";
+    const lookupDirectoryPrefix =
+      /[\\/]/.test(lookupPrefix) || /[\\/]$/.test(lookupPrefix)
+        ? lookupPrefix.replace(/[^\\/]*$/, "")
+        : "";
+    const lookupDirectory = path.resolve(
+      baseDirectory || "",
+      lookupDirectoryPrefix || ".",
+    );
+    const fileNamePrefix = /[\\/]$/.test(rawPartialText)
+      ? ""
+      : rawPartialText.split(/[\\/]/).pop() || "";
+
+    let directoryEntries = [];
+    try {
+      directoryEntries = await fs.promises.readdir(lookupDirectory, {
+        withFileTypes: true,
+      });
+    } catch (_error) {
+      return [];
+    }
+
+    return directoryEntries
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) =>
+        String(entry.name || "")
+          .toLowerCase()
+          .includes(fileNamePrefix.toLowerCase()),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, 120)
+      .map((entry) => ({
+        label: `${rawDirectoryPrefix}${entry.name}`,
+        description: "Directory",
+        detail: lookupDirectory,
+        insertText: `cd ${this.formatRunIocRuntimePathSuggestion(
+          `${rawDirectoryPrefix}${entry.name}`,
+        )}`,
+        itemType: "suggestion",
+        alwaysShow: true,
+      }));
+  }
+
+  async buildRunIocRuntimeCommandItems(
+    commandText,
+    selectedIoc,
+    commandNames,
+    helpByCommand,
+  ) {
+    const normalizedInputText = String(commandText || "").trimStart();
+    const commandFilter = normalizedInputText
+      ? normalizedInputText.split(/\s+/, 1)[0].toLowerCase()
+      : "";
+    const items = [];
+    const terminal = selectedIoc?.terminal;
+    const commandContext = this.parseRunIocRuntimeCommandContext(commandText);
+
+    if (commandContext?.suggestionType === "record" && terminal) {
+      const recordNames = await this.fetchIocRecordNamesForTerminal(terminal);
+      const filteredRecordNames = recordNames
+        .filter((recordName) =>
+          recordName.toLowerCase().includes(commandContext.partialText.toLowerCase()),
+        )
+        .slice(0, 200);
+      if (filteredRecordNames.length) {
+        items.push({
+          label: "Record Names",
+          kind: vscode.QuickPickItemKind.Separator,
+          alwaysShow: true,
+        });
+        for (const recordName of filteredRecordNames) {
+          items.push({
+            label: recordName,
+            description: "",
+            detail: "",
+            insertText: `${commandContext.commandName} ${recordName}`,
+            itemType: "suggestion",
+            alwaysShow: true,
+          });
+        }
+      }
+    } else if (commandContext?.suggestionType === "environment" && terminal) {
+      const environmentEntries = await this.fetchIocRuntimeEnvironmentForTerminal(terminal);
+      const filteredEnvironmentNames = environmentEntries
+        .map((entry) => entry.variableName)
+        .filter((variableName) =>
+          variableName.toLowerCase().includes(commandContext.partialText.toLowerCase()),
+        )
+        .slice(0, 200);
+      if (filteredEnvironmentNames.length) {
+        items.push({
+          label: "Environment Variables",
+          kind: vscode.QuickPickItemKind.Separator,
+          alwaysShow: true,
+        });
+        for (const variableName of filteredEnvironmentNames) {
+          items.push({
+            label: variableName,
+            description: `Environment variable for ${commandContext.commandName}`,
+            detail: selectedIoc.label,
+            insertText: `${commandContext.commandName} ${variableName}`,
+            itemType: "suggestion",
+            alwaysShow: true,
+          });
+        }
+      }
+    } else if (commandContext?.suggestionType === "path") {
+      const baseDirectory =
+        this.getTerminalCurrentDirectory(terminal) ||
+        path.dirname(selectedIoc?.startupDocumentPath || "");
+      const pathSuggestions = await this.collectRunIocRuntimePathSuggestions(
+        baseDirectory,
+        commandContext.partialText,
+      );
+      if (pathSuggestions.length) {
+        items.push({
+          label: "Paths",
+          kind: vscode.QuickPickItemKind.Separator,
+          alwaysShow: true,
+        });
+        items.push(...pathSuggestions);
+      }
+    }
+
+    const filteredCommandNames = commandNames
+      .filter((commandName) => {
+        if (!commandFilter) {
+          return true;
+        }
+        const helpSummary = this.extractIocRuntimeCommandSummary(
+          helpByCommand.get(commandName),
+        );
+        return `${commandName} ${helpSummary}`.toLowerCase().includes(commandFilter);
+      })
+      .slice(0, 240);
+    if (filteredCommandNames.length) {
+      items.push({
+        label: "Commands",
+        kind: vscode.QuickPickItemKind.Separator,
+        alwaysShow: true,
+      });
+      for (const commandName of filteredCommandNames) {
+        const helpSummary = this.extractIocRuntimeCommandSummary(
+          helpByCommand.get(commandName),
+        );
+        items.push({
+          label:
+            helpSummary &&
+            helpSummary !== "No detailed help is available." &&
+            helpSummary !== "Loading help..."
+              ? helpSummary
+              : commandName,
+          description: "",
+          detail: "",
+          insertText: commandName,
+          itemType: "command",
+          alwaysShow: true,
+        });
+      }
+    }
+
+    if (items.length) {
+      return items;
+    }
+    return [
+      {
+        label: commandNames.length
+          ? "No commands or suggestions match the current input."
+          : "No IOC runtime commands are available.",
+        alwaysShow: true,
+      },
+    ];
+  }
+
+  replaceRunIocRuntimeCommandName(commandText, nextCommandName) {
+    const normalizedCommandName = String(nextCommandName || "").trim();
+    if (!normalizedCommandName) {
+      return String(commandText || "");
+    }
+
+    const rawCommandText = String(commandText || "");
+    const leadingWhitespace = rawCommandText.match(/^\s*/)?.[0] || "";
+    const bodyText = rawCommandText.slice(leadingWhitespace.length);
+    if (!bodyText) {
+      return `${leadingWhitespace}${normalizedCommandName}`;
+    }
+
+    const firstWhitespaceIndex = bodyText.search(/\s/);
+    if (firstWhitespaceIndex < 0) {
+      return `${leadingWhitespace}${normalizedCommandName}`;
+    }
+    return `${leadingWhitespace}${normalizedCommandName}${bodyText.slice(firstWhitespaceIndex)}`;
+  }
+
+  applyRunIocRuntimeCommandItem(quickPick, item) {
+    const insertText = String(item?.insertText || item?.label || "").trim();
+    if (!insertText) {
+      return;
+    }
+    if (item?.itemType === "command") {
+      quickPick.value = this.replaceRunIocRuntimeCommandName(
+        quickPick.value,
+        insertText,
+      );
+      return;
+    }
+    quickPick.value = insertText;
+  }
+
+  buildIocCommandHistoryQuickPickItems(commandText, historyEntries) {
+    const filterText = String(commandText || "").trim().toLowerCase();
+    const filteredEntries = historyEntries.filter((entry) =>
+      !filterText || entry.toLowerCase().includes(filterText),
+    );
+    if (!filteredEntries.length) {
+      return [
+        {
+          label: historyEntries.length
+            ? "No command history entries match the current filter."
+            : "No IOC command history is available.",
+          alwaysShow: true,
+        },
+      ];
+    }
+
+    return filteredEntries.map((entry) => ({
+      label: entry,
+      description: "",
+      detail: "",
+      insertText: entry,
+      itemType: "history",
+      alwaysShow: true,
+    }));
+  }
+
+  resolveRunIocRuntimeQuickPickSelectedItem(quickPick = this.runIocRuntimeQuickPick) {
+    const selectedItem = quickPick?.selectedItems?.[0];
+    if (selectedItem?.insertText) {
+      return selectedItem;
+    }
+    const activeItem = quickPick?.activeItems?.find((item) => item?.insertText);
+    if (activeItem?.insertText) {
+      return activeItem;
+    }
+    return quickPick?.items?.find((item) => item?.insertText);
+  }
+
+  acceptRunIocRuntimeQuickPickItem() {
+    const quickPick = this.runIocRuntimeQuickPick;
+    if (!quickPick) {
+      return;
+    }
+    const selectedItem = this.resolveRunIocRuntimeQuickPickSelectedItem(quickPick);
+    if (!selectedItem) {
+      return;
+    }
+    const applySelection =
+      typeof this.runIocRuntimeQuickPickApplySelection === "function"
+        ? this.runIocRuntimeQuickPickApplySelection
+        : (activeQuickPick, activeItem) =>
+            this.applyRunIocRuntimeCommandItem(activeQuickPick, activeItem);
+    applySelection(quickPick, selectedItem);
+  }
+
+  async submitRunIocRuntimeQuickPick() {
+    const submit = this.runIocRuntimeQuickPickSubmit;
+    if (typeof submit !== "function") {
+      return;
+    }
+    await submit();
+  }
+
+  async runIocRuntimeCommand(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "Run Command",
+      placeHolder: "Select the running IOC to send a command to",
+    });
+    if (!selectedIoc?.terminal) {
+      return;
+    }
+
+    this.runIocRuntimeQuickPick?.dispose();
+    this.runIocRuntimeQuickPick = undefined;
+    this.runIocRuntimeQuickPickApplySelection = undefined;
+    this.runIocRuntimeQuickPickSubmit = undefined;
+    const quickPick = vscode.window.createQuickPick();
+    this.runIocRuntimeQuickPick = quickPick;
+    this.runIocRuntimeQuickPickApplySelection = (activeQuickPick, activeItem) =>
+      this.applyRunIocRuntimeCommandItem(activeQuickPick, activeItem);
+    await vscode.commands.executeCommand(
+      "setContext",
+      RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+      true,
+    );
+    let captureOutput = false;
+    let disposed = false;
+    let commandNames = [];
+    let helpByCommand = new Map();
+    let renderGeneration = 0;
+    let renderingItems = false;
+
+    const updateTitle = () => {
+      quickPick.title = captureOutput
+        ? `Run Command: ${selectedIoc.label} (Capture output)`
+        : `Run Command: ${selectedIoc.label}`;
+      quickPick.buttons = [
+        {
+          iconPath: new vscode.ThemeIcon("output"),
+          tooltip: captureOutput ? "Capture output: On" : "Capture output: Off",
+        },
+        {
+          iconPath: new vscode.ThemeIcon("play"),
+          tooltip: "Send",
+        },
+      ];
+    };
+
+    const renderItems = () => {
+      if (!commandNames.length && quickPick.busy) {
+        quickPick.items = [{ label: "Loading IOC runtime commands...", alwaysShow: true }];
+        return;
+      }
+      const activeGeneration = ++renderGeneration;
+      void (async () => {
+        const items = await this.buildRunIocRuntimeCommandItems(
+          quickPick.value,
+          selectedIoc,
+          commandNames,
+          helpByCommand,
+        );
+        if (disposed || activeGeneration !== renderGeneration) {
+          return;
+        }
+        renderingItems = true;
+        quickPick.items = items;
+        const preferredItem = items.find((item) => item?.insertText);
+        if (preferredItem) {
+          quickPick.activeItems = [preferredItem];
+        }
+        renderingItems = false;
+      })();
+    };
+
+    const sendCommand = async ({ hideAfterSend = false } = {}) => {
+      const terminal = selectedIoc.terminal;
+      if (!terminal || !vscode.window.terminals.includes(terminal)) {
+        vscode.window.showWarningMessage("The tracked IOC terminal is no longer running.");
+        if (hideAfterSend && !disposed) {
+          quickPick.hide();
+        }
+        return;
+      }
+
+      const commandText = String(quickPick.value || "").trim();
+      if (!commandText) {
+        if (hideAfterSend && !disposed) {
+          quickPick.hide();
+        }
+        return;
+      }
+
+      quickPick.busy = true;
+      quickPick.enabled = false;
+      try {
+        if (captureOutput) {
+          const outputText = await this.runIocShellCommandWithCapturedOutput(
+            commandText,
+            terminal,
+            {
+              normalizeRuntimeCommand: true,
+              historyCommandText: commandText,
+              knownCommandNames: commandNames,
+            },
+          );
+          if (outputText === undefined) {
+            vscode.window.showWarningMessage(
+              `Could not capture IOC output for ${commandText}.`,
+            );
+          }
+        } else {
+          await this.sendIocShellCommand(commandText, terminal, {
+            normalizeRuntimeCommand: true,
+            historyCommandText: commandText,
+            knownCommandNames: commandNames,
+          });
+        }
+        this.iocRecordNamesByTerminal.delete(terminal);
+        this.iocRuntimeEnvironmentByTerminal.delete(terminal);
+        if (hideAfterSend && !disposed) {
+          quickPick.hide();
+        }
+      } finally {
+        if (!disposed) {
+          quickPick.busy = false;
+          quickPick.enabled = true;
+        }
+      }
+    };
+    this.runIocRuntimeQuickPickSubmit = async () => {
+      if (disposed) {
+        return;
+      }
+      await sendCommand({ hideAfterSend: true });
+    };
+
+    updateTitle();
+    quickPick.placeholder =
+      "Type a command, press Tab to fill the selected item, then click Send.";
+    quickPick.ignoreFocusOut = false;
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    quickPick.busy = true;
+    quickPick.items = [{ label: "Loading IOC runtime commands...", alwaysShow: true }];
+    quickPick.onDidChangeValue(() => {
+      renderItems();
+    });
+    quickPick.onDidAccept(() => {});
+    quickPick.onDidChangeSelection((items) => {
+      if (renderingItems) {
+        return;
+      }
+      const selectedItem = items?.[0];
+      if (!selectedItem?.insertText) {
+        return;
+      }
+      this.applyRunIocRuntimeCommandItem(quickPick, selectedItem);
+    });
+    quickPick.onDidTriggerButton((button) => {
+      if (String(button.tooltip || "").startsWith("Capture output")) {
+        captureOutput = !captureOutput;
+        updateTitle();
+        return;
+      }
+      if (button.tooltip === "Send") {
+        void sendCommand({ hideAfterSend: true });
+      }
+    });
+    quickPick.onDidHide(() => {
+      disposed = true;
+      if (this.runIocRuntimeQuickPick === quickPick) {
+        this.runIocRuntimeQuickPick = undefined;
+        this.runIocRuntimeQuickPickApplySelection = undefined;
+        this.runIocRuntimeQuickPickSubmit = undefined;
+      }
+      void vscode.commands.executeCommand(
+        "setContext",
+        RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+        false,
+      );
+      quickPick.dispose();
+    });
+    quickPick.show();
+
+    try {
+      commandNames = await this.fetchIocRuntimeCommandsForTerminal(selectedIoc.terminal);
+      if (disposed) {
+        return;
+      }
+
+      renderItems();
+      const helpBatchSize = 24;
+      for (let index = 0; index < commandNames.length; index += helpBatchSize) {
+        const batch = commandNames.slice(index, index + helpBatchSize);
+        const helpBatch = await this.fetchIocRuntimeCommandHelpBatch(
+          batch,
+          selectedIoc.terminal,
+        );
+        if (disposed) {
+          return;
+        }
+        for (const [commandName, helpText] of helpBatch.entries()) {
+          helpByCommand.set(commandName, helpText);
+        }
+        renderItems();
+      }
+    } finally {
+      if (!disposed) {
+        quickPick.busy = false;
+      }
+    }
+  }
+
+  async openIocCommandHistory(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "Command History",
+      placeHolder: "Select the running IOC to browse command history for",
+    });
+    if (!selectedIoc?.terminal) {
+      return;
+    }
+
+    const historyEntries = await this.readProjectIocCommandHistory(selectedIoc.terminal);
+    this.runIocRuntimeQuickPick?.dispose();
+    this.runIocRuntimeQuickPick = undefined;
+    this.runIocRuntimeQuickPickApplySelection = undefined;
+    this.runIocRuntimeQuickPickSubmit = undefined;
+    const quickPick = vscode.window.createQuickPick();
+    this.runIocRuntimeQuickPick = quickPick;
+    this.runIocRuntimeQuickPickApplySelection = (activeQuickPick, activeItem) =>
+      this.applyRunIocRuntimeCommandItem(activeQuickPick, activeItem);
+    await vscode.commands.executeCommand(
+      "setContext",
+      RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+      true,
+    );
+    let captureOutput = false;
+    let disposed = false;
+    let renderingItems = false;
+
+    const updateTitle = () => {
+      quickPick.title = captureOutput
+        ? `Command History: ${selectedIoc.label} (Capture output)`
+        : `Command History: ${selectedIoc.label}`;
+      quickPick.buttons = [
+        {
+          iconPath: new vscode.ThemeIcon("output"),
+          tooltip: captureOutput ? "Capture output: On" : "Capture output: Off",
+        },
+        {
+          iconPath: new vscode.ThemeIcon("play"),
+          tooltip: "Send",
+        },
+      ];
+    };
+
+    const renderItems = () => {
+      const items = this.buildIocCommandHistoryQuickPickItems(
+        quickPick.value,
+        historyEntries,
+      );
+      renderingItems = true;
+      quickPick.items = items;
+      const preferredItem = items.find((item) => item?.insertText);
+      if (preferredItem) {
+        quickPick.activeItems = [preferredItem];
+      }
+      renderingItems = false;
+    };
+
+    const sendCommand = async ({ hideAfterSend = false } = {}) => {
+      const terminal = selectedIoc.terminal;
+      if (!terminal || !vscode.window.terminals.includes(terminal)) {
+        vscode.window.showWarningMessage("The tracked IOC terminal is no longer running.");
+        if (hideAfterSend && !disposed) {
+          quickPick.hide();
+        }
+        return;
+      }
+
+      const commandText = String(quickPick.value || "").trim();
+      if (!commandText) {
+        if (hideAfterSend && !disposed) {
+          quickPick.hide();
+        }
+        return;
+      }
+
+      quickPick.busy = true;
+      quickPick.enabled = false;
+      try {
+        if (captureOutput) {
+          const outputText = await this.runIocShellCommandWithCapturedOutput(
+            commandText,
+            terminal,
+            {
+              normalizeRuntimeCommand: true,
+              historyCommandText: commandText,
+            },
+          );
+          if (outputText === undefined) {
+            vscode.window.showWarningMessage(
+              `Could not capture IOC output for ${commandText}.`,
+            );
+          }
+        } else {
+          await this.sendIocShellCommand(commandText, terminal, {
+            normalizeRuntimeCommand: true,
+            historyCommandText: commandText,
+          });
+        }
+        if (hideAfterSend && !disposed) {
+          quickPick.hide();
+        }
+      } finally {
+        if (!disposed) {
+          quickPick.busy = false;
+          quickPick.enabled = true;
+        }
+      }
+    };
+    this.runIocRuntimeQuickPickSubmit = async () => {
+      if (disposed) {
+        return;
+      }
+      await sendCommand({ hideAfterSend: true });
+    };
+
+    updateTitle();
+    quickPick.placeholder =
+      "Filter command history, press Tab or click to fill, Enter to send.";
+    quickPick.ignoreFocusOut = false;
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    renderItems();
+    quickPick.onDidChangeValue(() => {
+      renderItems();
+    });
+    quickPick.onDidAccept(() => {});
+    quickPick.onDidChangeSelection((items) => {
+      if (renderingItems) {
+        return;
+      }
+      const selectedItem = items?.[0];
+      if (!selectedItem?.insertText) {
+        return;
+      }
+      this.applyRunIocRuntimeCommandItem(quickPick, selectedItem);
+    });
+    quickPick.onDidTriggerButton((button) => {
+      if (String(button.tooltip || "").startsWith("Capture output")) {
+        captureOutput = !captureOutput;
+        updateTitle();
+        return;
+      }
+      if (button.tooltip === "Send") {
+        void sendCommand({ hideAfterSend: true });
+      }
+    });
+    quickPick.onDidHide(() => {
+      disposed = true;
+      if (this.runIocRuntimeQuickPick === quickPick) {
+        this.runIocRuntimeQuickPick = undefined;
+        this.runIocRuntimeQuickPickApplySelection = undefined;
+        this.runIocRuntimeQuickPickSubmit = undefined;
+      }
+      void vscode.commands.executeCommand(
+        "setContext",
+        RUN_IOC_RUNTIME_QUICK_PICK_VISIBLE_CONTEXT_KEY,
+        false,
+      );
+      quickPick.dispose();
+    });
+    quickPick.show();
   }
 
   async openPvlistForAllIocRecords(resourceUri) {
