@@ -447,6 +447,12 @@
       description="Choose a running IOC and open its dbDumpRecord output in a temporary tab"
     />
     <action
+      id="org.epics.workbench.DumpAllRecordsToExcelAction"
+      class="org.epics.workbench.runtime.DumpAllRecordsToExcelAction"
+      text="Dump All Records to Excel"
+      description="Choose a running IOC, capture its dbDumpRecord output, and export it as an Excel workbook"
+    />
+    <action
       id="org.epics.workbench.DumpAllRecordNamesAction"
       class="org.epics.workbench.runtime.DumpAllRecordNamesAction"
       text="Dump All Record Names"

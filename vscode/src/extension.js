@@ -7,6 +7,7 @@ const vscode = require("vscode");
 const { collectEpicsBuildApplication } = require("../scripts/epics-build-model");
 const { createDatabaseExcelTools } = require("./databaseExcel");
 const { createDatabaseExcelImportTools } = require("./databaseExcelImport");
+const { registerDatabaseSpreadsheetEditor } = require("./databaseSpreadsheetEditor");
 const {
   formatDatabaseText,
   formatMakefileText,
@@ -105,6 +106,8 @@ const COPY_AS_EXPANDED_DB_COMMAND = "vscode-epics.copyAsExpandedDb";
 const ADD_DB_TO_MAKEFILE_COMMAND = "vscode-epics.addDbToMakefile";
 const SHOW_MAKEFILE_COMMAND = "vscode-epics.showMakefile";
 const SHOW_RELEASE_COMMAND = "vscode-epics.showRelease";
+const OPEN_VARIABLE_DIRECTORY_IN_TERMINAL_COMMAND =
+  "vscode-epics.openVariableDirectoryInTerminal";
 const BUILD_WITH_MAKEFILE_COMMAND = "vscode-epics.buildWithMakefile";
 const CLEAN_AND_BUILD_WITH_MAKEFILE_COMMAND =
   "vscode-epics.cleanAndBuildWithMakefile";
@@ -300,22 +303,43 @@ const {
   compareLabels,
   escapeRegExp,
 });
-const { buildDatabaseWorkbookBuffer } = createDatabaseExcelTools({
+const {
+  buildDatabaseWorkbookBuffer,
+  buildSheetModelFromDatabaseText,
+  buildWorkbookBufferFromSheetModels,
+} = createDatabaseExcelTools({
   extractRecordDeclarations,
   extractFieldDeclarationsInRecord,
 });
-const { importDatabaseWorkbookBuffer } = createDatabaseExcelImportTools();
+const {
+  importDatabaseWorkbookBuffer,
+  parseEpicsWorkbookBuffer,
+} = createDatabaseExcelImportTools();
 
 function activate(context) {
   const runtimeMonitorController = registerRuntimeMonitor(context, {
     extractDatabaseTocEntries,
     extractDatabaseTocMacroAssignments,
     extractRecordDeclarations,
+    buildDatabaseWorkbookBuffer,
     getFieldNamesForRecordType: getRuntimeProbeFieldNamesForRecordType,
     getFieldTypeForRecordType: getRuntimeProbeFieldTypeForRecordType,
   });
   registerTdmIntegration(context);
   const staticData = loadStaticData(context.extensionPath);
+  registerDatabaseSpreadsheetEditor(context, {
+    buildSheetModelFromDatabaseText,
+    buildWorkbookBufferFromSheetModels,
+    parseEpicsWorkbookBuffer,
+    formatDatabaseText,
+    getStaticData: () => ({
+      recordTypes: staticData.recordTypes,
+      allFields: staticData.allFields,
+      fieldsByRecordType: staticData.fieldsByRecordType,
+      fieldTypesByRecordType: staticData.fieldTypesByRecordType,
+      fieldMenuChoicesByRecordType: staticData.fieldMenuChoicesByRecordType,
+    }),
+  });
   recordTemplateFields = new Map(staticData.recordTemplateFields || []);
   recordTemplateStaticData = {
     fieldOrderByRecordType: staticData.fieldOrderByRecordType,
@@ -691,6 +715,36 @@ function activate(context) {
     vscode.commands.registerCommand(SHOW_RELEASE_COMMAND, async (resourceUri) => {
       await showProjectRelease(resourceUri);
     }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      OPEN_VARIABLE_DIRECTORY_IN_TERMINAL_COMMAND,
+      async (directoryPath, variableName) => {
+        const normalizedPath =
+          typeof directoryPath === "string" && directoryPath
+            ? normalizeFsPath(directoryPath)
+            : undefined;
+        if (!normalizedPath || !fs.existsSync(normalizedPath)) {
+          return;
+        }
+
+        let stats;
+        try {
+          stats = fs.statSync(normalizedPath);
+        } catch (error) {
+          return;
+        }
+        if (!stats.isDirectory()) {
+          return;
+        }
+
+        const terminal = vscode.window.createTerminal({
+          name: variableName ? `EPICS ${variableName}` : "EPICS",
+          cwd: normalizedPath,
+        });
+        terminal.show(true);
+      },
+    ),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand(BUILD_WITH_MAKEFILE_COMMAND, async (resourceUri) => {
@@ -6856,7 +6910,39 @@ function createVariableHover(reference, resolvedValue, absolutePath, sourceInfo)
     }
   }
 
+  const terminalDirectory = getExistingDirectoryPathForHover(absolutePath, resolvedValue);
+  if (terminalDirectory) {
+    markdown.appendMarkdown(
+      `\n\n[Open in terminal](${createOpenDirectoryInTerminalCommandUri(
+        terminalDirectory,
+        reference.variableName,
+      )})`,
+    );
+  }
+
   return new vscode.Hover(markdown, reference.range);
+}
+
+function getExistingDirectoryPathForHover(absolutePath, resolvedValue) {
+  for (const candidate of [absolutePath, resolvedValue]) {
+    if (!candidate || typeof candidate !== "string") {
+      continue;
+    }
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        return normalizeFsPath(candidate);
+      }
+    } catch (error) {
+      // Ignore unreadable hover-path targets.
+    }
+  }
+  return undefined;
+}
+
+function createOpenDirectoryInTerminalCommandUri(directoryPath, variableName) {
+  return `command:${OPEN_VARIABLE_DIRECTORY_IN_TERMINAL_COMMAND}?${encodeURIComponent(
+    JSON.stringify([directoryPath, variableName]),
+  )}`;
 }
 
 function createLinkedRecordHover(
@@ -8618,6 +8704,7 @@ function getDbLoadRecordsFilesystemPathItems(startupState, context) {
   const allowedExtensions = getAllowedExtensionsForFileContext("dbLoadRecords");
   const currentDirectory = normalizeFsPath(startupState.currentDirectory);
   const dbDirectory = normalizeFsPath(path.join(currentDirectory, "db"));
+  const projectRootPath = normalizeFsPath(startupState.ownerRootPath);
   const partialText = String(context?.partial || "");
   const normalizedPartial = normalizePath(partialText);
   const namePrefix = normalizedPartial.includes("/")
@@ -8684,6 +8771,19 @@ function getDbLoadRecordsFilesystemPathItems(startupState, context) {
 
   collectFiles(currentDirectory, currentDirectory);
   collectFiles(dbDirectory, dbDirectory);
+  for (const projectDbDirectory of [
+    projectRootPath ? normalizeFsPath(path.join(projectRootPath, "db")) : undefined,
+    projectRootPath ? normalizeFsPath(path.join(projectRootPath, "Db")) : undefined,
+  ]) {
+    if (
+      !projectDbDirectory ||
+      projectDbDirectory === currentDirectory ||
+      projectDbDirectory === dbDirectory
+    ) {
+      continue;
+    }
+    collectFiles(projectDbDirectory, projectDbDirectory);
+  }
 
   return items.map((entry) => {
     const item = new vscode.CompletionItem(
@@ -15230,10 +15330,12 @@ function loadReleaseVariablesWithSources(rootPath) {
 }
 
 function createInitialStartupExecutionState(snapshot, document) {
+  const ownerRootPath = findStartupOwningRootPath(snapshot, document);
   const startupReleaseData = loadStartupReleaseVariableData(snapshot, document);
   return {
     envVariables: new Map(startupReleaseData.values),
     envVariableSources: new Map(startupReleaseData.sources),
+    ownerRootPath,
     currentDirectory:
       document.uri.scheme === "file"
         ? normalizeFsPath(path.dirname(document.uri.fsPath))

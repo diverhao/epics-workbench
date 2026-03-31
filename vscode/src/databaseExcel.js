@@ -2,22 +2,181 @@ function createDatabaseExcelTools({
   extractRecordDeclarations,
   extractFieldDeclarationsInRecord,
 }) {
+  const COMMENT_ROW_KIND = "comment";
+  const RECORD_ROW_KIND = "record";
+  const {
+    BACKGROUND_COLOR_OPTIONS,
+    getBackgroundArgb,
+    normalizeBackgroundToken,
+  } = require("./spreadsheetCellBackgrounds");
+  const FILLED_BACKGROUND_OPTIONS = BACKGROUND_COLOR_OPTIONS.filter((option) => option.token);
+
   function buildDatabaseWorkbookBuffer(text) {
-    const rows = buildRows(text);
-    const headers = buildHeaders(rows);
-    const parts = new Map([
-      ["[Content_Types].xml", Buffer.from(buildContentTypesXml(), "utf8")],
-      ["_rels/.rels", Buffer.from(buildRootRelsXml(), "utf8")],
-      ["xl/workbook.xml", Buffer.from(buildWorkbookXml(), "utf8")],
-      ["xl/_rels/workbook.xml.rels", Buffer.from(buildWorkbookRelsXml(), "utf8")],
-      ["xl/styles.xml", Buffer.from(buildStylesXml(), "utf8")],
-      ["xl/worksheets/sheet1.xml", Buffer.from(buildSheetXml(headers, rows), "utf8")],
+    return buildWorkbookBufferFromSheetModels([
+      buildSheetModelFromDatabaseText(text, "Database"),
     ]);
+  }
+
+  function buildSheetModelFromDatabaseText(text, name = "Database") {
+    const entries = buildEntries(text);
+    const headers = buildHeaders(entries);
+    return {
+      name,
+      headers,
+      rows: entries.map((entry) => {
+        if (entry.kind === COMMENT_ROW_KIND) {
+          return {
+            kind: COMMENT_ROW_KIND,
+            text: entry.text,
+          };
+        }
+
+        return {
+          kind: RECORD_ROW_KIND,
+          values: [
+            entry.recordName,
+            entry.recordType,
+            ...headers
+              .slice(2)
+              .map((fieldName) => entry.explicitFieldValues.get(fieldName) || ""),
+          ],
+        };
+      }),
+    };
+  }
+
+  function buildWorkbookBufferFromSheetModels(sheetModels) {
+    const normalizedSheets = normalizeSheetModels(sheetModels);
+    const parts = new Map([
+      ["[Content_Types].xml", Buffer.from(buildContentTypesXml(normalizedSheets), "utf8")],
+      ["_rels/.rels", Buffer.from(buildRootRelsXml(), "utf8")],
+      ["xl/workbook.xml", Buffer.from(buildWorkbookXml(normalizedSheets), "utf8")],
+      ["xl/_rels/workbook.xml.rels", Buffer.from(buildWorkbookRelsXml(normalizedSheets), "utf8")],
+      ["xl/styles.xml", Buffer.from(buildStylesXml(), "utf8")],
+    ]);
+    normalizedSheets.forEach((sheet, index) => {
+      parts.set(
+        `xl/worksheets/sheet${index + 1}.xml`,
+        Buffer.from(buildSheetXml(sheet), "utf8"),
+      );
+    });
     return buildZipBuffer(parts);
   }
 
-  function buildRows(text) {
-    return extractRecordDeclarations(text).map((declaration) => {
+  function normalizeSheetModels(sheetModels) {
+    const usedNames = new Set();
+    const fallbackSheets =
+      Array.isArray(sheetModels) && sheetModels.length > 0
+        ? sheetModels
+        : [{ name: "Database", headers: ["Record", "Type"], rows: [] }];
+
+    return fallbackSheets.map((sheet, index) => {
+      const normalizedHeaders = normalizeHeaders(sheet?.headers);
+      const normalizedName = getUniqueSheetName(
+        normalizeSheetName(sheet?.name || `Sheet ${index + 1}`),
+        usedNames,
+      );
+      return {
+        name: normalizedName,
+        headers: normalizedHeaders,
+        headerBackgrounds: normalizeBackgrounds(sheet?.headerBackgrounds, normalizedHeaders.length),
+        rows: normalizeRows(sheet?.rows, normalizedHeaders.length),
+      };
+    });
+  }
+
+  function normalizeHeaders(headers) {
+    const normalizedHeaders = Array.isArray(headers)
+      ? headers.map((header) => String(header || "").trim())
+      : [];
+    if (normalizedHeaders[0] !== "Record") {
+      normalizedHeaders[0] = "Record";
+    }
+    if (normalizedHeaders[1] !== "Type") {
+      normalizedHeaders[1] = "Type";
+    }
+    return normalizedHeaders.slice(0, 2).concat(
+      normalizedHeaders
+        .slice(2)
+        .map((header, index) => header || `Field${index + 1}`),
+    );
+  }
+
+  function normalizeRows(rows, columnCount) {
+    if (!Array.isArray(rows)) {
+      return [];
+    }
+    return rows.map((row) => {
+      if (isCommentRow(row)) {
+        return {
+          kind: COMMENT_ROW_KIND,
+          text: String(row.text || ""),
+          background: normalizeBackgroundToken(row.background),
+        };
+      }
+
+      const values = Array.isArray(row?.values)
+        ? row.values
+        : Array.isArray(row)
+          ? row
+          : [];
+      const normalized = [];
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        normalized.push(String(values[columnIndex] || ""));
+      }
+      return {
+        kind: RECORD_ROW_KIND,
+        values: normalized,
+        backgrounds: normalizeBackgrounds(row?.backgrounds, columnCount),
+      };
+    });
+  }
+
+  function normalizeBackgrounds(backgrounds, columnCount) {
+    const values = Array.isArray(backgrounds) ? backgrounds : [];
+    const normalized = [];
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      normalized.push(normalizeBackgroundToken(values[columnIndex]));
+    }
+    return normalized;
+  }
+
+  function getUniqueSheetName(baseName, usedNames) {
+    let candidate = baseName || "Sheet";
+    let suffix = 2;
+    while (usedNames.has(candidate)) {
+      const trimmedBase = baseName.slice(0, Math.max(1, 31 - String(suffix).length - 1));
+      candidate = `${trimmedBase}_${suffix}`;
+      suffix += 1;
+    }
+    usedNames.add(candidate);
+    return candidate;
+  }
+
+  function normalizeSheetName(name) {
+    const sanitized = String(name || "Sheet")
+      .replace(/[\[\]:*?/\\]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const fallback = sanitized || "Sheet";
+    return fallback.slice(0, 31);
+  }
+
+  function buildEntries(text) {
+    const declarations = extractRecordDeclarations(text)
+      .slice()
+      .sort((left, right) => left.recordStart - right.recordStart);
+    const entries = [];
+    let cursor = 0;
+
+    declarations.forEach((declaration) => {
+      entries.push(
+        ...collectCommentEntriesFromSegment(
+          text.slice(cursor, declaration.recordStart),
+          cursor,
+        ),
+      );
+
       const explicitFieldValues = new Map();
       for (const fieldDeclaration of extractFieldDeclarationsInRecord(text, declaration)) {
         explicitFieldValues.set(
@@ -25,18 +184,67 @@ function createDatabaseExcelTools({
           fieldDeclaration.value,
         );
       }
-      return {
+
+      entries.push(
+        ...collectCommentEntriesFromRecord(
+          text.slice(declaration.recordStart, declaration.recordEnd),
+        ),
+      );
+
+      entries.push({
+        kind: RECORD_ROW_KIND,
         recordName: declaration.name,
         recordType: declaration.recordType,
         explicitFieldValues,
-      };
+      });
+      cursor = Math.max(cursor, declaration.recordEnd);
     });
+
+    entries.push(
+      ...collectCommentEntriesFromSegment(text.slice(cursor), cursor),
+    );
+    return entries;
+  }
+
+  function collectCommentEntriesFromSegment(segment, segmentOffset = 0) {
+    const entries = [];
+    let lineOffset = Number(segmentOffset) || 0;
+
+    for (const rawLineWithBreak of String(segment || "").match(/[^\n]*(?:\n|$)/g) || []) {
+      if (!rawLineWithBreak) {
+        continue;
+      }
+
+      const rawLine = rawLineWithBreak.endsWith("\n")
+        ? rawLineWithBreak.slice(0, -1).replace(/\r$/, "")
+        : rawLineWithBreak.replace(/\r$/, "");
+      const commentMatch = rawLine.match(/^\s*#\s?(.*)$/);
+
+      if (commentMatch) {
+        entries.push({
+          kind: COMMENT_ROW_KIND,
+          position: lineOffset,
+          text: commentMatch[1] || "",
+        });
+      }
+
+      lineOffset += rawLineWithBreak.length;
+    }
+    return entries;
+  }
+
+  function collectCommentEntriesFromRecord(segment) {
+    return collectCommentEntriesFromSegment(segment, 0);
   }
 
   function buildHeaders(rows) {
     const headers = ["Record", "Type"];
     const seen = new Set(headers);
     for (const row of rows) {
+      if (row.kind === COMMENT_ROW_KIND) {
+        continue;
+      }
+
       for (const fieldName of row.explicitFieldValues.keys()) {
         if (!seen.has(fieldName)) {
           seen.add(fieldName);
@@ -47,14 +255,27 @@ function createDatabaseExcelTools({
     return headers;
   }
 
-  function buildSheetXml(headers, rows) {
+  function getCellStyleIndex(isHeaderRow, backgroundToken) {
+    const normalizedToken = normalizeBackgroundToken(backgroundToken);
+    if (!normalizedToken) {
+      return isHeaderRow ? 1 : 0;
+    }
+    const fillOffset = FILLED_BACKGROUND_OPTIONS.findIndex((option) => option.token === normalizedToken);
+    if (fillOffset < 0) {
+      return isHeaderRow ? 1 : 0;
+    }
+    return 2 + fillOffset * 2 + (isHeaderRow ? 1 : 0);
+  }
+
+  function buildSheetXml(sheet) {
+    const headers = Array.isArray(sheet?.headers) ? sheet.headers : ["Record", "Type"];
     const allRows = [
-      headers,
-      ...rows.map((row) => [
-        row.recordName,
-        row.recordType,
-        ...headers.slice(2).map((fieldName) => row.explicitFieldValues.get(fieldName) || ""),
-      ]),
+      {
+        values: headers,
+        backgrounds: normalizeBackgrounds(sheet?.headerBackgrounds, headers.length),
+        isHeaderRow: true,
+      },
+      ...((sheet?.rows || []).map((row) => serializeSheetRow(row, headers.length))),
     ];
 
     let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -65,14 +286,18 @@ function createDatabaseExcelTools({
     xml += "</sheetView></sheetViews><sheetData>";
     allRows.forEach((row, rowIndex) => {
       xml += `<row r="${rowIndex + 1}">`;
-      row.forEach((value, columnIndex) => {
-        if (!value) {
+      row.values.forEach((value, columnIndex) => {
+        const styleIndex = getCellStyleIndex(row.isHeaderRow, row.backgrounds[columnIndex]);
+        if (!value && styleIndex === (row.isHeaderRow ? 1 : 0)) {
           return;
         }
-        const styleIndex = rowIndex === 0 ? 1 : 0;
-        xml += `<c r="${getCellReference(columnIndex, rowIndex)}" t="inlineStr" s="${styleIndex}"><is><t xml:space="preserve">${escapeXml(
-          value,
-        )}</t></is></c>`;
+        if (value) {
+          xml += `<c r="${getCellReference(columnIndex, rowIndex)}" t="inlineStr" s="${styleIndex}"><is><t xml:space="preserve">${escapeXml(
+            value,
+          )}</t></is></c>`;
+          return;
+        }
+        xml += `<c r="${getCellReference(columnIndex, rowIndex)}" s="${styleIndex}"/>`;
       });
       xml += "</row>";
     });
@@ -80,13 +305,54 @@ function createDatabaseExcelTools({
     return xml;
   }
 
-  function buildContentTypesXml() {
+  function serializeSheetRow(row, columnCount) {
+    if (isCommentRow(row)) {
+      const values = new Array(Math.max(2, columnCount)).fill("");
+      values[0] = "Comment";
+      values[1] = String(row.text || "");
+      const backgrounds = new Array(values.length).fill("");
+      const rowBackground = normalizeBackgroundToken(row.background);
+      backgrounds[0] = rowBackground;
+      backgrounds[1] = rowBackground;
+      return {
+        values,
+        backgrounds,
+        isHeaderRow: false,
+      };
+    }
+
+    if (Array.isArray(row?.values)) {
+      return {
+        values: row.values.map((value) => String(value || "")),
+        backgrounds: normalizeBackgrounds(row?.backgrounds, columnCount),
+        isHeaderRow: false,
+      };
+    }
+
+    return {
+      values: Array.isArray(row) ? row.map((value) => String(value || "")) : new Array(columnCount).fill(""),
+      backgrounds: normalizeBackgrounds(undefined, columnCount),
+      isHeaderRow: false,
+    };
+  }
+
+  function isCommentRow(row) {
+    return !!row && !Array.isArray(row) && row.kind === COMMENT_ROW_KIND;
+  }
+
+  function buildContentTypesXml(sheets) {
+    const worksheetOverrides = sheets
+      .map(
+        (_, index) =>
+          `  <Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+      )
+      .join("\n");
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${worksheetOverrides}
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>`;
   }
@@ -98,35 +364,66 @@ function createDatabaseExcelTools({
 </Relationships>`;
   }
 
-  function buildWorkbookXml() {
+  function buildWorkbookXml(sheets) {
+    const sheetEntries = sheets
+      .map(
+        (sheet, index) =>
+          `    <sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`,
+      )
+      .join("\n");
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Database" sheetId="1" r:id="rId1"/>
+${sheetEntries}
   </sheets>
 </workbook>`;
   }
 
-  function buildWorkbookRelsXml() {
+  function buildWorkbookRelsXml(sheets) {
+    const worksheetRelationships = sheets
+      .map(
+        (_, index) =>
+          `  <Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`,
+      )
+      .join("\n");
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+${worksheetRelationships}
+  <Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`;
   }
 
   function buildStylesXml() {
+    const fillEntries = FILLED_BACKGROUND_OPTIONS
+      .map((option) => {
+        return `    <fill><patternFill patternType="solid"><fgColor rgb="${getBackgroundArgb(option.token)}"/><bgColor indexed="64"/></patternFill></fill>`;
+      })
+      .join("\n");
+    const cellXfEntries = [
+      '    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
+      '    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>',
+    ].concat(
+      FILLED_BACKGROUND_OPTIONS.flatMap((_, index) => {
+        const fillId = index + 2;
+        return [
+          `    <xf numFmtId="0" fontId="0" fillId="${fillId}" borderId="0" xfId="0" applyFill="1"/>`,
+          `    <xf numFmtId="0" fontId="1" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1"/>`,
+        ];
+      }),
+    ).join("\n");
+    const fillCount = 2 + FILLED_BACKGROUND_OPTIONS.length;
+    const cellXfCount = 2 + FILLED_BACKGROUND_OPTIONS.length * 2;
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <fonts count="2">
     <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
     <font><b/><color rgb="FFFF0000"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
   </fonts>
-  <fills count="3">
+  <fills count="${fillCount}">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor indexed="64"/></patternFill></fill>
+${fillEntries}
   </fills>
   <borders count="1">
     <border><left/><right/><top/><bottom/><diagonal/></border>
@@ -134,9 +431,8 @@ function createDatabaseExcelTools({
   <cellStyleXfs count="1">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
   </cellStyleXfs>
-  <cellXfs count="2">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+  <cellXfs count="${cellXfCount}">
+${cellXfEntries}
   </cellXfs>
   <cellStyles count="1">
     <cellStyle name="Normal" xfId="0" builtinId="0"/>
@@ -249,6 +545,8 @@ function createDatabaseExcelTools({
 
   return {
     buildDatabaseWorkbookBuffer,
+    buildSheetModelFromDatabaseText,
+    buildWorkbookBufferFromSheetModels,
   };
 }
 

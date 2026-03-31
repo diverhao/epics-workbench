@@ -255,6 +255,10 @@ class EpicsTdmController {
         this.openDisplayPanels.delete(currentDisplayWindowId);
       }
       messageDisposable.dispose();
+      if (this.openDisplayPanels.size === 0) {
+        this.outputChannel.appendLine("[info] Last TDM display closed. Stopping TDM runtime.");
+        this.disposeRuntime();
+      }
     });
   }
 

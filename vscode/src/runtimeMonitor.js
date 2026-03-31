@@ -28,6 +28,8 @@ const RUN_IOC_SHELL_DBL_COMMAND = "vscode-epics.runIocShellDbl";
 const RUN_IOC_SHELL_DBPR_CURRENT_RECORD_COMMAND =
   "vscode-epics.runIocShellDbprCurrentRecord";
 const DUMP_ALL_IOC_RECORDS_COMMAND = "vscode-epics.dumpAllIocRecords";
+const DUMP_ALL_IOC_RECORDS_TO_EXCEL_COMMAND =
+  "vscode-epics.dumpAllIocRecordsToExcel";
 const DUMP_ALL_IOC_RECORD_NAMES_COMMAND =
   "vscode-epics.dumpAllIocRecordNames";
 const DUMP_IOC_RECORD_COMMAND = "vscode-epics.dumpIocRecord";
@@ -184,6 +186,17 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
         "none; display: block; font-size: 3.2em; letter-spacing: 0.08em; -webkit-text-stroke: 1.4px rgba(220, 38, 38, 0.7);",
     },
   });
+  const readOnlyDatabaseDecorationType = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    after: {
+      color: "transparent",
+      margin: "0.9em 0 0.9em 5ch",
+      fontStyle: "italic",
+      fontWeight: "700",
+      textDecoration:
+        "none; display: block; font-size: 3.2em; letter-spacing: 0.08em; -webkit-text-stroke: 1.4px rgba(107, 114, 128, 0.16);",
+    },
+  });
   const probeDecorationTypes = Array.from(
     { length: PROBE_OVERLAY_MAX_LINES },
     () =>
@@ -199,6 +212,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   controller.attachHoverDecorationType(hoverDecorationType);
   controller.attachDatabaseTocValueDecorationType(databaseTocValueDecorationType);
   controller.attachStartupRunningDecorationType(startupRunningDecorationType);
+  controller.attachReadOnlyDatabaseDecorationType(readOnlyDatabaseDecorationType);
   controller.attachProbeDecorationTypes(probeDecorationTypes);
 
   extensionContext.subscriptions.push(
@@ -209,6 +223,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
     hoverDecorationType,
     databaseTocValueDecorationType,
     startupRunningDecorationType,
+    readOnlyDatabaseDecorationType,
     ...probeDecorationTypes,
   );
   extensionContext.subscriptions.push(
@@ -366,6 +381,12 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
   );
   extensionContext.subscriptions.push(
     vscode.commands.registerCommand(
+      DUMP_ALL_IOC_RECORDS_TO_EXCEL_COMMAND,
+      async (resourceUri) => controller.dumpAllIocRecordsToExcel(resourceUri),
+    ),
+  );
+  extensionContext.subscriptions.push(
+    vscode.commands.registerCommand(
       DUMP_ALL_IOC_RECORD_NAMES_COMMAND,
       async (resourceUri) => controller.dumpAllIocRecordNames(resourceUri),
     ),
@@ -460,6 +481,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorHoverDecorationsForEditor(editor);
       controller.refreshDatabaseTocValueDecorationsForEditor(editor);
       controller.refreshStartupRunningDecorationsForEditor(editor);
+      controller.refreshReadOnlyDatabaseDecorationsForEditor(editor);
       controller.refreshProbeDecorationsForEditor(editor);
     }),
   );
@@ -511,6 +533,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorHoverDecorationsForDocument(event.document);
       controller.refreshDatabaseTocValueDecorationsForDocument(event.document);
       controller.refreshStartupRunningDecorationsForDocument(event.document);
+      controller.refreshReadOnlyDatabaseDecorationsForDocument(event.document);
       controller.refreshProbeDecorationsForDocument(event.document);
       controller.refreshProbePanels();
     }),
@@ -521,6 +544,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.refreshMonitorHoverDecorationsForDocument(document);
       controller.refreshDatabaseTocValueDecorationsForDocument(document);
       controller.refreshStartupRunningDecorationsForDocument(document);
+      controller.refreshReadOnlyDatabaseDecorationsForDocument(document);
       controller.refreshProbeDecorationsForDocument(document);
       controller.refreshProbePanels();
     }),
@@ -531,6 +555,7 @@ function registerRuntimeMonitor(extensionContext, databaseHelpers = {}) {
       controller.clearMonitorHoverDecorationsForDocument(document);
       controller.clearDatabaseTocValueDecorationsForDocument(document);
       controller.clearStartupRunningDecorationsForDocument(document);
+      controller.clearReadOnlyDatabaseDecorationsForDocument(document);
       controller.clearProbeDecorationsForDocument(document);
       void controller.handleDocumentClosed(document);
     }),
@@ -573,6 +598,7 @@ class EpicsRuntimeMonitorController {
     this.hoverDecorationType = undefined;
     this.databaseTocValueDecorationType = undefined;
     this.startupRunningDecorationType = undefined;
+    this.readOnlyDatabaseDecorationType = undefined;
     this.probeDecorationTypes = [];
     this.hoverRefreshTimer = undefined;
     this.runtimeWorkspaceFolder = undefined;
@@ -590,6 +616,10 @@ class EpicsRuntimeMonitorController {
     this.extractRecordDeclarations =
       typeof databaseHelpers.extractRecordDeclarations === "function"
         ? databaseHelpers.extractRecordDeclarations
+        : undefined;
+    this.buildDatabaseWorkbookBuffer =
+      typeof databaseHelpers.buildDatabaseWorkbookBuffer === "function"
+        ? databaseHelpers.buildDatabaseWorkbookBuffer
         : undefined;
     this.getFieldNamesForRecordType =
       typeof databaseHelpers.getFieldNamesForRecordType === "function"
@@ -1766,6 +1796,45 @@ class EpicsRuntimeMonitorController {
     });
     await vscode.window.showTextDocument(document, vscode.ViewColumn.Active, false);
     return document;
+  }
+
+  async exportIocDatabaseTextToExcel(selectedIoc, sourceText) {
+    if (typeof this.buildDatabaseWorkbookBuffer !== "function") {
+      vscode.window.showWarningMessage(
+        "Excel export is not available in the current session.",
+      );
+      return;
+    }
+
+    const workbookBuffer = this.buildDatabaseWorkbookBuffer(String(sourceText || ""));
+    const startupDocumentPath = normalizeFsPath(selectedIoc?.startupDocumentPath);
+    const defaultFileName = buildDumpAllRecordsExcelFileName(startupDocumentPath);
+    const defaultUri = startupDocumentPath
+      ? vscode.Uri.file(path.join(path.dirname(startupDocumentPath), defaultFileName))
+      : undefined;
+    const targetUri = await vscode.window.showSaveDialog({
+      defaultUri,
+      filters: {
+        "Excel Workbook": ["xlsx"],
+      },
+      saveLabel: "Export to Excel",
+    });
+    if (!targetUri) {
+      return;
+    }
+
+    await vscode.workspace.fs.writeFile(targetUri, workbookBuffer);
+    const targetLabel = path.basename(
+      targetUri.fsPath || targetUri.path || defaultFileName,
+    );
+    const openChoice = `Open ${targetLabel}`;
+    const selectedChoice = await vscode.window.showInformationMessage(
+      `Exported ${selectedIoc?.label || "IOC records"} to ${targetLabel}.`,
+      openChoice,
+    );
+    if (selectedChoice === openChoice) {
+      await vscode.env.openExternal(targetUri);
+    }
   }
 
   trackStartupIocTerminal(documentPath, terminal) {
@@ -3762,6 +3831,39 @@ class EpicsRuntimeMonitorController {
     );
   }
 
+  async dumpAllIocRecordsToExcel(resourceUri) {
+    const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
+      title: "Dump All Records to Excel",
+      placeHolder: "Select the running IOC to dump all records from and export",
+    });
+    if (!selectedIoc?.terminal) {
+      return;
+    }
+
+    let outputText;
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Dumping all records from ${selectedIoc.label}`,
+      },
+      async () => {
+        outputText = await this.captureIocShellCommandOutput(
+          "dbDumpRecord",
+          selectedIoc.terminal,
+        );
+      },
+    );
+
+    if (outputText === undefined) {
+      vscode.window.showWarningMessage(
+        `Could not capture dbDumpRecord output from ${selectedIoc.label}.`,
+      );
+      return;
+    }
+
+    await this.exportIocDatabaseTextToExcel(selectedIoc, outputText);
+  }
+
   async dumpAllIocRecordNames(resourceUri) {
     const selectedIoc = await this.pickRunningProjectIoc(resourceUri, {
       title: "Dump All Record Names",
@@ -4749,6 +4851,10 @@ class EpicsRuntimeMonitorController {
     this.startupRunningDecorationType = decorationType;
   }
 
+  attachReadOnlyDatabaseDecorationType(decorationType) {
+    this.readOnlyDatabaseDecorationType = decorationType;
+  }
+
   attachProbeDecorationTypes(decorationTypes) {
     this.probeDecorationTypes = Array.isArray(decorationTypes)
       ? decorationTypes
@@ -5668,6 +5774,7 @@ class EpicsRuntimeMonitorController {
       !this.hoverDecorationType &&
       !this.databaseTocValueDecorationType &&
       !this.startupRunningDecorationType &&
+      !this.readOnlyDatabaseDecorationType &&
       !this.probeDecorationTypes.length
     ) {
       return;
@@ -5679,6 +5786,7 @@ class EpicsRuntimeMonitorController {
       this.refreshMonitorHoverDecorationsForEditor(editor);
       this.refreshDatabaseTocValueDecorationsForEditor(editor);
       this.refreshStartupRunningDecorationsForEditor(editor);
+      this.refreshReadOnlyDatabaseDecorationsForEditor(editor);
       this.refreshProbeDecorationsForEditor(editor);
     }
     this.refreshProbePanels();
@@ -5907,6 +6015,30 @@ class EpicsRuntimeMonitorController {
     }
   }
 
+  refreshReadOnlyDatabaseDecorationsForDocument(document) {
+    if (!this.readOnlyDatabaseDecorationType || !document?.uri) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.toString() === document.uri.toString()) {
+        this.refreshReadOnlyDatabaseDecorationsForEditor(editor);
+      }
+    }
+  }
+
+  clearReadOnlyDatabaseDecorationsForDocument(document) {
+    if (!this.readOnlyDatabaseDecorationType || !document?.uri) {
+      return;
+    }
+
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.toString() === document.uri.toString()) {
+        editor.setDecorations(this.readOnlyDatabaseDecorationType, []);
+      }
+    }
+  }
+
   refreshProbeDecorationsForDocument(document) {
     if (!isProbeDocument(document) || !document?.uri) {
       return;
@@ -6088,6 +6220,37 @@ class EpicsRuntimeMonitorController {
     }
 
     editor.setDecorations(this.startupRunningDecorationType, decorationOptions);
+  }
+
+  refreshReadOnlyDatabaseDecorationsForEditor(editor) {
+    if (!this.readOnlyDatabaseDecorationType || !editor) {
+      return;
+    }
+
+    if (!isReadOnlyDatabaseDocument(editor.document)) {
+      editor.setDecorations(this.readOnlyDatabaseDecorationType, []);
+      return;
+    }
+
+    const decorationOptions = [];
+    const lineCount = Math.max(Number(editor.document.lineCount) || 0, 1);
+    for (
+      let lineIndex = 0;
+      lineIndex < lineCount;
+      lineIndex += STARTUP_RUNNING_WATERMARK_LINE_INTERVAL
+    ) {
+      const line = editor.document.lineAt(Math.min(lineIndex, lineCount - 1));
+      decorationOptions.push({
+        range: new vscode.Range(line.range.start, line.range.start),
+        renderOptions: {
+          after: {
+            contentText: "Read Only",
+          },
+        },
+      });
+    }
+
+    editor.setDecorations(this.readOnlyDatabaseDecorationType, decorationOptions);
   }
 
   refreshProbeDecorationsForEditor(editor) {
@@ -8765,6 +8928,19 @@ function isDatabaseRuntimeDocument(document) {
   );
 }
 
+function isReadOnlyDatabaseDocument(document) {
+  if (!isDatabaseRuntimeDocument(document) || document.uri.scheme !== "file") {
+    return false;
+  }
+
+  try {
+    fs.accessSync(document.uri.fsPath, fs.constants.W_OK);
+    return false;
+  } catch (error) {
+    return true;
+  }
+}
+
 function normalizeFsPath(fsPath) {
   if (!fsPath) {
     return "";
@@ -8885,6 +9061,19 @@ function getIocBootRelativeDisplayPath(projectRootPath, startupDocumentPath) {
 function getIocBootDisplayPath(projectRootPath, startupDocumentPath) {
   const relativePath = getIocBootRelativeDisplayPath(projectRootPath, startupDocumentPath);
   return relativePath ? `iocBoot/${relativePath}` : "iocBoot";
+}
+
+function buildDumpAllRecordsExcelFileName(startupDocumentPath) {
+  const startupDirectoryName = path.basename(
+    path.dirname(normalizeFsPath(startupDocumentPath) || ""),
+  );
+  const token = String(startupDirectoryName || "ioc")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const safeToken = /[a-z0-9]/.test(token) ? token : "ioc";
+  return `epics-dbdumprecord-${safeToken}.xlsx`;
 }
 
 function getCommandResourceFsPath(resourceUri) {

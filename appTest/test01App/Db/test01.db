@@ -1,34 +1,24 @@
-# EPICS TOC BEGIN
-# Macros:
-#  - SYS = val
-# Table of Contents FLNK CALC
-# | Record  | Value              | Type | FLNK | CALC         |
-# | ------- | ------------------ | ---- | ---- | ------------ |
-# | val1    |                    | calc | val2 | A>1000?0:A+1 |
-# | val2    |                    | ai   | val3 | NA           |
-# | $(SYS)3 |                    | ai   | ""   | NA           |
-# | $(SYS)4 |                    | ai   | ""   | NA           |
-# EPICS TOC END
-
 record(calc, "val1") {
     field(FLNK, "val2")
     field(SCAN, "1 second")
     field(INPA, "val1")
-    field(CALC, "A>1000?0:A+1")
+    field(CALC, "A>1000?0:A+2")
 }
 
 record(ai, "val2") {
     field(FLNK, "val3")
 }
 
+# This line is another comment
+
 record(ai, "$(SYS)3") {
+    field(FLNK, "val5")
+    field(SCAN, "5 second")
     field(INP, "$(SYS)2")
 }
 
-
 record(ai, "$(SYS)4") {
-    field(DESC, "")
+    field(SCAN, "2 second")
     field(DTYP, "Add10")
-    field(SCAN, "Passive")
 }
 

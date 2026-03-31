@@ -13,6 +13,7 @@ import com.intellij.psi.impl.FakePsiElement
 import com.intellij.psi.tree.IElementType
 import org.epics.workbench.build.EpicsBuildModelService
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
+import org.epics.workbench.formatting.isMakefileStyleFile
 import org.epics.workbench.highlighting.EpicsHighlightingKeys
 import org.epics.workbench.highlighting.EpicsLexingProfile
 import org.epics.workbench.highlighting.EpicsSimpleLexer
@@ -120,6 +121,8 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         }
       }
 
+      findVariableDocumentationPreview(project, hostFile, offset)?.let { return it }
+
       if (isSubstitutionsFile(hostFile)) {
         val resolvedReferences = EpicsPathResolver.resolveSubstitutionsReferences(project, hostFile, offset)
         if (resolvedReferences.isNotEmpty()) {
@@ -141,6 +144,183 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         }
 
       return null
+    }
+
+    private fun findVariableDocumentationPreview(
+      project: Project,
+      hostFile: VirtualFile,
+      offset: Int,
+    ): EpicsDocumentationPreview? {
+      if (!isMakefileStyleFile(hostFile) && !isStartupStateFile(hostFile)) {
+        return null
+      }
+
+      val text = readText(hostFile) ?: return null
+      val reference = findVariableReferenceAtOffset(text, offset) ?: return null
+      val resolution = when {
+        isMakefileStyleFile(hostFile) ->
+          resolveMakefileVariableDocumentation(project, hostFile, text, reference.variableName)
+
+        isStartupStateFile(hostFile) ->
+          resolveStartupVariableDocumentation(project, hostFile, text, reference.startOffset, reference.variableName)
+
+        else -> null
+      } ?: return null
+
+      val referenceKey = buildString {
+        append(hostFile.path)
+        append(":variable:")
+        append(reference.variableName)
+        append(':')
+        append(resolution.resolvedValue)
+        resolution.sourceInfo?.sourcePath?.let {
+          append(':')
+          append(it)
+        }
+        resolution.sourceInfo?.line?.let {
+          append(':')
+          append(it)
+        }
+      }
+      return EpicsDocumentationPreview(referenceKey, buildVariableDocumentation(reference.variableName, resolution))
+    }
+
+    private fun resolveMakefileVariableDocumentation(
+      project: Project,
+      hostFile: VirtualFile,
+      hostText: String,
+      variableName: String,
+    ): VariableHoverResolution? {
+      val ownerRoot = EpicsPathResolver.findOwningEpicsRoot(project, hostFile)
+      val releaseState = loadReleaseVariableState(ownerRoot)
+      val hostDefinitions = linkedMapOf<String, VariableDefinition>()
+      applyMakefileVariableDefinitions(
+        text = hostText,
+        sourcePath = hostFile.path,
+        sourceKind = if (isEpicsReleaseFile(hostFile)) "RELEASE" else "Makefile",
+        baseDirectory = hostFile.parent?.toNioPath() ?: ownerRoot,
+        target = hostDefinitions,
+      )
+
+      val cache = linkedMapOf<String, VariableHoverResolution?>()
+      val resolving = linkedSetOf<String>()
+
+      fun resolve(name: String): VariableHoverResolution? {
+        if (cache.containsKey(name)) {
+          return cache[name]
+        }
+        if (!resolving.add(name)) {
+          return null
+        }
+
+        val definition = hostDefinitions[name] ?: releaseState.definitions[name]
+        val rawValue = when {
+          definition != null -> definition.rawValue
+          releaseState.resolvedValues.containsKey(name) -> releaseState.resolvedValues[name].orEmpty()
+          else -> System.getenv(name)
+        }
+
+        if (rawValue == null) {
+          resolving.remove(name)
+          cache[name] = null
+          return null
+        }
+
+        val expandedValue = expandDocumentationVariableValue(rawValue) { nestedName ->
+          resolve(nestedName)?.resolvedValue
+            ?: releaseState.resolvedValues[nestedName]
+            ?: System.getenv(nestedName)
+        }
+        val absolutePath = computeAbsoluteVariablePath(
+          expandedValue,
+          definition?.baseDirectory ?: (hostFile.parent?.toNioPath() ?: ownerRoot),
+        )
+        val result = VariableHoverResolution(
+          resolvedValue = absolutePath?.pathString ?: expandedValue,
+          absolutePath = absolutePath,
+          sourceInfo = definition?.toSourceInfo(),
+        )
+        resolving.remove(name)
+        cache[name] = result
+        return result
+      }
+
+      return resolve(variableName)
+    }
+
+    private fun resolveStartupVariableDocumentation(
+      project: Project,
+      hostFile: VirtualFile,
+      hostText: String,
+      untilOffset: Int,
+      variableName: String,
+    ): VariableHoverResolution? {
+      val ownerRoot = EpicsPathResolver.findOwningEpicsRoot(project, hostFile)
+      val releaseState = loadReleaseVariableState(ownerRoot)
+      val envPathsState = loadEnvPathsVariableState(hostFile.parent?.toNioPath(), releaseState.resolvedValues)
+      val state = StartupVariableHoverState(
+        currentDirectory = hostFile.parent?.toNioPath() ?: ownerRoot,
+        variables = linkedMapOf<String, String>().apply {
+          putAll(releaseState.resolvedValues)
+          putAll(envPathsState.resolvedValues)
+        },
+        sources = linkedMapOf<String, VariableHoverSourceInfo>().apply {
+          releaseState.definitions.forEach { (name, definition) ->
+            definition.toSourceInfo()?.let { put(name, it) }
+          }
+          envPathsState.definitions.forEach { (name, definition) ->
+            definition.toSourceInfo()?.let { put(name, it) }
+          }
+        },
+      )
+      if (isStartupFile(hostFile)) {
+        applyStartupVariableStateUntilOffset(hostText, untilOffset, state, hostFile)
+      }
+
+      val resolvedValue = state.variables[variableName] ?: System.getenv(variableName) ?: return null
+      val sourceInfo = state.sources[variableName]
+      val absolutePath = computeAbsoluteVariablePath(
+        resolvedValue,
+        sourceInfo?.baseDirectory ?: state.currentDirectory,
+      )
+      return VariableHoverResolution(
+        resolvedValue = absolutePath?.pathString ?: resolvedValue,
+        absolutePath = absolutePath,
+        sourceInfo = sourceInfo,
+      )
+    }
+
+    private fun buildVariableDocumentation(
+      variableName: String,
+      resolution: VariableHoverResolution,
+    ): String {
+      val terminalDirectory = resolution.absolutePath?.takeIf { it.exists() && it.isDirectory() }
+      return buildString {
+        append("<html><body>")
+        append("<h3>").append(escape(variableName)).append("</h3>")
+        append(paragraph("Resolved value", resolution.resolvedValue))
+
+        if (resolution.absolutePath != null && resolution.absolutePath.pathString != resolution.resolvedValue) {
+          append(paragraph("Absolute path", resolution.absolutePath.pathString))
+        }
+
+        resolution.sourceInfo?.sourcePath?.let { sourcePath ->
+          val line = resolution.sourceInfo.line
+          val offset = line?.let { lineNumberToOffset(sourcePath, it) }
+          val label = if (line != null) "$sourcePath:$line" else sourcePath
+          append(linkedPathParagraph("Defined in", label, sourcePath, offset))
+        }
+        resolution.sourceInfo?.sourceKind?.let { append(paragraph("Source", it)) }
+        resolution.sourceInfo?.rawValue?.let { append(paragraph("Assigned value", it)) }
+        terminalDirectory?.let {
+          append("<p><a href=\"")
+          append(escapeAttribute(buildOpenDirectoryInTerminalHref(it)))
+          append("\">")
+          append(escape("Open in terminal"))
+          append("</a></p>")
+        }
+        append("</body></html>")
+      }
     }
 
     private fun buildDtypReferenceKey(
@@ -454,6 +634,21 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       return "<p><b>${escape(label)}:</b> <a href=\"$href\"><code>${escape(value)}</code></a></p>"
     }
 
+    private fun linkedPathParagraph(
+      label: String,
+      displayValue: String,
+      targetPath: String,
+      offset: Int? = null,
+    ): String {
+      val baseHref = File(targetPath).toURI().toASCIIString()
+      val href = if (offset != null && offset >= 0) {
+        "$baseHref#offset=$offset"
+      } else {
+        baseHref
+      }
+      return "<p><b>${escape(label)}:</b> <a href=\"$href\"><code>${escape(displayValue)}</code></a></p>"
+    }
+
     private fun StringBuilder.appendPreview(label: String, content: String) {
       if (content.isBlank()) {
         return
@@ -620,6 +815,352 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         }
       }
       return count
+    }
+
+    private fun findVariableReferenceAtOffset(text: String, offset: Int): VariableReference? {
+      return EPICS_VARIABLE_REGEX.findAll(text).firstNotNullOfOrNull { match ->
+        val start = match.range.first
+        val end = match.range.last + 1
+        if (offset !in start until end) {
+          return@firstNotNullOfOrNull null
+        }
+        val variableName = match.groups[1]?.value
+          ?: match.groups[3]?.value
+          ?: match.groups[5]?.value
+          ?: return@firstNotNullOfOrNull null
+        VariableReference(variableName, start, end)
+      }
+    }
+
+    private fun loadReleaseVariableState(ownerRoot: Path): VariableDefinitionState {
+      val configureDirectory = ownerRoot.resolve("configure")
+      val definitions = linkedMapOf<String, VariableDefinition>()
+      definitions["TOP"] = VariableDefinition(ownerRoot.pathString, null, null, null, ownerRoot)
+      collectReleaseFiles(configureDirectory).forEach { releaseFile ->
+        val text = runCatching { Files.readString(releaseFile) }.getOrNull() ?: return@forEach
+        applyMakefileVariableDefinitions(
+          text = text,
+          sourcePath = releaseFile.pathString,
+          sourceKind = "RELEASE",
+          baseDirectory = releaseFile.parent ?: configureDirectory,
+          target = definitions,
+        )
+      }
+      return resolveVariableDefinitionState(definitions, ownerRoot)
+    }
+
+    private fun loadEnvPathsVariableState(
+      startupDirectory: Path?,
+      baseVariables: Map<String, String>,
+    ): VariableDefinitionState {
+      val definitions = linkedMapOf<String, VariableDefinition>()
+      val resolvedValues = linkedMapOf<String, String>()
+      val files = startupDirectory
+        ?.toFile()
+        ?.listFiles { file -> file.isFile && (file.name == "envPaths" || file.name.startsWith("envPaths.")) }
+        ?.sortedBy { if (it.name == "envPaths") 0 else 1 }
+        .orEmpty()
+      for (envPathsFile in files) {
+        val text = runCatching { Files.readString(envPathsFile.toPath()) }.getOrNull() ?: continue
+        text.split(Regex("""\r?\n""")).forEachIndexed { index, rawLine ->
+          val match = STARTUP_ENV_SET_REGEX.find(maskHashCommentLine(rawLine)) ?: return@forEachIndexed
+          val name = match.groups[1]?.value?.trim().orEmpty()
+          val rawValue = match.groups[2]?.value.orEmpty()
+          if (name.isEmpty()) {
+            return@forEachIndexed
+          }
+          definitions[name] = VariableDefinition(
+            rawValue = rawValue,
+            sourcePath = envPathsFile.path,
+            line = index + 1,
+            sourceKind = "envPaths",
+            baseDirectory = envPathsFile.parentFile.toPath(),
+          )
+          resolvedValues[name] = expandDocumentationVariableValue(rawValue) { variableName ->
+            resolvedValues[variableName] ?: baseVariables[variableName] ?: System.getenv(variableName)
+          }
+        }
+      }
+      return VariableDefinitionState(resolvedValues, definitions)
+    }
+
+    private fun resolveVariableDefinitionState(
+      definitions: Map<String, VariableDefinition>,
+      ownerRoot: Path,
+    ): VariableDefinitionState {
+      val cache = linkedMapOf<String, String>()
+      val resolving = linkedSetOf<String>()
+
+      fun resolve(name: String): String? {
+        if (cache.containsKey(name)) {
+          return cache[name]
+        }
+        if (!resolving.add(name)) {
+          return null
+        }
+
+        val definition = definitions[name]
+        val rawValue = definition?.rawValue ?: System.getenv(name)
+        if (rawValue == null) {
+          resolving.remove(name)
+          return null
+        }
+
+        val expanded = expandDocumentationVariableValue(rawValue) { nestedName ->
+          resolve(nestedName) ?: System.getenv(nestedName)
+        }
+        resolving.remove(name)
+        cache[name] = expanded
+        return expanded
+      }
+
+      definitions.keys.forEach { resolve(it) }
+      cache.putIfAbsent("TOP", ownerRoot.pathString)
+      return VariableDefinitionState(cache, LinkedHashMap(definitions))
+    }
+
+    private fun collectReleaseFiles(configureDirectory: Path): List<Path> {
+      if (!configureDirectory.exists() || !configureDirectory.isDirectory()) {
+        return emptyList()
+      }
+
+      val releaseFiles = mutableListOf<Path>()
+      Files.list(configureDirectory).use { stream ->
+        stream
+          .filter { file ->
+            Files.isRegularFile(file) && (
+              file.fileName.toString() == "RELEASE" ||
+                file.fileName.toString().startsWith("RELEASE.")
+            )
+          }
+          .sorted { left, right ->
+            releaseFileSortKey(left.fileName.toString()).compareTo(releaseFileSortKey(right.fileName.toString()))
+          }
+          .forEach { releaseFiles.add(it) }
+      }
+      return releaseFiles
+    }
+
+    private fun releaseFileSortKey(fileName: String): String {
+      return when (fileName) {
+        "RELEASE" -> "0:$fileName"
+        "RELEASE.local" -> "1:$fileName"
+        else -> "2:$fileName"
+      }
+    }
+
+    private fun applyMakefileVariableDefinitions(
+      text: String,
+      sourcePath: String,
+      sourceKind: String,
+      baseDirectory: Path,
+      target: LinkedHashMap<String, VariableDefinition>,
+    ) {
+      text.split(Regex("""\r?\n""")).forEachIndexed { index, rawLine ->
+        val match = MAKEFILE_ASSIGNMENT_REGEX.find(rawLine) ?: return@forEachIndexed
+        val variableName = match.groups[1]?.value.orEmpty()
+        val operator = match.groups[2]?.value.orEmpty()
+        val rawValue = match.groups[3]?.value?.trim().orEmpty()
+        if (variableName.isBlank()) {
+          return@forEachIndexed
+        }
+
+        val definition = when {
+          operator == "?=" && target.containsKey(variableName) -> null
+          operator == "+=" && target.containsKey(variableName) ->
+            target[variableName]?.copy(
+              rawValue = "${target[variableName]?.rawValue.orEmpty()} $rawValue".trim(),
+              sourcePath = sourcePath,
+              line = index + 1,
+              sourceKind = sourceKind,
+              baseDirectory = baseDirectory,
+            )
+
+          else -> VariableDefinition(rawValue, sourcePath, index + 1, sourceKind, baseDirectory)
+        }
+        if (definition != null) {
+          target[variableName] = definition
+        }
+      }
+    }
+
+    private fun applyStartupVariableStateUntilOffset(
+      text: String,
+      untilOffset: Int,
+      state: StartupVariableHoverState,
+      hostFile: VirtualFile,
+    ) {
+      var runningOffset = 0
+      for ((lineIndex, line) in text.split('\n').withIndex()) {
+        val lineStart = runningOffset
+        if (lineStart >= untilOffset) {
+          break
+        }
+        applyStartupVariableLine(line, lineIndex + 1, state, hostFile)
+        runningOffset = lineStart + line.length + 1
+      }
+    }
+
+    private fun applyStartupVariableLine(
+      line: String,
+      lineNumber: Int,
+      state: StartupVariableHoverState,
+      hostFile: VirtualFile,
+    ) {
+      val sanitizedLine = maskHashCommentLine(line)
+      STARTUP_ENV_SET_REGEX.find(sanitizedLine)?.let { match ->
+        val name = match.groups[1]?.value?.trim().orEmpty()
+        val rawValue = match.groups[2]?.value.orEmpty()
+        if (name.isNotEmpty()) {
+          state.variables[name] = expandDocumentationVariableValue(rawValue) { variableName ->
+            state.variables[variableName] ?: System.getenv(variableName)
+          }
+          state.sources[name] = VariableHoverSourceInfo(
+            sourcePath = hostFile.path,
+            line = lineNumber,
+            sourceKind = if (isEnvPathsFile(hostFile)) "envPaths" else "startup",
+            rawValue = rawValue,
+            baseDirectory = state.currentDirectory,
+          )
+        }
+      }
+
+      STARTUP_CD_REGEX.find(sanitizedLine)?.let { match ->
+        val rawDirectory = match.groups[1]?.value ?: match.groups[2]?.value ?: ""
+        val expandedDirectory = expandDocumentationVariableValue(rawDirectory) { variableName ->
+          state.variables[variableName] ?: System.getenv(variableName)
+        }
+        val resolvedDirectory = resolveAbsoluteOrRelative(state.currentDirectory, expandedDirectory)
+        if (resolvedDirectory.exists() && resolvedDirectory.isDirectory()) {
+          state.currentDirectory = resolvedDirectory.normalize()
+        }
+      }
+    }
+
+    private fun expandDocumentationVariableValue(
+      rawValue: String,
+      resolver: (String) -> String?,
+    ): String {
+      var expanded = rawValue
+      repeat(5) {
+        val next = EPICS_VARIABLE_REGEX.replace(expanded) { match ->
+          val variableName = match.groups[1]?.value
+            ?: match.groups[3]?.value
+            ?: match.groups[5]?.value
+            ?: return@replace match.value
+          val defaultValue = match.groups[2]?.value ?: match.groups[4]?.value
+          resolver(variableName) ?: defaultValue ?: match.value
+        }
+        if (next == expanded) {
+          return expanded
+        }
+        expanded = next
+      }
+      return expanded
+    }
+
+    private fun computeAbsoluteVariablePath(value: String, baseDirectory: Path?): Path? {
+      if (value.isBlank() || baseDirectory == null || !looksLikePathValue(value) || EPICS_VARIABLE_REGEX.containsMatchIn(value)) {
+        return null
+      }
+
+      val candidate = runCatching {
+        when {
+          value.startsWith("~/") -> Path.of(System.getProperty("user.home")).resolve(value.removePrefix("~/"))
+          Path.of(value).isAbsolute -> Path.of(value)
+          else -> baseDirectory.resolve(value)
+        }
+      }.getOrNull() ?: return null
+      return candidate.normalize()
+    }
+
+    private fun looksLikePathValue(value: String): Boolean {
+      return value.startsWith(".") ||
+        value.startsWith("/") ||
+        value.startsWith("~/") ||
+        value.contains("/") ||
+        value.contains("\\")
+    }
+
+    private fun resolveAbsoluteOrRelative(currentDirectory: Path, value: String): Path {
+      val candidate = runCatching { Path.of(value) }.getOrNull()
+      return if (candidate != null && candidate.isAbsolute) {
+        candidate
+      } else {
+        currentDirectory.resolve(value)
+      }
+    }
+
+    private fun lineNumberToOffset(sourcePath: String, lineNumber: Int): Int? {
+      if (lineNumber <= 1) {
+        return 0
+      }
+      val text = runCatching { Files.readString(Path.of(sourcePath)) }.getOrNull() ?: return null
+      var line = 1
+      for ((index, character) in text.withIndex()) {
+        if (line >= lineNumber) {
+          return index
+        }
+        if (character == '\n') {
+          line += 1
+        }
+      }
+      return if (line == lineNumber) text.length else null
+    }
+
+    private fun buildOpenDirectoryInTerminalHref(directory: Path): String {
+      return "epics-terminal://open?path=${urlEncode(directory.pathString)}"
+    }
+
+    private fun maskHashCommentLine(line: String): String {
+      val sanitized = StringBuilder(line.length)
+      var inString = false
+      var escaped = false
+
+      for (character in line) {
+        if (escaped) {
+          sanitized.append(character)
+          escaped = false
+          continue
+        }
+
+        if (character == '\\') {
+          sanitized.append(character)
+          escaped = true
+          continue
+        }
+
+        if (character == '"') {
+          inString = !inString
+          sanitized.append(character)
+          continue
+        }
+
+        if (!inString && character == '#') {
+          sanitized.append(' ')
+          repeat(line.length - sanitized.length) {
+            sanitized.append(' ')
+          }
+          break
+        }
+
+        sanitized.append(character)
+      }
+
+      return sanitized.toString()
+    }
+
+    private fun isStartupStateFile(file: VirtualFile): Boolean {
+      return isStartupFile(file) || isEnvPathsFile(file)
+    }
+
+    private fun isEnvPathsFile(file: VirtualFile): Boolean {
+      return file.name == "envPaths" || file.name.startsWith("envPaths.")
+    }
+
+    private fun isEpicsReleaseFile(file: VirtualFile): Boolean {
+      return file.parent?.name == "configure" &&
+        (file.name == "RELEASE" || file.name.startsWith("RELEASE."))
     }
 
     private fun findDatabaseFieldValueContext(text: String, offset: Int): DatabaseFieldValueContext? {
@@ -980,6 +1521,58 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       val valueEnd: Int,
     )
 
+    private data class VariableReference(
+      val variableName: String,
+      val startOffset: Int,
+      val endOffset: Int,
+    )
+
+    private data class VariableDefinition(
+      val rawValue: String,
+      val sourcePath: String?,
+      val line: Int?,
+      val sourceKind: String?,
+      val baseDirectory: Path?,
+    ) {
+      fun toSourceInfo(): VariableHoverSourceInfo? {
+        if (sourcePath == null && sourceKind == null && rawValue.isBlank()) {
+          return null
+        }
+        return VariableHoverSourceInfo(
+          sourcePath = sourcePath,
+          line = line,
+          sourceKind = sourceKind,
+          rawValue = rawValue,
+          baseDirectory = baseDirectory,
+        )
+      }
+    }
+
+    private data class VariableDefinitionState(
+      val resolvedValues: LinkedHashMap<String, String>,
+      val definitions: LinkedHashMap<String, VariableDefinition>,
+    )
+
+    private data class VariableHoverSourceInfo(
+      val sourcePath: String?,
+      val line: Int?,
+      val sourceKind: String?,
+      val rawValue: String?,
+      val baseDirectory: Path?,
+    )
+
+    private data class VariableHoverResolution(
+      val resolvedValue: String,
+      val absolutePath: Path?,
+      val sourceInfo: VariableHoverSourceInfo?,
+    )
+
+    private data class StartupVariableHoverState(
+      var currentDirectory: Path,
+      val variables: LinkedHashMap<String, String>,
+      val sources: LinkedHashMap<String, VariableHoverSourceInfo>,
+    )
+
     private data class DbdSearchDirectory(
       val directory: Path,
       val label: String,
@@ -1038,6 +1631,11 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
     private val DBD_DEVICE_DECLARATION_REGEX = Regex(
       """device\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)""",
     )
+    private val MAKEFILE_ASSIGNMENT_REGEX = Regex(
+      """^\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*(\+?=|:=|\?=)\s*(.*?)\s*(?:#.*)?$""",
+    )
+    private val STARTUP_ENV_SET_REGEX = Regex("""\bepicsEnvSet\(\s*\"([^\"]+)\"\s*,\s*\"([^\"]*)\"\s*\)""")
+    private val STARTUP_CD_REGEX = Regex("""^\s*cd\s+(?:\"([^\"]+)\"|([^\s#]+))""")
     private val EPICS_VARIABLE_REGEX = Regex("""\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)""")
     private val PVLIST_MACRO_ASSIGNMENT_REGEX = Regex("""^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$""")
     private val PVLIST_MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")

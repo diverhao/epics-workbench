@@ -1,12 +1,19 @@
 const path = require("path");
 const zlib = require("zlib");
+const {
+  getBackgroundTokenByArgb,
+  normalizeBackgroundToken,
+} = require("./spreadsheetCellBackgrounds");
 
 function createDatabaseExcelImportTools() {
+  const COMMENT_ROW_KIND = "comment";
+  const RECORD_ROW_KIND = "record";
+  const COMMENT_ROW_TYPE_SENTINEL = "__EPICS_WORKBENCH_COMMENT__";
+
   function importDatabaseWorkbookBuffer(workbookBuffer, metadata = {}) {
-    const workbook = parseWorkbookBuffer(workbookBuffer);
+    const workbook = parseEpicsWorkbookBuffer(workbookBuffer);
     const importedAt = normalizeDate(metadata.importedAt) || new Date();
     return workbook.sheets
-      .filter(isEpicsDatabaseSheet)
       .map((sheet, index) => ({
         sheetName: sheet.name,
         suggestedFileName: buildSuggestedFileName(
@@ -14,7 +21,7 @@ function createDatabaseExcelImportTools() {
           sheet.name,
           index,
         ),
-        text: buildImportedDatabaseText(sheet, {
+        text: buildImportedDatabaseTextFromSheetModel(sheet, {
           sourceFileName: metadata.sourceFileName || "unknown.xlsx",
           sourceSheetName: sheet.name,
           sourceCreatedAt: normalizeDate(metadata.sourceCreatedAt),
@@ -24,12 +31,27 @@ function createDatabaseExcelImportTools() {
       }));
   }
 
+  function parseEpicsWorkbookBuffer(workbookBuffer) {
+    const workbook = parseWorkbookBuffer(workbookBuffer);
+    const supportedSheets = workbook.sheets
+      .filter(isEpicsDatabaseSheet)
+      .map(convertWorkbookSheetToSheetModel);
+    const unsupportedSheetNames = workbook.sheets
+      .filter((sheet) => !isEpicsDatabaseSheet(sheet))
+      .map((sheet) => sheet.name);
+    return {
+      sheets: supportedSheets,
+      unsupportedSheetNames,
+    };
+  }
+
   function parseWorkbookBuffer(workbookBuffer) {
     const zipEntries = readZipEntries(workbookBuffer);
     const workbookXml = requireEntryText(zipEntries, "xl/workbook.xml");
     const workbookRelsXml = requireEntryText(zipEntries, "xl/_rels/workbook.xml.rels");
     const relationships = parseWorkbookRelationships(workbookRelsXml);
     const sharedStrings = parseSharedStrings(zipEntries.get("xl/sharedStrings.xml"));
+    const styleBackgroundTokens = parseStyleBackgroundTokens(zipEntries.get("xl/styles.xml"));
 
     const sheets = [];
     for (const sheetDefinition of parseWorkbookSheets(workbookXml)) {
@@ -46,7 +68,7 @@ function createDatabaseExcelImportTools() {
 
       sheets.push({
         name: sheetDefinition.name,
-        rows: parseWorksheet(worksheetXml.toString("utf8"), sharedStrings),
+        ...parseWorksheet(worksheetXml.toString("utf8"), sharedStrings, styleBackgroundTokens),
       });
     }
 
@@ -65,18 +87,9 @@ function createDatabaseExcelImportTools() {
     );
   }
 
-  function buildImportedDatabaseText(sheet, metadata) {
-    const lines = [
-      "# Imported from Excel by EPICS Workbench",
-      `# Source file: ${metadata.sourceFileName}`,
-      `# Source sheet: ${metadata.sourceSheetName}`,
-      `# Source created time: ${formatTimestamp(metadata.sourceCreatedAt)}`,
-      `# Source modified time: ${formatTimestamp(metadata.sourceModifiedAt)}`,
-      `# Imported at: ${formatTimestamp(metadata.importedAt)}`,
-      "",
-    ];
-
+  function convertWorkbookSheetToSheetModel(sheet) {
     const headerRow = sheet.rows.get(1) || new Map();
+    const headerBackgroundRow = sheet.backgrounds.get(1) || new Map();
     const headers = [];
     let maxColumnIndex = -1;
     for (const columnIndex of headerRow.keys()) {
@@ -87,12 +100,84 @@ function createDatabaseExcelImportTools() {
     for (let columnIndex = 0; columnIndex <= maxColumnIndex; columnIndex += 1) {
       headers.push((headerRow.get(columnIndex) || "").trim());
     }
+    const headerBackgrounds = headers.map((_, columnIndex) =>
+      normalizeBackgroundToken(headerBackgroundRow.get(columnIndex)),
+    );
 
     const sortedRowNumbers = [...sheet.rows.keys()].filter((rowNumber) => rowNumber > 1).sort((a, b) => a - b);
+    const rows = [];
     for (const rowNumber of sortedRowNumbers) {
       const row = sheet.rows.get(rowNumber) || new Map();
-      const recordName = String(row.get(0) || "").trim();
-      const recordType = String(row.get(1) || "").trim();
+      const rowBackgrounds = sheet.backgrounds.get(rowNumber) || new Map();
+      const commentText = getSerializedCommentRowText(row);
+      if (typeof commentText === "string") {
+        rows.push({
+          kind: COMMENT_ROW_KIND,
+          text: commentText,
+          background: normalizeBackgroundToken(rowBackgrounds.get(0) || rowBackgrounds.get(1)),
+        });
+        continue;
+      }
+
+      rows.push({
+        kind: RECORD_ROW_KIND,
+        values: headers.map((_, columnIndex) => String(row.get(columnIndex) || "")),
+        backgrounds: headers.map((_, columnIndex) =>
+          normalizeBackgroundToken(rowBackgrounds.get(columnIndex)),
+        ),
+      });
+    }
+    return {
+      name: sheet.name,
+      headers,
+      headerBackgrounds,
+      rows,
+    };
+  }
+
+  function getSerializedCommentRowText(row) {
+    if (String(row.get(1) || "").trim() === COMMENT_ROW_TYPE_SENTINEL) {
+      return String(row.get(0) || "");
+    }
+
+    if (String(row.get(0) || "").trim() !== "Comment") {
+      return undefined;
+    }
+
+    for (const [columnIndex, value] of row.entries()) {
+      if (columnIndex > 1 && String(value || "").trim()) {
+        return undefined;
+      }
+    }
+
+    return String(row.get(1) || "");
+  }
+
+  function buildImportedDatabaseTextFromSheetModel(sheet, metadata) {
+    const lines = [
+      "# Imported from Excel by EPICS Workbench",
+      `# Source file: ${metadata.sourceFileName}`,
+      `# Source sheet: ${metadata.sourceSheetName}`,
+      `# Source created time: ${formatTimestamp(metadata.sourceCreatedAt)}`,
+      `# Source modified time: ${formatTimestamp(metadata.sourceModifiedAt)}`,
+      `# Imported at: ${formatTimestamp(metadata.importedAt)}`,
+      "",
+    ];
+
+    const headers = sheet.headers || [];
+    for (const row of sheet.rows || []) {
+      if (isCommentRow(row)) {
+        appendCommentLines(lines, row.text);
+        continue;
+      }
+
+      const values = Array.isArray(row?.values)
+        ? row.values
+        : Array.isArray(row)
+          ? row
+          : [];
+      const recordName = String(values[0] || "").trim();
+      const recordType = String(values[1] || "").trim();
       if (!recordName || !recordType) {
         continue;
       }
@@ -100,7 +185,7 @@ function createDatabaseExcelImportTools() {
       lines.push(`record(${recordType}, "${escapeDatabaseString(recordName)}") {`);
       for (let columnIndex = 2; columnIndex < headers.length; columnIndex += 1) {
         const fieldName = headers[columnIndex];
-        const rawValue = row.get(columnIndex);
+        const rawValue = values[columnIndex];
         if (!fieldName || rawValue == null || !String(rawValue).trim()) {
           continue;
         }
@@ -110,10 +195,25 @@ function createDatabaseExcelImportTools() {
       lines.push("");
     }
 
-    if (lines[lines.length - 1] === "") {
-      return `${lines.join("\n")}\n`;
+    return lines[lines.length - 1] === ""
+      ? `${lines.join("\n")}\n`
+      : `${lines.join("\n")}\n`;
+  }
+
+  function isCommentRow(row) {
+    return !!row && !Array.isArray(row) && row.kind === COMMENT_ROW_KIND;
+  }
+
+  function appendCommentLines(lines, text) {
+    const commentLines = String(text || "")
+      .split(/\r?\n/)
+      .map((line) => `# ${line}`.trimEnd());
+    if (!commentLines.some((line) => line.trim() !== "#")) {
+      return;
     }
-    return `${lines.join("\n")}\n`;
+
+    lines.push(...commentLines);
+    lines.push("");
   }
 
   function readZipEntries(buffer) {
@@ -231,8 +331,50 @@ function createDatabaseExcelImportTools() {
     return strings;
   }
 
-  function parseWorksheet(xml, sharedStrings) {
+  function parseStyleBackgroundTokens(buffer) {
+    const styleBackgroundTokens = new Map();
+    if (!buffer) {
+      return styleBackgroundTokens;
+    }
+
+    const xml = buffer.toString("utf8");
+    const fillArgbById = [];
+    const fillPattern = /<fill\b[^>]*>([\s\S]*?)<\/fill>/g;
+    let fillMatch;
+    while ((fillMatch = fillPattern.exec(xml))) {
+      fillArgbById.push(extractFillArgb(fillMatch[1]));
+    }
+
+    const cellXfsMatch = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml);
+    if (!cellXfsMatch) {
+      return styleBackgroundTokens;
+    }
+
+    const xfPattern = /<xf\b([^>]*)\/>/g;
+    let styleIndex = 0;
+    let xfMatch;
+    while ((xfMatch = xfPattern.exec(cellXfsMatch[1]))) {
+      const fillId = Number((/\bfillId="(\d+)"/.exec(xfMatch[1]) || [])[1]);
+      const backgroundToken = getBackgroundTokenByArgb(fillArgbById[fillId] || "");
+      if (backgroundToken) {
+        styleBackgroundTokens.set(styleIndex, backgroundToken);
+      }
+      styleIndex += 1;
+    }
+
+    return styleBackgroundTokens;
+  }
+
+  function extractFillArgb(fillXml) {
+    if (!/patternType="solid"/.test(fillXml)) {
+      return "";
+    }
+    return ((/<fgColor\b[^>]*rgb="([^"]+)"/.exec(fillXml) || [])[1] || "").toUpperCase();
+  }
+
+  function parseWorksheet(xml, sharedStrings, styleBackgroundTokens) {
     const rows = new Map();
+    const backgrounds = new Map();
     const cellPattern = /<c\b([^>]*?)(?:>([\s\S]*?)<\/c>|\/>)/g;
     let match;
     while ((match = cellPattern.exec(xml))) {
@@ -246,12 +388,22 @@ function createDatabaseExcelImportTools() {
       const columnIndex = columnNameToIndex(referenceMatch[1]);
       const rowNumber = Number(referenceMatch[2]);
       const cellType = (/\bt="([^"]+)"/.exec(attributes) || [])[1] || "";
+      const styleIndex = Number((/\bs="(\d+)"/.exec(attributes) || [])[1]);
       const cellValue = parseWorksheetCellValue(cellType, body, sharedStrings);
       const row = rows.get(rowNumber) || new Map();
       row.set(columnIndex, cellValue);
       rows.set(rowNumber, row);
+      const backgroundToken = styleBackgroundTokens.get(styleIndex) || "";
+      if (backgroundToken) {
+        const rowBackgrounds = backgrounds.get(rowNumber) || new Map();
+        rowBackgrounds.set(columnIndex, backgroundToken);
+        backgrounds.set(rowNumber, rowBackgrounds);
+      }
     }
-    return rows;
+    return {
+      rows,
+      backgrounds,
+    };
   }
 
   function parseWorksheetCellValue(cellType, body, sharedStrings) {
@@ -345,6 +497,7 @@ function createDatabaseExcelImportTools() {
 
   return {
     importDatabaseWorkbookBuffer,
+    parseEpicsWorkbookBuffer,
   };
 }
 

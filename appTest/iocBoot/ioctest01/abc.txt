@@ -16,3 +16,6 @@ record(calc,"val1") {
 	field(CALC,"A>1000?0:A+1")
 	field(INPA,"val1 NPP NMS")
 }
+
+
+

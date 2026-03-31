@@ -43,6 +43,7 @@ private data class EpicsReferenceContext(
 
 private data class StartupExecutionState(
   var currentDirectory: Path,
+  val ownerRoot: Path,
   val variables: MutableMap<String, String>,
   val searchRoots: List<Path>,
 )
@@ -414,6 +415,21 @@ object EpicsPathResolver {
       detail = "db",
       candidates = candidates,
     )
+    for (projectDbDirectory in listOf(state.ownerRoot.resolve("db"), state.ownerRoot.resolve("Db"))) {
+      if (
+        projectDbDirectory.normalize() == state.currentDirectory.normalize() ||
+        projectDbDirectory.normalize() == state.currentDirectory.resolve("db").normalize()
+      ) {
+        continue
+      }
+      collectDbLoadRecordsDirectoryFiles(
+        baseDirectory = state.currentDirectory,
+        directory = projectDbDirectory,
+        namePrefix = query,
+        detail = "project db",
+        candidates = candidates,
+      )
+    }
     return candidates.values.sortedBy { it.insertPath.lowercase() }
   }
 
@@ -546,6 +562,7 @@ object EpicsPathResolver {
     val currentDirectory = hostFile.parent?.toNioPath() ?: ownerRoot
     return StartupExecutionState(
       currentDirectory = currentDirectory,
+      ownerRoot = ownerRoot,
       variables = variables,
       searchRoots = buildSearchRoots(project, ownerRoot, releaseVariables, envPathsVariables),
     )

@@ -34,6 +34,8 @@
 
 # EPICS_BASE should appear last so earlier modules can override stuff:
 EPICS_BASE = /Users/1h7/Tools/epics-base
+ASYN = /Users/1h7/Tools/asyn
+
 
 # Set RULES here if you want to use build rules from somewhere
 # other than EPICS_BASE:

@@ -34,6 +34,8 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.net.URLDecoder
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import javax.swing.BorderFactory
@@ -446,6 +448,11 @@ private class EpicsHoverDocumentationListener(
       return
     }
 
+    if (openTerminalLink(linkTarget)) {
+      hidePopup()
+      return
+    }
+
     if (openMenuChoiceLink(linkTarget)) {
       hidePopup()
       return
@@ -478,6 +485,20 @@ private class EpicsHoverDocumentationListener(
       }
     })
 
+    return true
+  }
+
+  private fun openTerminalLink(linkTarget: String): Boolean {
+    val terminalLink = parseTerminalLink(linkTarget) ?: return false
+    val directory = terminalLink.directory
+    if (!Files.isDirectory(directory)) {
+      return true
+    }
+
+    val command = buildOpenTerminalCommand(directory) ?: return true
+    runCatching {
+      ProcessBuilder(command).start()
+    }
     return true
   }
 
@@ -517,6 +538,30 @@ private class EpicsHoverDocumentationListener(
     }
   }
 
+  private fun parseTerminalLink(linkTarget: String): TerminalLink? {
+    return try {
+      val uri = URI(linkTarget)
+      if (uri.scheme != "epics-terminal" || uri.host != "open") {
+        return null
+      }
+      val params = parseQueryParameters(uri.rawQuery)
+      val rawPath = params["path"] ?: return null
+      TerminalLink(Path.of(rawPath))
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  private fun buildOpenTerminalCommand(directory: Path): List<String>? {
+    val normalized = directory.normalize().toString()
+    val osName = System.getProperty("os.name").orEmpty().lowercase()
+    return when {
+      osName.contains("mac") -> listOf("open", "-a", "Terminal", normalized)
+      osName.contains("win") -> listOf("cmd", "/c", "start", "", "cmd", "/K", "cd", "/d", normalized)
+      else -> listOf("x-terminal-emulator", "--working-directory=$normalized")
+    }
+  }
+
   private fun parseQueryParameters(rawQuery: String?): Map<String, String> {
     if (rawQuery.isNullOrBlank()) {
       return emptyMap()
@@ -547,6 +592,10 @@ private data class MenuChoiceLink(
   val start: Int,
   val end: Int,
   val value: String,
+)
+
+private data class TerminalLink(
+  val directory: Path,
 )
 
 private data class PopupAnchor(

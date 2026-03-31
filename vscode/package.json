@@ -1,5 +1,5 @@
 {
-    "version": "0.0.4",
+    "version": "0.0.5",
     "repository": {
         "url": "",
         "type": "git"
@@ -189,6 +189,10 @@
                     "command": "vscode-epics.exportDatabaseToExcel"
                 },
                 {
+                    "when": "editorLangId == database",
+                    "command": "vscode-epics.openInSpreadsheet"
+                },
+                {
                     "when": "editorLangId == database || editorLangId == substitutions || editorLangId == startup || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer || editorLangId == dbd",
                     "command": "vscode-epics.importDatabaseFromExcel"
                 },
@@ -363,6 +367,11 @@
                     "when": "epicsWorkbench.isEpicsProject || editorLangId == database || editorLangId == startup || editorLangId == substitutions || editorLangId == dbd || editorLangId == proto || editorLangId == pvlist || editorLangId == probe",
                     "group": "1_main@3",
                     "command": "vscode-epics.openInMonitor"
+                },
+                {
+                    "when": "epicsWorkbench.isEpicsProject || editorLangId == database || editorLangId == startup || editorLangId == substitutions || editorLangId == dbd || editorLangId == proto || editorLangId == pvlist || editorLangId == probe",
+                    "group": "1_main@4",
+                    "command": "vscode-epics.openSpreadsheetWidget"
                 }
             ],
             "vscode-epics.dbFormatMenu": [
@@ -394,13 +403,18 @@
             ],
             "vscode-epics.importExportMenu": [
                 {
-                    "when": "editorLangId == database || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template",
+                    "when": "editorLangId == database || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .xlsx",
                     "group": "1_main@1",
+                    "command": "vscode-epics.openInSpreadsheet"
+                },
+                {
+                    "when": "editorLangId == database || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template",
+                    "group": "1_main@2",
                     "command": "vscode-epics.exportDatabaseToExcel"
                 },
                 {
                     "when": "epicsWorkbench.isEpicsProject || editorLangId == database || editorLangId == substitutions || editorLangId == startup || editorLangId == pvlist || editorLangId == probe || editorLangId == sequencer || editorLangId == dbd || resourceExtname == .xlsx || resourceExtname == .db || resourceExtname == .vdb || resourceExtname == .template || resourceExtname == .cmd || resourceExtname == .iocsh || resourceExtname == .sub || resourceExtname == .subs || resourceExtname == .substitutions || resourceExtname == .pvlist || resourceExtname == .probe || resourceExtname == .st || (epicsWorkbench.isEpicsProject && !explorerResourceIsFolder)",
-                    "group": "1_main@2",
+                    "group": "1_main@3",
                     "command": "vscode-epics.importDatabaseFromExcel"
                 }
             ],
@@ -433,11 +447,16 @@
                 {
                     "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "2_dump@2",
-                    "command": "vscode-epics.dumpAllIocRecordNames"
+                    "command": "vscode-epics.dumpAllIocRecordsToExcel"
                 },
                 {
                     "when": "epicsWorkbench.hasRunningProjectIoc",
                     "group": "2_dump@3",
+                    "command": "vscode-epics.dumpAllIocRecordNames"
+                },
+                {
+                    "when": "epicsWorkbench.hasRunningProjectIoc",
+                    "group": "2_dump@4",
                     "command": "vscode-epics.dumpIocRecord"
                 },
                 {
@@ -634,6 +653,32 @@
             }
         ],
         "customEditors": [
+            {
+                "viewType": "epicsWorkbench.spreadsheetXlsxEditor",
+                "displayName": "EPICS Spreadsheet",
+                "selector": [
+                    {
+                        "filenamePattern": "*.xlsx"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "epicsWorkbench.spreadsheetDatabaseEditor",
+                "displayName": "EPICS Spreadsheet",
+                "selector": [
+                    {
+                        "filenamePattern": "*.db"
+                    },
+                    {
+                        "filenamePattern": "*.vdb"
+                    },
+                    {
+                        "filenamePattern": "*.template"
+                    }
+                ],
+                "priority": "option"
+            },
             {
                 "viewType": "epicsWorkbench.probeEditor",
                 "displayName": "EPICS Probe",
@@ -861,6 +906,18 @@
                 "category": "EPICS"
             },
             {
+                "title": "Open in Spreadsheet",
+                "command": "vscode-epics.openInSpreadsheet",
+                "category": "EPICS",
+                "icon": "$(table)"
+            },
+            {
+                "title": "Spreadsheet",
+                "command": "vscode-epics.openSpreadsheetWidget",
+                "category": "EPICS",
+                "icon": "$(table)"
+            },
+            {
                 "title": "Import Excel as Database",
                 "command": "vscode-epics.importDatabaseFromExcel",
                 "category": "EPICS"
@@ -969,6 +1026,12 @@
                 "command": "vscode-epics.dumpAllIocRecords",
                 "category": "EPICS",
                 "icon": "$(list-tree)"
+            },
+            {
+                "title": "Dump All Records to Excel",
+                "command": "vscode-epics.dumpAllIocRecordsToExcel",
+                "category": "EPICS",
+                "icon": "$(table)"
             },
             {
                 "title": "Dump All Record Names",
@@ -1107,6 +1170,8 @@
         "onLanguage:pvlist",
         "onLanguage:probe",
         "onLanguage:database definition",
+        "onCustomEditor:epicsWorkbench.spreadsheetXlsxEditor",
+        "onCustomEditor:epicsWorkbench.spreadsheetDatabaseEditor",
         "onCustomEditor:epicsWorkbench.probeEditor",
         "onCustomEditor:epicsWorkbench.tdmEditor",
         "onLanguage:makefile",
@@ -1119,6 +1184,8 @@
         "onCommand:vscode-epics.cleanAndBuildProject",
         "onCommand:vscode-epics.distCleanProject",
         "onCommand:vscode-epics.exportDatabaseToExcel",
+        "onCommand:vscode-epics.openInSpreadsheet",
+        "onCommand:vscode-epics.openSpreadsheetWidget",
         "onCommand:vscode-epics.openInTdm",
         "onCommand:vscode-epics.openInProbe",
         "onCommand:vscode-epics.openInChannelGraph",
@@ -1138,6 +1205,7 @@
         "onCommand:vscode-epics.runIocShellDbl",
         "onCommand:vscode-epics.runIocShellDbprCurrentRecord",
         "onCommand:vscode-epics.dumpAllIocRecords",
+        "onCommand:vscode-epics.dumpAllIocRecordsToExcel",
         "onCommand:vscode-epics.dumpAllIocRecordNames",
         "onCommand:vscode-epics.dumpIocRecord",
         "onCommand:vscode-epics.probeIocRecord",

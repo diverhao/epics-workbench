@@ -89,6 +89,7 @@ class EpicsIocRuntimePopupGroup : AbstractEpicsPopupGroup(
   "org.epics.workbench.OpenIocRuntimeEnvironmentAction",
   SEPARATOR,
   "org.epics.workbench.DumpAllRecordsAction",
+  "org.epics.workbench.DumpAllRecordsToExcelAction",
   "org.epics.workbench.DumpAllRecordNamesAction",
   "org.epics.workbench.DumpRecordAction",
   SEPARATOR,

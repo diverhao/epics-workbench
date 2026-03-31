@@ -17,6 +17,10 @@ test01_registerRecordDeviceDriver(pdbbase)
 dbLoadRecords("../../db/test01.db", "SYS=val")
 dbLoadRecords("../../db/test02.db")
 
+cd "$ASYN"
+
+cd "$TOP"
+
 iocInit()
 
 ## Start any sequence programs

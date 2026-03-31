@@ -23,6 +23,7 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import org.epics.workbench.export.exportDatabaseTextToExcel
 import org.epics.workbench.pvlist.EpicsPvlistWidgetModel
 import org.epics.workbench.pvlist.EpicsPvlistWidgetSourceKind
 import org.epics.workbench.widget.EpicsIocRuntimePageType
@@ -262,6 +263,60 @@ class DumpAllRecordNamesAction : DumbAwareAction() {
       runtimeService.openTemporaryPvlistOutputFile(
         buildDumpAllRecordNamesFileName(selectedItem),
         ensureTrailingNewline(outputText),
+      )
+    }
+  }
+}
+
+class DumpAllRecordsToExcelAction : DumbAwareAction() {
+  override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+  override fun update(event: AnActionEvent) {
+    val project = event.project
+    val visible = project != null &&
+      project.service<EpicsIocRuntimeService>().listRunningIocStartups().isNotEmpty()
+    event.presentation.isEnabledAndVisible = visible
+  }
+
+  override fun actionPerformed(event: AnActionEvent) {
+    val project = event.project ?: return
+    chooseRunningIocForAction(event, "Dump All Records to Excel") { selectedItem ->
+      val runtimeService = project.service<EpicsIocRuntimeService>()
+      val startupFile = resolveRunningIocStartupFile(project, selectedItem, "Dump All Records to Excel")
+        ?: return@chooseRunningIocForAction
+
+      var outputText = ""
+      var failure: Throwable? = null
+      val completed = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+        {
+          try {
+            outputText = runtimeService.captureCommandOutput(startupFile, "dbDumpRecord")
+          } catch (error: Throwable) {
+            failure = error
+          }
+        },
+        "Dump All Records to Excel",
+        true,
+        project,
+      )
+      if (!completed) {
+        return@chooseRunningIocForAction
+      }
+      failure?.let { error ->
+        Messages.showErrorDialog(
+          project,
+          error.message ?: "Failed to capture dbDumpRecord output.",
+          "Dump All Records to Excel",
+        )
+        return@chooseRunningIocForAction
+      }
+
+      exportDatabaseTextToExcel(
+        project = project,
+        sourceText = ensureTrailingNewline(outputText),
+        defaultName = buildDumpAllRecordsExcelFileName(selectedItem),
+        initialDirectory = Path.of(startupFile.path).parent,
+        sourceLabel = selectedItem.label,
       )
     }
   }
@@ -1603,6 +1658,10 @@ private fun buildDumpAllRecordsFileName(item: RunningIocSelectionItem): String {
 
 private fun buildDumpAllRecordNamesFileName(item: RunningIocSelectionItem): String {
   return "epics-dbl-${sanitizeDumpFileToken(item.startup.startupName)}.pvlist"
+}
+
+private fun buildDumpAllRecordsExcelFileName(item: RunningIocSelectionItem): String {
+  return "epics-dbdumprecord-${sanitizeDumpFileToken(item.startup.startupName)}.xlsx"
 }
 
 private fun buildDumpRecordFileName(item: DumpRecordSelectionItem): String {

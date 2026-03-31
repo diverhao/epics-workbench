@@ -73,13 +73,28 @@ internal fun exportDatabaseFileToExcel(
     }
   }
 
+  exportDatabaseTextToExcel(
+    project = project,
+    sourceText = sourceText,
+    defaultName = "${sourcePath.fileName.toString().substringBeforeLast('.')}.xlsx",
+    initialDirectory = sourcePath.parent,
+    sourceLabel = file.name,
+  )
+}
+
+internal fun exportDatabaseTextToExcel(
+  project: com.intellij.openapi.project.Project,
+  sourceText: String,
+  defaultName: String,
+  initialDirectory: Path? = project.basePath?.let(Path::of),
+  sourceLabel: String = defaultName,
+) {
+  val workbookBytes = EpicsDatabaseExcelExporter.buildWorkbook(sourceText)
+
   val descriptor = FileSaverDescriptor(EXPORT_TO_EXCEL_TITLE, "Export the database as an Excel workbook.", "xlsx")
   val saver = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
-  val defaultName = "${sourcePath.fileName.toString().substringBeforeLast('.')}.xlsx"
-  val targetWrapper = saver.save(sourcePath.parent, defaultName) ?: return
+  val targetWrapper = saver.save(initialDirectory, defaultName) ?: return
   val targetPath = targetWrapper.file.toPath()
-
-  val workbookBytes = EpicsDatabaseExcelExporter.buildWorkbook(sourceText)
   runCatching {
     Files.write(targetPath, workbookBytes)
     LocalFileSystem.getInstance().refreshNioFiles(listOf(targetPath))
@@ -92,7 +107,7 @@ internal fun exportDatabaseFileToExcel(
     .getNotificationGroup(NOTIFICATION_GROUP_ID)
     .createNotification(
       "Saved to ${targetPath.fileName}.",
-      targetPath.toString(),
+      "Exported $sourceLabel to ${targetPath.fileName}.",
       NotificationType.INFORMATION,
     )
     .addAction(
