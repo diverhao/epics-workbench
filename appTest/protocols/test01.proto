@@ -1,0 +1,99 @@
+# Stream Device Protocol for the MKS 937B Multi-Sensor System
+# This protocol uses features defined in Stream Device Version 2
+#
+#
+# $1 = address, Controller address (001 .. 253)
+# $2 = channel number: 1 - 5
+# $3 = setpoint: 1 - 12
+
+locktimeout = 5000;
+terminator   = ";FF";
+replytimeout = 1000;
+readtimeout  = 1000;
+extrainput   = Ignore;
+
+# The 937B appears to have preamble on all commands and responses
+# of the form '@<aaa>', where aaa is the unit number (1-254)
+# presumably to cater for multidrop RS485 for multiple controllers.
+# Default here to assume just one unit (as on RS232). Will need to make this variable if RS485 is ever implemented.
+# Query format: @<aaa><Command>?;FF
+# 		The corresponding response is
+# 		@<aaa>ACK<Response>;FF
+# 		Here, <aaa>: Address, 1 to 254
+# Set format:   @<aaa><Command>!<parameter>;FF
+# 		The corresponding response is
+# 		@<aaa>ACK<Response>;FF
+# 		Here, <aaa>: address, 1 to 254
+unitid = 1;
+
+# Send an initial dummy command to clear out any garbage the mks has already received.
+# This makes it more likely that the first command sent is received OK.
+# NB we dont wait for a response to the dummy command because if it didnt arrive (e.g. rs232 unplugged) then
+# streams would issue a replyTimeout exception and stop the ioc.
+@init{out " ";}
+
+# Use a regular expression to not care about anything before ACK.
+# '@' will precede all responses,
+# but we still need backward compatibility with units which do not emit '@'.
+#
+pressure { out "@\$1PR\$2?"; in "%*7c%e"; @mismatch {in "%*7c%(\$3.VAL)20c";}} 
+pressuretcg { out "@\$1PR\$2?"; in "%*7c%e"; @mismatch {}} 
+#pressure { out "@\$1PR\$2?"; in "%*/ACK/%f"; @mismatch {in "%*/ACK/%(\$3:STA.VAL){\?.|  \?E|OVER|ATM|<1.00E-11|RP_OFF|OFF|WAIT|L|CTRL_OFF|PROT_OFF|NOGAUGE|MISCONN|NOT|Not|C}";} }
+raw      { out "@\$1PR\$2?"; in "%*7c%s"; }
+status   { out "@\$1PR\$2?"; in "%*7c%{\?.|  \?E|OVER|ATM|<1.00E-11|RP_OFF|OFF|WAIT|L|CTRL_OFF|PROT_OFF|NO_GAUGE|MISCONN|NOT|Not|C}"; }
+
+ccenable { out "@\$1%{CP\$2!OFF|CP\$2!ON}"; in "%*7c%{OFF|ON}"; }
+get_cc_enabled{ out "@\$1CP\$2?"; in "%*7c%{OFF|ON}"; }
+pirgenable { out "@\$1%{CP\$2!OFF|CP\$2!ON}"; in "%*7c%{OFF|ON}"; }
+get_gauge_enabled { out "@\$1CP\$2?"; in "%*7c%{OFF|ON}"; }
+
+# Relay setpoints: SPm (m=1-12)
+getsp   { out "@\$1SP\$2?"; in "%*7c%E"; @mismatch{} }
+setsp   { out "@\$1SP\$2!%0.1E"; in "%*7c"; }
+dissp   { out "@\$1SP\$2!0"; in "%*7c"; }
+# Query or set a hysteresis for a replay:  SHm (m=1-12)
+getsh   { out "@\$1SH\$2?"; in "%*7c%E"; @mismatch{} }
+setsh   { out "@\$1SH\$2!%0.1E"; in "%*7c"; }
+
+# Relay mode
+getrelay_mode   { out "@\$1EN\$2?"; in "%*7c%{SET|CLEAR|ENABLE}"; }
+setrelay_mode   { out "@\$1EN\$2!%{SET|CLEAR|ENABLE}"; in "%*7c"; }
+
+# Relay direction
+getrelay_direction   { out "@\$1SD\$2?"; in "%*7c%{ABOVE|BELOW}"; }
+setrelay_direction   { out "@\$1SD\$2!%{ABOVE|BELOW}"; in "%*7c"; }
+
+# Protection (overpressure) setpoints
+getpro   { out "@\$1PRO\$2?"; in "%*7c%f"; }
+setpro   { out "@\$1PRO\$2!%0.1E"; in "%*7c"; }
+dispro   { out "@\$1PRO\$2!0"; in "%*7c"; }
+
+# TTL trigger setpoints
+getfrc_sp  { out "@\$1FRC\$2?"; in "%*7c%f"; @mismatch{in "%*/NAK/%(\$3.VAL)f";} }
+setfrc_sp  { out "@\$1FRC\$2!%0.1E"; in "%*7c"; }
+
+# CC control
+getcc_sp   { out "@\$1CSP\$2?"; in "%*7c%f"; }
+setcc_sp   { out "@\$1CSP\$2!%0.1E"; in "%*7c"; }
+discc_sp   { out "@\$1CSP\$2!%0.1E"; in "%*7c"; }
+getcc_hyst { out "@\$1CHP\$2?"; in "%*7c%f"; }
+setcc_hyst { out "@\$1CHP\$2!%0.1E"; in "%*7c"; }
+getcc_ctl  { out "@\$1CTL\$2?"; in "%*7c%{OFF|SAFE|AUTO}"; }
+setcc_ctl  { out "@\$1CTL\$2!%{OFF|SAFE|AUTO}"; in "%*7c";}
+getcc_ctrl_chan  { out "@\$1CSE\$2?"; in "%*7c%{C1|C2|OFF|A1|B1|A2|B2}"; }
+setcc_ctrl_chan  { out "@\$1CSE\$2!%{C1|C2|OFF|A1|B1|A2|B2}"; in "%*7c";}
+
+setcc_extended_range  { out "@\$1XCS\$2!ON"; in "%*7c"; }
+
+# Controller parameters
+
+unit    { out "@\$1U?"; in "%*7c%s"; }
+ctlv    { out "@\$1FV6?"; in "%*7c%f"; }
+comv    { out "@\$1FV5?"; in "%*7c%f";  @mismatch{};}
+modcc   { out "@\$1MT?"; in "%*7c%{HC|CC|PR|CV|TC|CM|P1|C1|T1|M1|NC|WC}"; }
+moda    { out "@\$1MT?"; in "%*7c\?\?,%{HC|CC|PR|CV|TC|CM|P1|C1|T1|M1|NC|WC}"; }
+modb    { out "@\$1MT?"; in "%*7c\?\?,\?\?,%{HC|CC|PR|CV|TC|CM|P1|C1|T1|M1|NC|WC}"; }
+
+
+#debug
+debug { ExtraInput = Ignore; out "%s"; in "%s"}
