@@ -96,6 +96,62 @@ Use `./gradlew runIde` for the fastest development loop.
 4. Select the ZIP from `build/distributions/`.
 5. Restart PyCharm and verify the plugin loads.
 
+## Marketplace Release
+
+The Gradle build is prepared to sign and publish the plugin:
+
+- Signing files are auto-discovered from `../dev-doc/private.pem` and `../dev-doc/chain.crt`.
+- You can override those paths with `PRIVATE_KEY_FILE` and `CERTIFICATE_CHAIN_FILE`.
+- If the private key is encrypted, provide `PRIVATE_KEY_PASSWORD`.
+- Publishing uses `PUBLISH_TOKEN`.
+- Release metadata can come from environment variables or Gradle properties.
+
+### Supported release variables
+
+- `PLUGIN_VERSION`: plugin version to publish, for example `0.1.0`
+- `PLUGIN_CHANGE_NOTES`: HTML or plain text change notes for this release
+- `PLUGIN_VENDOR_NAME`: defaults to `EPICS Workbench`
+- `PLUGIN_VENDOR_EMAIL`: vendor contact email shown in Marketplace
+- `PLUGIN_VENDOR_URL`: vendor website shown in Marketplace
+- `JETBRAINS_PUBLISH_CHANNEL`: defaults to `default`
+- `JETBRAINS_PUBLISH_HIDDEN`: optional, `true` or `false`
+- `PUBLISH_TOKEN`: JetBrains Marketplace permanent token
+
+### Release commands
+
+```bash
+cd ~/projects/epics-workbench/jetbrains
+export JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home"
+
+export PLUGIN_VERSION="0.1.0"
+export PLUGIN_CHANGE_NOTES="<p>First Marketplace release.</p>"
+export PLUGIN_VENDOR_EMAIL="maintainer@example.org"
+export PLUGIN_VENDOR_URL="https://example.org/epics-workbench"
+export PUBLISH_TOKEN="perm:..."
+
+./gradlew buildPlugin signPlugin publishPlugin
+```
+
+You can also place the non-secret values in `~/.gradle/gradle.properties` instead of exporting them every time:
+
+```properties
+pluginVersion=0.1.0
+pluginChangeNotes=<p>First Marketplace release.</p>
+pluginVendorName=EPICS Workbench
+pluginVendorEmail=maintainer@example.org
+pluginVendorUrl=https://example.org/epics-workbench
+jetbrainsPublishChannel=default
+jetbrainsPublishHidden=false
+```
+
+### Manual steps still required
+
+1. Create or confirm the JetBrains Marketplace vendor profile.
+2. Decide the public vendor email and vendor URL.
+3. Create the Marketplace permanent token and export it as `PUBLISH_TOKEN`.
+4. Pick the release version and final change notes for the release.
+5. Run `./gradlew signPlugin publishPlugin` once those values are set.
+
 ## Recommended Next Milestones
 
 1. Register EPICS file types: `.db`, `.template`, `.substitutions`, `.cmd`, `.dbd`, `.proto`, `.st`, `.monitor`

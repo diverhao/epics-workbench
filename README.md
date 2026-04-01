@@ -4,33 +4,42 @@ EPICS Workbench adds useful EPICS tools to your editor. It helps you read files,
 
 This README applies to both VS Code and JetBrains unless noted otherwise.
 
-- [Quick Start](#quick-start)
-- [Static Tools](#static-tools)
-  - [Syntax, Errors, and Formatting](#syntax-errors-and-formatting)
-  - [File Preview and Navigation](#file-preview-and-navigation)
-  - [Auto-Complete](#auto-complete)
-  - [Record Preview and Navigation](#record-preview-and-navigation)
-  - [Database Table of Contents](#database-table-of-contents)
-  - [Environment Variable Resolution](#environment-variable-resolution)
-- [Widgets](#widgets)
-  - [Probe](#probe)
-  - [PV List](#pv-list)
-  - [PV Monitor](#pv-monitor)
-  - [Spreadsheet](#spreadsheet)
-- [IOC Runtime Tools](#ioc-runtime-tools)
-  - [Configuration](#configuration)
-  - [IOC Control](#ioc-control)
-  - [Run IOC Shell Commands](#run-ioc-shell-commands)
-  - [Live Channel Data](#live-channel-data)
-- [TDM Integration](#tdm-integration)
+- [EPICS Workbench for VS Code and JetBrains](#epics-workbench-for-vs-code-and-jetbrains)
+  - [Quick Start](#quick-start)
+  - [Static Tools](#static-tools)
+    - [Syntax, Errors, and Formatting](#syntax-errors-and-formatting)
+    - [File Preview and Navigation](#file-preview-and-navigation)
+    - [Auto-Complete](#auto-complete)
+    - [Record Preview and Navigation](#record-preview-and-navigation)
+    - [Database Table of Contents](#database-table-of-contents)
+    - [Environment Variable Resolution](#environment-variable-resolution)
+  - [Widgets](#widgets)
+    - [Probe](#probe)
+    - [PV List](#pv-list)
+    - [PV Monitor](#pv-monitor)
+    - [Spreadsheet](#spreadsheet)
+  - [IOC Runtime Tools](#ioc-runtime-tools)
+    - [Configuration](#configuration)
+    - [IOC Control](#ioc-control)
+    - [Run IOC Shell Commands](#run-ioc-shell-commands)
+    - [Live Channel Data](#live-channel-data)
+  - [TDM Integration](#tdm-integration)
 
 ## Quick Start
 
-Open your EPICS application folder in the editor, for example:
+For VS Code, install it from [Marketplace](https://marketplace.visualstudio.com/items?itemName=haohao.epics-workbench)
+
+The IntelliJ/PyCharm version is under review, it will be available soon. Or you can compile this repo and install it locally.
+
+To use: open your EPICS application folder in the editor, for example:
 
 ```bash
 code /home/abc/appTest/
 ```
+
+All the functionalities are integrated in right-click menu, with the names of `EPICS xxx`.
+
+<img src="doc-figures/vscode-context-menu.png" width="30%" />
 
 ## Static Tools
 
