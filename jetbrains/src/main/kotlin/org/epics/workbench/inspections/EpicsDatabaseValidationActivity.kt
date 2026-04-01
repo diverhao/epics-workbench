@@ -108,7 +108,7 @@ internal class EpicsDatabaseValidationListener(
 
     return when {
       isDatabaseFile(file.name) ->
-        EpicsDatabaseValueValidator.collectIssues(document.text) +
+        EpicsDatabaseValueValidator.collectIssues(project, file, document.text) +
           EpicsMakefileInclusionValidator.collectIssues(file, document.text)
       isSubstitutionsFile(file.name) -> EpicsMakefileInclusionValidator.collectIssues(file, document.text)
       isStartupFile(file.name) -> EpicsStartupMacroValidator.collectIssues(project, file, document.text)

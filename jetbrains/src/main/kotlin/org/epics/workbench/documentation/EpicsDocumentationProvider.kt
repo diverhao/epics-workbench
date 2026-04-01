@@ -1634,7 +1634,9 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
     private val MAKEFILE_ASSIGNMENT_REGEX = Regex(
       """^\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*(\+?=|:=|\?=)\s*(.*?)\s*(?:#.*)?$""",
     )
-    private val STARTUP_ENV_SET_REGEX = Regex("""\bepicsEnvSet\(\s*\"([^\"]+)\"\s*,\s*\"([^\"]*)\"\s*\)""")
+    private val STARTUP_ENV_SET_REGEX = Regex(
+      """\bepicsEnvSet(?:\s*\(\s*|\s+)\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s*,\s*\"((?:[^"\\]|\\.)*)\"\s*\)?""",
+    )
     private val STARTUP_CD_REGEX = Regex("""^\s*cd\s+(?:\"([^\"]+)\"|([^\s#]+))""")
     private val EPICS_VARIABLE_REGEX = Regex("""\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)""")
     private val PVLIST_MACRO_ASSIGNMENT_REGEX = Regex("""^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$""")

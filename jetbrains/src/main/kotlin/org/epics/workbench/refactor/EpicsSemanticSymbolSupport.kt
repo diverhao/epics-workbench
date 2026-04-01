@@ -1210,7 +1210,9 @@ internal object EpicsSemanticSymbolSupport {
 
   private val DATABASE_RECORD_REGEX = Regex("""\brecord\(\s*([A-Za-z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"""")
   private val DATABASE_FIELD_REGEX = Regex("""field\(\s*(?:"((?:[^"\\]|\\.)*)"|([A-Za-z0-9_]+))\s*,\s*"((?:[^"\\]|\\.)*)"""")
-  private val STARTUP_ENV_SET_REGEX = Regex("""\bepicsEnvSet\(\s*"([^"]+)"\s*,\s*"([^"]*)"\s*\)""")
+  private val STARTUP_ENV_SET_REGEX = Regex(
+    """\bepicsEnvSet(?:\s*\(\s*|\s+)"?([A-Za-z_][A-Za-z0-9_]*)"?\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)?""",
+  )
   private val DB_LOAD_RECORDS_REGEX = Regex("""\bdbLoadRecords\(\s*"([^"\n]+)"(?:\s*,\s*"((?:[^"\\]|\\.)*)")?""")
   private val NAMED_ASSIGNMENT_REGEX = Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=""")
   private val DBD_RECORDTYPE_REGEX = Regex("""\brecordtype\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)""")

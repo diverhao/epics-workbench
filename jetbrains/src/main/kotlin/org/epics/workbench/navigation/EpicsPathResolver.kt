@@ -12,6 +12,7 @@ import java.nio.file.Path
 import kotlin.io.path.extension
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
+import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
 import kotlin.io.path.pathString
 
@@ -125,6 +126,26 @@ object EpicsPathResolver {
     val context = getSubstitutionsReferenceAtOffset(text, offset) ?: return emptyList()
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     return collectSubstitutionsReferences(project, hostFile, ownerRoot, context)
+  }
+
+  internal fun resolveStreamProtocolPaths(
+    project: Project,
+    hostFile: VirtualFile,
+    protocolPath: String,
+  ): List<Path> {
+    if (protocolPath.isBlank()) {
+      return emptyList()
+    }
+
+    val ownerRoot = findOwningEpicsRoot(project, hostFile)
+    val resolvedPaths = linkedSetOf<Path>()
+    for (searchDirectory in collectStreamProtocolSearchDirectories(project, ownerRoot)) {
+      val candidate = resolveAbsoluteOrRelative(searchDirectory, protocolPath)
+      if (candidate.exists() && candidate.isRegularFile()) {
+        resolvedPaths.add(candidate.normalize())
+      }
+    }
+    return resolvedPaths.toList()
   }
 
   internal fun collectStartupPathCompletionCandidates(
@@ -1312,7 +1333,9 @@ object EpicsPathResolver {
     Regex("""\bdbLoadRecords\(\s*\"([^\\"\n]+)\"""") to EpicsPathKind.DATABASE,
     Regex("""\bdbLoadTemplate\(\s*\"([^\\"\n]+)\"""") to EpicsPathKind.SUBSTITUTIONS,
   )
-  private val STARTUP_ENV_SET_REGEX = Regex("""\bepicsEnvSet\(\s*\"([^\"]+)\"\s*,\s*\"([^\"]*)\"\s*\)""")
+  private val STARTUP_ENV_SET_REGEX = Regex(
+    """\bepicsEnvSet(?:\s*\(\s*|\s+)\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s*,\s*\"((?:[^"\\]|\\.)*)\"\s*\)?""",
+  )
   private val STARTUP_CD_REGEX = Regex("""^\s*cd\s+(?:\"([^\"]+)\"|([^\s#]+))""")
   private val STREAM_PROTOCOL_REFERENCE_REGEX = Regex("""^\s*@([^\s"'`]+)""")
   private const val STREAM_PROTOCOL_PATH_VARIABLE = "STREAM_PROTOCOL_PATH"

@@ -1435,6 +1435,19 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
       font: inherit;
       color: inherit;
     }
+    .toolbar-checkbox-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      color: inherit;
+      cursor: pointer;
+      user-select: none;
+    }
+    .toolbar-checkbox-control input {
+      margin: 0;
+      accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+    }
     .toolbar-select-control select {
       border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
       border-radius: 6px;
@@ -1952,6 +1965,10 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
               <option value="compact">Compact</option>
             </select>
           </label>
+          <label class="toolbar-checkbox-control" for="hide-comments-checkbox" title="Hide comment rows in the spreadsheet view.">
+            <input id="hide-comments-checkbox" type="checkbox">
+            <span>Hide comments</span>
+          </label>
           <button id="resize-columns-button" type="button">Auto resize spreadsheet</button>
         </div>
         <div class="toolbar-row">
@@ -2068,6 +2085,7 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
     const saveAsButton = document.getElementById("save-as-button");
     const saveDbButton = document.getElementById("save-db-button");
     const backgroundPalette = document.getElementById("background-palette");
+    const hideCommentsCheckbox = document.getElementById("hide-comments-checkbox");
 
     const persistedUiState = typeof vscode.getState === "function"
       ? (vscode.getState() || {})
@@ -2077,6 +2095,7 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
     let densityMode = persistedUiState.densityMode === "compact"
       ? "compact"
       : DEFAULT_DENSITY_MODE;
+    let hideComments = persistedUiState.hideComments === true;
     let activeSheetIndex = 0;
     let pendingSaveTimer;
     let workbookDirty = false;
@@ -2136,6 +2155,10 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
 
     function isCommentRow(row) {
       return !!row && row.kind === "comment";
+    }
+
+    function shouldHideCommentRows() {
+      return hideComments;
     }
 
     function normalizeBackgroundToken(token) {
@@ -2416,6 +2439,7 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
           ...persistedUiState,
           fontSizePx,
           densityMode,
+          hideComments,
         });
       }
     }
@@ -2480,6 +2504,19 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
       syncLayoutMetrics();
       if (densitySelect instanceof HTMLSelectElement) {
         densitySelect.value = densityMode;
+      }
+      if (options.persist !== false) {
+        persistUiState();
+      }
+      if (options.rerender) {
+        safeRender();
+      }
+    }
+
+    function applyHideComments(nextHideComments, options = {}) {
+      hideComments = nextHideComments === true;
+      if (hideCommentsCheckbox instanceof HTMLInputElement) {
+        hideCommentsCheckbox.checked = hideComments;
       }
       if (options.persist !== false) {
         persistUiState();
@@ -3100,6 +3137,9 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
 
       let recordDisplayNumber = 0;
       sheet.rows.forEach((row, rowIndex) => {
+        if (shouldHideCommentRows() && isCommentRow(row)) {
+          return;
+        }
         const tr = document.createElement("tr");
         tr.className = "sheet-row";
         tr.dataset.rowIndex = String(rowIndex);
@@ -4884,6 +4924,20 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
           return false;
       }
 
+      if (
+        shouldHideCommentRows() &&
+        (directionKey === "ArrowUp" || directionKey === "ArrowDown")
+      ) {
+        const rowStep = directionKey === "ArrowUp" ? -1 : 1;
+        while (
+          nextRowIndex >= 0 &&
+          nextRowIndex < sheet.rows.length &&
+          isCommentRow(sheet.rows[nextRowIndex])
+        ) {
+          nextRowIndex += rowStep;
+        }
+      }
+
       const nextElement = getNavigationTarget(nextRowIndex, nextColumnIndex);
       if (
         !(nextElement instanceof HTMLInputElement) &&
@@ -6309,6 +6363,10 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
       applyDensityMode(densitySelect.value, { rerender: true });
     });
 
+    hideCommentsCheckbox?.addEventListener("change", () => {
+      applyHideComments(hideCommentsCheckbox.checked, { rerender: true });
+    });
+
     function postWorkbookAction(type, options = {}) {
       flushWorkbookSave();
       vscode.postMessage({
@@ -6507,6 +6565,7 @@ function buildSpreadsheetEditorHtml(webview, initialState) {
     renderBackgroundPalette();
     applyDensityMode(densityMode, { persist: false });
     applyFontSize(fontSizePx, { persist: false });
+    applyHideComments(hideComments, { persist: false });
     safeRender();
     } catch (error) {
       showStartupError("Startup error", error);

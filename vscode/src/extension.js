@@ -194,6 +194,7 @@ const EMPTY_DEFAULT_DBF_TYPES = new Set([
   "DBF_OUTLINK",
 ]);
 const DBD_DEVICE_DECLARATION_CACHE = new Map();
+const STREAM_PROTOCOL_COMMAND_CACHE = new Map();
 
 const STATIC_FIELD_VALUE_ENUMS = {
   SCAN: [
@@ -3895,17 +3896,13 @@ function getLinkedRecordSemanticTokenRange(snapshot, document, fieldDeclaration)
 }
 
 function getStreamProtocolReferenceRange(fieldDeclaration) {
-  const match = String(fieldDeclaration.value || "").match(/^\s*@([^\s"'`]+)/);
-  if (!match || containsEpicsMacroReference(match[1])) {
+  const invocation = getStreamProtocolInvocationDetails(fieldDeclaration);
+  if (!invocation) {
     return undefined;
   }
-
-  const protocolPath = match[1];
-  const protocolStart =
-    fieldDeclaration.valueStart + match[0].indexOf(protocolPath);
   return {
-    start: protocolStart,
-    end: protocolStart + protocolPath.length,
+    start: invocation.protocolStart,
+    end: invocation.protocolEnd,
   };
 }
 
@@ -7093,7 +7090,28 @@ function isStreamDeviceRecordField(document, position) {
 }
 
 function getStreamProtocolReferenceAtPosition(fieldDeclaration, document, position) {
-  const match = String(fieldDeclaration.value || "").match(/^\s*@([^\s"'`]+)/);
+  const invocation = getStreamProtocolInvocationDetails(fieldDeclaration);
+  if (!invocation) {
+    return undefined;
+  }
+  const offset = document.offsetAt(position);
+  if (offset < invocation.protocolStart || offset > invocation.protocolEnd) {
+    return undefined;
+  }
+
+  return {
+    protocolPath: invocation.protocolPath,
+    range: new vscode.Range(
+      document.positionAt(invocation.protocolStart),
+      document.positionAt(invocation.protocolEnd),
+    ),
+  };
+}
+
+function getStreamProtocolInvocationDetails(fieldDeclaration) {
+  const match = String(fieldDeclaration.value || "").match(
+    /^\s*@([^\s"'`]+)(?:\s+([A-Za-z_][A-Za-z0-9_-]*))?/,
+  );
   if (!match) {
     return undefined;
   }
@@ -7103,20 +7121,32 @@ function getStreamProtocolReferenceAtPosition(fieldDeclaration, document, positi
     return undefined;
   }
 
-  const protocolStart =
-    fieldDeclaration.valueStart + match[0].indexOf(protocolPath);
-  const protocolEnd = protocolStart + protocolPath.length;
-  const offset = document.offsetAt(position);
-  if (offset < protocolStart || offset > protocolEnd) {
-    return undefined;
+  const protocolRelativeStart = match[0].indexOf(protocolPath);
+  const protocolStart = fieldDeclaration.valueStart + protocolRelativeStart;
+  const details = {
+    protocolPath,
+    protocolStart,
+    protocolEnd: protocolStart + protocolPath.length,
+  };
+
+  const commandName = match[2];
+  if (!commandName) {
+    return details;
+  }
+
+  const commandRelativeStart = match[0].indexOf(
+    commandName,
+    protocolRelativeStart + protocolPath.length,
+  );
+  if (commandRelativeStart < 0) {
+    return details;
   }
 
   return {
-    protocolPath,
-    range: new vscode.Range(
-      document.positionAt(protocolStart),
-      document.positionAt(protocolEnd),
-    ),
+    ...details,
+    commandName,
+    commandStart: fieldDeclaration.valueStart + commandRelativeStart,
+    commandEnd: fieldDeclaration.valueStart + commandRelativeStart + commandName.length,
   };
 }
 
@@ -7214,6 +7244,153 @@ function collectStreamProtocolPathDefinitions(snapshot, project) {
   return definitions.filter(
     (definition) => definition.searchDirectories.length > 0,
   );
+}
+
+function getStreamProtocolCommandNamesForFile(absolutePath) {
+  const normalizedPath = normalizeFsPath(absolutePath);
+  if (!normalizedPath) {
+    return new Set();
+  }
+
+  const openDocument = vscode.workspace.textDocuments.find(
+    (document) =>
+      document.uri.scheme === "file" &&
+      isProtocolDocument(document) &&
+      normalizeFsPath(document.uri.fsPath) === normalizedPath,
+  );
+
+  let cacheTag;
+  let text;
+  if (openDocument) {
+    cacheTag = `open:${openDocument.version}`;
+    text = openDocument.getText();
+  } else {
+    let stats;
+    try {
+      stats = fs.statSync(normalizedPath);
+    } catch (error) {
+      return new Set();
+    }
+
+    if (!stats.isFile()) {
+      return new Set();
+    }
+
+    cacheTag = `fs:${stats.size}:${stats.mtimeMs}`;
+    text = readTextFile(normalizedPath);
+  }
+
+  const cached = STREAM_PROTOCOL_COMMAND_CACHE.get(normalizedPath);
+  if (cached?.cacheTag === cacheTag) {
+    return cached.commandNames;
+  }
+
+  const commandNames = extractStreamProtocolCommandNames(text || "");
+  STREAM_PROTOCOL_COMMAND_CACHE.set(normalizedPath, {
+    cacheTag,
+    commandNames,
+  });
+  return commandNames;
+}
+
+function extractStreamProtocolCommandNames(text) {
+  const commandNames = new Set();
+  let depth = 0;
+  let lineStart = true;
+  let inComment = false;
+  let inString = false;
+  let stringQuote = "";
+  let escaped = false;
+
+  for (let index = 0; index < text.length; ) {
+    const character = text[index];
+
+    if (inComment) {
+      if (character === "\n") {
+        inComment = false;
+        lineStart = true;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === stringQuote) {
+        inString = false;
+        stringQuote = "";
+      }
+
+      if (character === "\n") {
+        lineStart = true;
+      } else if (!/\s/.test(character)) {
+        lineStart = false;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (character === "#") {
+      inComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === "\"" || character === "'") {
+      inString = true;
+      stringQuote = character;
+      lineStart = false;
+      index += 1;
+      continue;
+    }
+
+    if (character === "\r") {
+      index += 1;
+      continue;
+    }
+
+    if (character === "\n") {
+      lineStart = true;
+      index += 1;
+      continue;
+    }
+
+    if (depth === 0 && lineStart) {
+      if (/\s/.test(character)) {
+        index += 1;
+        continue;
+      }
+
+      const match = text
+        .slice(index)
+        .match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*\{/);
+      if (match) {
+        commandNames.add(match[1]);
+        depth += 1;
+        lineStart = false;
+        index += match[0].length;
+        continue;
+      }
+
+      lineStart = false;
+    }
+
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth = Math.max(0, depth - 1);
+    }
+
+    if (!/\s/.test(character)) {
+      lineStart = false;
+    }
+    index += 1;
+  }
+
+  return commandNames;
 }
 
 function splitStreamProtocolSearchDirectories(value, baseDirectory) {
@@ -9328,6 +9505,7 @@ function createDatabaseDiagnostics(document, snapshot) {
     ...createInvalidFieldDiagnostics(document, snapshot),
     ...createInvalidNumericFieldValueDiagnostics(document, snapshot),
     ...createInvalidMenuFieldValueDiagnostics(document, snapshot),
+    ...createInvalidStreamProtocolCommandDiagnostics(document, snapshot),
     ...createDescFieldLengthDiagnostics(document),
     ...createMakefileInclusionDiagnostics(document),
   ];
@@ -9606,6 +9784,75 @@ function createInvalidMenuFieldValueDiagnostics(document, snapshot) {
           },
         ),
       );
+    }
+  }
+
+  return diagnostics;
+}
+
+function createInvalidStreamProtocolCommandDiagnostics(document, snapshot) {
+  const diagnostics = [];
+  const text = document.getText();
+
+  for (const recordDeclaration of extractRecordDeclarations(text)) {
+    const fieldTypes =
+      snapshot.fieldTypesByRecordType.get(recordDeclaration.recordType) || new Map();
+    const fieldDeclarations = extractFieldDeclarationsInRecord(
+      text,
+      recordDeclaration,
+    );
+    const dtypField = fieldDeclarations.find(
+      (fieldDeclaration) => fieldDeclaration.fieldName === "DTYP",
+    );
+    if (!dtypField || String(dtypField.value || "").trim().toLowerCase() !== "stream") {
+      continue;
+    }
+
+    for (const fieldDeclaration of fieldDeclarations) {
+      if (!LINK_DBF_TYPES.has(fieldTypes.get(fieldDeclaration.fieldName))) {
+        continue;
+      }
+
+      const invocation = getStreamProtocolInvocationDetails(fieldDeclaration);
+      if (
+        !invocation?.commandName ||
+        typeof invocation.commandStart !== "number" ||
+        typeof invocation.commandEnd !== "number"
+      ) {
+        continue;
+      }
+
+      const resolutions = resolveStreamProtocolFileReferences(
+        snapshot,
+        document,
+        invocation.protocolPath,
+      );
+      if (resolutions.length === 0) {
+        continue;
+      }
+
+      const commandExists = resolutions.some((resolution) =>
+        getStreamProtocolCommandNamesForFile(resolution.absolutePath).has(
+          invocation.commandName,
+        ),
+      );
+      if (commandExists) {
+        continue;
+      }
+
+      const protocolLabel = String(invocation.protocolPath)
+        .split(/[\\/]/)
+        .filter(Boolean)
+        .pop() || invocation.protocolPath;
+      const diagnostic = createDiagnostic(
+        document.positionAt(invocation.commandStart),
+        document.positionAt(invocation.commandEnd),
+        resolutions.length === 1
+          ? `StreamDevice command "${invocation.commandName}" was not found in protocol file "${protocolLabel}".`
+          : `StreamDevice command "${invocation.commandName}" was not found in any resolved "${protocolLabel}" protocol file.`,
+      );
+      diagnostic.code = "epics.database.unknownStreamProtocolCommand";
+      diagnostics.push(diagnostic);
     }
   }
 
@@ -14437,7 +14684,7 @@ function extractRequiredMacroNames(text) {
 
 function extractStartupMacros(text) {
   const names = new Set();
-  const regex = /epicsEnvSet\(\s*"?([A-Za-z_][A-Za-z0-9_]*)"?/g;
+  const regex = /\bepicsEnvSet(?:\s*\(\s*|\s+)"?([A-Za-z_][A-Za-z0-9_]*)"?/g;
   let match;
 
   while ((match = regex.exec(text))) {
@@ -16108,7 +16355,7 @@ function extractStartupStatements(text) {
     }
 
     match = line.match(
-      /^\s*epicsEnvSet\(\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)/,
+      /^\s*epicsEnvSet(?:\s*\(\s*|\s+)"?([A-Za-z_][A-Za-z0-9_]*)"?\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)?/,
     );
     if (match) {
       const nameStart = lineOffset + line.indexOf(match[1]);

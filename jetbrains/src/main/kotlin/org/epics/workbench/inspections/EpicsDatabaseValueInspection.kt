@@ -18,7 +18,7 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
         val issues = when {
           isDatabaseFile(file.name) -> {
             val virtualFile = file.virtualFile ?: return
-            EpicsDatabaseValueValidator.collectIssues(file.text) +
+            EpicsDatabaseValueValidator.collectIssues(file.project, virtualFile, file.text) +
               EpicsMakefileInclusionValidator.collectIssues(virtualFile, file.text)
           }
           isSubstitutionsFile(file.name) -> {

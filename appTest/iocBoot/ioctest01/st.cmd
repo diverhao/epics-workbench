@@ -9,6 +9,8 @@
 
 #< envPaths
 
+epicsEnvSet ("STREAM_PROTOCOL_PATH", "../../protocols")
+
 ## Register all support components
 dbLoadDatabase "../../dbd/test01.dbd"
 test01_registerRecordDeviceDriver(pdbbase)

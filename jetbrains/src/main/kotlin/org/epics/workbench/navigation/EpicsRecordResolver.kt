@@ -1268,7 +1268,9 @@ internal object EpicsRecordResolver {
 
   private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")
   private val FALLBACK_LINK_FIELDS = setOf("INP", "OUT", "FLNK", "SELL", "DOL", "SDIS", "SIOL", "TSEL")
-  private val STARTUP_ENV_SET_REGEX = Regex("""\bepicsEnvSet\(\s*"([^"]+)"\s*,\s*"([^"]*)"\s*\)""")
+  private val STARTUP_ENV_SET_REGEX = Regex(
+    """\bepicsEnvSet(?:\s*\(\s*|\s+)"?([A-Za-z_][A-Za-z0-9_]*)"?\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)?""",
+  )
   private val STARTUP_CD_REGEX = Regex("""^\s*cd\s+(?:"([^"]+)"|([^\s#]+))""")
   private val DB_LOAD_RECORDS_REGEX = Regex("""\bdbLoadRecords\(\s*"([^"\n]+)"(?:\s*,\s*"([^"\n]*)")?\s*\)""")
   private val DB_LOAD_TEMPLATE_REGEX = Regex("""\bdbLoadTemplate\(\s*"([^"\n]+)"\s*\)""")
