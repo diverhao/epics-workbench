@@ -3596,6 +3596,28 @@ function getDatabaseNavigationTarget(snapshot, document, position) {
     return undefined;
   }
 
+  if (isStreamDeviceRecordField(document, position)) {
+    const streamProtocolCommandTarget = getStreamProtocolCommandNavigationTarget(
+      snapshot,
+      document,
+      fieldDeclaration,
+      position,
+    );
+    if (streamProtocolCommandTarget) {
+      return streamProtocolCommandTarget;
+    }
+
+    const streamProtocolFileTarget = getStreamProtocolFileNavigationTarget(
+      snapshot,
+      document,
+      fieldDeclaration,
+      position,
+    );
+    if (streamProtocolFileTarget) {
+      return streamProtocolFileTarget;
+    }
+  }
+
   const recordName = resolveLinkedRecordName(
     snapshot,
     document,
@@ -3637,6 +3659,15 @@ function getHover(snapshot, document, position) {
     const menuFieldHover = getMenuFieldHover(snapshot, document, position);
     if (menuFieldHover) {
       return menuFieldHover;
+    }
+
+    const streamProtocolCommandHover = getStreamProtocolCommandHover(
+      snapshot,
+      document,
+      position,
+    );
+    if (streamProtocolCommandHover) {
+      return streamProtocolCommandHover;
     }
 
     const streamProtocolHover = getStreamProtocolFileHover(
@@ -4411,11 +4442,80 @@ function getStreamProtocolFileHover(snapshot, document, position) {
       ),
     );
     markdown.appendMarkdown(
-      ` from \`${escapeInlineCode(resolution.startupFileRelativePath)}\``,
+      ` from \`${escapeInlineCode(resolution.searchSourceLabel || "resolved search path")}\``,
     );
   }
 
   return new vscode.Hover(markdown, protocolReference.range);
+}
+
+function getStreamProtocolCommandHover(snapshot, document, position) {
+  const fieldDeclaration = getRecordScopedFieldDeclarationAtPosition(
+    snapshot,
+    document,
+    position,
+  );
+  if (
+    !fieldDeclaration ||
+    !LINK_DBF_TYPES.has(fieldDeclaration.dbfType) ||
+    !isStreamDeviceRecordField(document, position)
+  ) {
+    return undefined;
+  }
+
+  const commandReference = getStreamProtocolCommandReferenceAtPosition(
+    fieldDeclaration,
+    document,
+    position,
+  );
+  if (!commandReference) {
+    return undefined;
+  }
+
+  const matches = resolveStreamProtocolCommandReferences(
+    snapshot,
+    document,
+    commandReference.protocolPath,
+    commandReference.commandName,
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+
+  const markdown = new vscode.MarkdownString();
+  markdown.isTrusted = true;
+  markdown.appendMarkdown(
+    `**StreamDevice command:** \`${escapeInlineCode(commandReference.commandName)}\``,
+  );
+  markdown.appendMarkdown(
+    `\n\nProtocol: \`${escapeInlineCode(commandReference.protocolPath)}\``,
+  );
+  markdown.appendMarkdown(
+    `\n\nReferenced by \`${escapeInlineCode(fieldDeclaration.fieldName)}\` in \`${escapeInlineCode(fieldDeclaration.recordName)}\``,
+  );
+
+  const displayedMatches = matches.slice(0, 3);
+  for (const match of displayedMatches) {
+    const locationLabel = `${match.protocolRelativePath || match.absolutePath}:${match.line}`;
+    markdown.appendMarkdown("\n\n---\n\n");
+    markdown.appendMarkdown(
+      `Location: ${createFileLocationLink(
+        match.absolutePath,
+        match.line,
+        locationLabel,
+      )}`,
+    );
+    markdown.appendMarkdown("\n\nPreview:");
+    markdown.appendCodeblock(match.definitionText, LANGUAGE_IDS.proto);
+  }
+
+  if (matches.length > displayedMatches.length) {
+    markdown.appendMarkdown(
+      `\n\n${matches.length - displayedMatches.length} more matching protocol command definitions omitted.`,
+    );
+  }
+
+  return new vscode.Hover(markdown, commandReference.range);
 }
 
 function getStartupDbpfRecordHover(snapshot, document, position) {
@@ -7108,46 +7208,249 @@ function getStreamProtocolReferenceAtPosition(fieldDeclaration, document, positi
   };
 }
 
-function getStreamProtocolInvocationDetails(fieldDeclaration) {
-  const match = String(fieldDeclaration.value || "").match(
-    /^\s*@([^\s"'`]+)(?:\s+([A-Za-z_][A-Za-z0-9_-]*))?/,
-  );
-  if (!match) {
+function getStreamProtocolCommandReferenceAtPosition(
+  fieldDeclaration,
+  document,
+  position,
+) {
+  const invocation = getStreamProtocolInvocationDetails(fieldDeclaration);
+  if (
+    !invocation?.commandName ||
+    typeof invocation.commandStart !== "number" ||
+    typeof invocation.commandEnd !== "number"
+  ) {
     return undefined;
   }
 
-  const protocolPath = match[1];
+  const offset = document.offsetAt(position);
+  if (offset < invocation.commandStart || offset >= invocation.commandEnd) {
+    return undefined;
+  }
+
+  return {
+    protocolPath: invocation.protocolPath,
+    commandName: invocation.commandName,
+    range: new vscode.Range(
+      document.positionAt(invocation.commandStart),
+      document.positionAt(invocation.commandEnd),
+    ),
+  };
+}
+
+function getStreamProtocolInvocationDetails(fieldDeclaration) {
+  const fieldValue = String(fieldDeclaration.value || "");
+  let index = 0;
+  while (index < fieldValue.length && /\s/.test(fieldValue[index])) {
+    index += 1;
+  }
+  if (index >= fieldValue.length || fieldValue[index] !== "@") {
+    return undefined;
+  }
+
+  const protocolStartIndex = index + 1;
+  let protocolEndIndex = protocolStartIndex;
+  while (
+    protocolEndIndex < fieldValue.length &&
+    !/\s/.test(fieldValue[protocolEndIndex]) &&
+    !["\"", "'", "`"].includes(fieldValue[protocolEndIndex])
+  ) {
+    protocolEndIndex += 1;
+  }
+
+  const protocolPath = fieldValue.slice(protocolStartIndex, protocolEndIndex);
   if (!protocolPath || containsEpicsMacroReference(protocolPath)) {
     return undefined;
   }
 
-  const protocolRelativeStart = match[0].indexOf(protocolPath);
-  const protocolStart = fieldDeclaration.valueStart + protocolRelativeStart;
+  const protocolStart = fieldDeclaration.valueStart + protocolStartIndex;
   const details = {
     protocolPath,
     protocolStart,
     protocolEnd: protocolStart + protocolPath.length,
   };
 
-  const commandName = match[2];
-  if (!commandName) {
+  index = protocolEndIndex;
+  while (index < fieldValue.length && /\s/.test(fieldValue[index])) {
+    index += 1;
+  }
+
+  const commandStartIndex = index;
+  if (
+    commandStartIndex >= fieldValue.length ||
+    !/[A-Za-z_]/.test(fieldValue[commandStartIndex])
+  ) {
     return details;
   }
 
-  const commandRelativeStart = match[0].indexOf(
-    commandName,
-    protocolRelativeStart + protocolPath.length,
-  );
-  if (commandRelativeStart < 0) {
-    return details;
+  index += 1;
+  while (
+    index < fieldValue.length &&
+    /[A-Za-z0-9_-]/.test(fieldValue[index])
+  ) {
+    index += 1;
   }
+
+  const commandName = fieldValue.slice(commandStartIndex, index);
+  const commandEndIndex = parseOptionalStreamProtocolArguments(fieldValue, index);
+  const bus = parseStreamProtocolBus(fieldValue, commandEndIndex);
 
   return {
     ...details,
     commandName,
-    commandStart: fieldDeclaration.valueStart + commandRelativeStart,
-    commandEnd: fieldDeclaration.valueStart + commandRelativeStart + commandName.length,
+    commandStart: fieldDeclaration.valueStart + commandStartIndex,
+    commandEnd: fieldDeclaration.valueStart + commandEndIndex,
+    busValue: bus?.value,
+    busStart:
+      fieldDeclaration.valueStart +
+      (typeof bus?.start === "number" ? bus.start : commandEndIndex),
+    busEnd:
+      fieldDeclaration.valueStart +
+      (typeof bus?.end === "number" ? bus.end : commandEndIndex),
   };
+}
+
+function parseOptionalStreamProtocolArguments(text, commandEndIndex) {
+  let index = commandEndIndex;
+  while (index < text.length && /\s/.test(text[index])) {
+    index += 1;
+  }
+  if (index >= text.length || text[index] !== "(") {
+    return commandEndIndex;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let stringQuote = "";
+  let escaped = false;
+
+  for (; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === stringQuote) {
+        inString = false;
+        stringQuote = "";
+      }
+      continue;
+    }
+
+    if (character === "\"" || character === "'") {
+      inString = true;
+      stringQuote = character;
+      continue;
+    }
+
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+
+    if (character === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
+  }
+
+  return commandEndIndex;
+}
+
+function parseStreamProtocolBus(text, startOffset) {
+  let index = startOffset;
+  while (index < text.length && /\s/.test(text[index])) {
+    index += 1;
+  }
+  if (index >= text.length) {
+    return undefined;
+  }
+
+  const busStart = index;
+  const busEnd =
+    text[index] === "$"
+      ? parseEpicsMacroToken(text, index)
+      : (() => {
+        let tokenEnd = index;
+        while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+          tokenEnd += 1;
+        }
+        return tokenEnd;
+      })();
+  if (busEnd <= busStart) {
+    return undefined;
+  }
+
+  return {
+    value: text.slice(busStart, busEnd),
+    start: busStart,
+    end: busEnd,
+  };
+}
+
+function parseEpicsMacroToken(text, startOffset) {
+  if (startOffset + 1 >= text.length) {
+    return startOffset + 1;
+  }
+
+  if (text[startOffset + 1] === "(") {
+    return parseDelimitedToken(text, startOffset + 1, "(", ")");
+  }
+  if (text[startOffset + 1] === "{") {
+    return parseDelimitedToken(text, startOffset + 1, "{", "}");
+  }
+
+  let index = startOffset + 1;
+  while (index < text.length && /[A-Za-z0-9_]/.test(text[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function parseDelimitedToken(text, delimiterOffset, openDelimiter, closeDelimiter) {
+  let depth = 0;
+  let inString = false;
+  let stringQuote = "";
+  let escaped = false;
+
+  for (let index = delimiterOffset; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === stringQuote) {
+        inString = false;
+        stringQuote = "";
+      }
+      continue;
+    }
+
+    if (character === "\"" || character === "'") {
+      inString = true;
+      stringQuote = character;
+      continue;
+    }
+
+    if (character === openDelimiter) {
+      depth += 1;
+      continue;
+    }
+
+    if (character === closeDelimiter) {
+      depth -= 1;
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
+  }
+
+  return text.length;
 }
 
 function resolveStreamProtocolFileReferences(snapshot, document, protocolPath) {
@@ -7158,7 +7461,11 @@ function resolveStreamProtocolFileReferences(snapshot, document, protocolPath) {
 
   const resolutions = [];
   const seen = new Set();
-  for (const definition of collectStreamProtocolPathDefinitions(snapshot, project)) {
+  for (const definition of collectStreamProtocolPathDefinitions(
+    snapshot,
+    project,
+    document,
+  )) {
     for (const searchDirectory of definition.searchDirectories) {
       const absolutePath = normalizeFsPath(
         path.isAbsolute(protocolPath)
@@ -7180,7 +7487,7 @@ function resolveStreamProtocolFileReferences(snapshot, document, protocolPath) {
         continue;
       }
 
-      const resolutionKey = `${definition.startupFileAbsolutePath}:${absolutePath}`;
+      const resolutionKey = `${definition.sourceKey}:${absolutePath}`;
       if (seen.has(resolutionKey)) {
         continue;
       }
@@ -7189,22 +7496,70 @@ function resolveStreamProtocolFileReferences(snapshot, document, protocolPath) {
       resolutions.push({
         absolutePath,
         protocolRelativePath: normalizePath(path.relative(project.rootPath, absolutePath)),
-        startupFileAbsolutePath: definition.startupFileAbsolutePath,
-        startupFileRelativePath: definition.startupFileRelativePath,
+        searchSourceLabel: definition.searchSourceLabel,
       });
     }
   }
 
   return resolutions.sort((left, right) =>
     compareLabels(
-      `${left.protocolRelativePath} ${left.startupFileRelativePath}`,
-      `${right.protocolRelativePath} ${right.startupFileRelativePath}`,
+      `${left.protocolRelativePath} ${left.searchSourceLabel}`,
+      `${right.protocolRelativePath} ${right.searchSourceLabel}`,
     ),
   );
 }
 
-function collectStreamProtocolPathDefinitions(snapshot, project) {
+function collectStreamProtocolPathDefinitions(snapshot, project, document) {
   const definitions = [];
+  const seen = new Set();
+
+  const addDefinition = (sourceKey, searchSourceLabel, searchDirectories) => {
+    const normalizedSourceKey = String(sourceKey || searchSourceLabel || "").trim();
+    const normalizedDirectories = [];
+    for (const candidate of searchDirectories || []) {
+      const normalizedCandidate = normalizeFsPath(candidate);
+      if (!normalizedCandidate || normalizedDirectories.includes(normalizedCandidate)) {
+        continue;
+      }
+      try {
+        if (fs.existsSync(normalizedCandidate) && fs.statSync(normalizedCandidate).isDirectory()) {
+          normalizedDirectories.push(normalizedCandidate);
+        }
+      } catch (error) {
+        // Ignore unreadable search directories.
+      }
+    }
+
+    if (!normalizedSourceKey || normalizedDirectories.length === 0) {
+      return;
+    }
+
+    const definitionKey = `${normalizedSourceKey}:${normalizedDirectories.join("|")}`;
+    if (seen.has(definitionKey)) {
+      return;
+    }
+    seen.add(definitionKey);
+    definitions.push({
+      sourceKey: normalizedSourceKey,
+      searchSourceLabel: searchSourceLabel || normalizedSourceKey,
+      searchDirectories: normalizedDirectories,
+    });
+  };
+
+  addDefinition(
+    normalizeFsPath(document.uri.fsPath),
+    normalizePath(path.relative(project.rootPath, document.uri.fsPath)) || "current file",
+    [path.dirname(document.uri.fsPath)],
+  );
+  addDefinition(
+    `${project.rootPath}:protocols`,
+    "project protocols",
+    [
+      path.join(project.rootPath, "protocols"),
+      path.join(project.rootPath, "protocol"),
+      path.join(project.rootPath, "proto"),
+    ],
+  );
 
   const startupFilePaths =
     Array.isArray(project.startupEntryPoints) && project.startupEntryPoints.length > 0
@@ -7225,31 +7580,44 @@ function collectStreamProtocolPathDefinitions(snapshot, project) {
         statement.kind === "envSet" &&
         statement.name === STREAM_PROTOCOL_PATH_VARIABLE
       ) {
-        definitions.push({
-          startupFileAbsolutePath: normalizeFsPath(startupFilePath),
-          startupFileRelativePath: normalizePath(
-            path.relative(project.rootPath, startupFilePath),
-          ),
-          searchDirectories: splitStreamProtocolSearchDirectories(
+        addDefinition(
+          normalizeFsPath(startupFilePath),
+          normalizePath(path.relative(project.rootPath, startupFilePath)),
+          splitStreamProtocolSearchDirectories(
             expandStartupValue(statement.value, state.envVariables),
             state.currentDirectory || normalizeFsPath(path.dirname(startupFilePath)),
           ),
-        });
+        );
       }
 
       applyStartupStatement(snapshot, pseudoDocument, statement, state);
     }
   }
 
-  return definitions.filter(
-    (definition) => definition.searchDirectories.length > 0,
-  );
+  return definitions;
 }
 
 function getStreamProtocolCommandNamesForFile(absolutePath) {
+  return getStreamProtocolCommandCacheEntryForFile(absolutePath).commandNames;
+}
+
+function getStreamProtocolCommandDefinitionForFile(absolutePath, commandName) {
+  if (!commandName) {
+    return undefined;
+  }
+
+  return getStreamProtocolCommandCacheEntryForFile(absolutePath).commandDefinitions.find(
+    (definition) => definition.name === commandName,
+  );
+}
+
+function getStreamProtocolCommandCacheEntryForFile(absolutePath) {
   const normalizedPath = normalizeFsPath(absolutePath);
   if (!normalizedPath) {
-    return new Set();
+    return {
+      commandNames: new Set(),
+      commandDefinitions: [],
+    };
   }
 
   const openDocument = vscode.workspace.textDocuments.find(
@@ -7269,11 +7637,17 @@ function getStreamProtocolCommandNamesForFile(absolutePath) {
     try {
       stats = fs.statSync(normalizedPath);
     } catch (error) {
-      return new Set();
+      return {
+        commandNames: new Set(),
+        commandDefinitions: [],
+      };
     }
 
     if (!stats.isFile()) {
-      return new Set();
+      return {
+        commandNames: new Set(),
+        commandDefinitions: [],
+      };
     }
 
     cacheTag = `fs:${stats.size}:${stats.mtimeMs}`;
@@ -7282,19 +7656,21 @@ function getStreamProtocolCommandNamesForFile(absolutePath) {
 
   const cached = STREAM_PROTOCOL_COMMAND_CACHE.get(normalizedPath);
   if (cached?.cacheTag === cacheTag) {
-    return cached.commandNames;
+    return cached;
   }
 
-  const commandNames = extractStreamProtocolCommandNames(text || "");
-  STREAM_PROTOCOL_COMMAND_CACHE.set(normalizedPath, {
+  const commandDefinitions = extractStreamProtocolCommandDefinitions(text || "");
+  const cacheEntry = {
     cacheTag,
-    commandNames,
-  });
-  return commandNames;
+    commandNames: new Set(commandDefinitions.map((definition) => definition.name)),
+    commandDefinitions,
+  };
+  STREAM_PROTOCOL_COMMAND_CACHE.set(normalizedPath, cacheEntry);
+  return cacheEntry;
 }
 
-function extractStreamProtocolCommandNames(text) {
-  const commandNames = new Set();
+function extractStreamProtocolCommandDefinitions(text) {
+  const commandDefinitions = [];
   let depth = 0;
   let lineStart = true;
   let inComment = false;
@@ -7368,11 +7744,24 @@ function extractStreamProtocolCommandNames(text) {
         .slice(index)
         .match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*\{/);
       if (match) {
-        commandNames.add(match[1]);
-        depth += 1;
-        lineStart = false;
-        index += match[0].length;
-        continue;
+        const commandName = match[1];
+        const openBraceOffset = index + match[0].lastIndexOf("{");
+        const closeBraceOffset = findMatchingStreamProtocolBrace(
+          text,
+          openBraceOffset,
+        );
+        if (commandName && closeBraceOffset >= openBraceOffset) {
+          commandDefinitions.push({
+            name: commandName,
+            start: index,
+            end: closeBraceOffset + 1,
+            line: getLineNumberAtOffset(text, index),
+            definitionText: text.slice(index, closeBraceOffset + 1).trim(),
+          });
+          index = closeBraceOffset + 1;
+          lineStart = false;
+          continue;
+        }
       }
 
       lineStart = false;
@@ -7390,7 +7779,170 @@ function extractStreamProtocolCommandNames(text) {
     index += 1;
   }
 
-  return commandNames;
+  return commandDefinitions;
+}
+
+function findMatchingStreamProtocolBrace(text, openBraceOffset) {
+  let depth = 0;
+  let inComment = false;
+  let inString = false;
+  let stringQuote = "";
+  let escaped = false;
+
+  for (let index = openBraceOffset; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (inComment) {
+      if (character === "\n") {
+        inComment = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === stringQuote) {
+        inString = false;
+        stringQuote = "";
+      }
+      continue;
+    }
+
+    if (character === "#") {
+      inComment = true;
+      continue;
+    }
+
+    if (character === "\"" || character === "'") {
+      inString = true;
+      stringQuote = character;
+      continue;
+    }
+
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function resolveStreamProtocolCommandReferences(
+  snapshot,
+  document,
+  protocolPath,
+  commandName,
+) {
+  if (!protocolPath || !commandName) {
+    return [];
+  }
+
+  const matches = [];
+  const seen = new Set();
+  for (const resolution of resolveStreamProtocolFileReferences(
+    snapshot,
+    document,
+    protocolPath,
+  )) {
+    const definition = getStreamProtocolCommandDefinitionForFile(
+      resolution.absolutePath,
+      commandName,
+    );
+    if (!definition) {
+      continue;
+    }
+
+    const key = `${resolution.absolutePath}:${definition.start}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    matches.push({
+      ...resolution,
+      ...definition,
+    });
+  }
+
+  return matches.sort((left, right) =>
+    compareLabels(
+      `${left.protocolRelativePath || left.absolutePath}:${left.line}`,
+      `${right.protocolRelativePath || right.absolutePath}:${right.line}`,
+    ),
+  );
+}
+
+function getStreamProtocolFileNavigationTarget(
+  snapshot,
+  document,
+  fieldDeclaration,
+  position,
+) {
+  const protocolReference = getStreamProtocolReferenceAtPosition(
+    fieldDeclaration,
+    document,
+    position,
+  );
+  if (!protocolReference) {
+    return undefined;
+  }
+
+  const resolutions = resolveStreamProtocolFileReferences(
+    snapshot,
+    document,
+    protocolReference.protocolPath,
+  );
+  if (resolutions.length === 0) {
+    return undefined;
+  }
+
+  return {
+    absolutePath: resolutions[0].absolutePath,
+    line: 1,
+    character: 1,
+  };
+}
+
+function getStreamProtocolCommandNavigationTarget(
+  snapshot,
+  document,
+  fieldDeclaration,
+  position,
+) {
+  const commandReference = getStreamProtocolCommandReferenceAtPosition(
+    fieldDeclaration,
+    document,
+    position,
+  );
+  if (!commandReference) {
+    return undefined;
+  }
+
+  const matches = resolveStreamProtocolCommandReferences(
+    snapshot,
+    document,
+    commandReference.protocolPath,
+    commandReference.commandName,
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+
+  return {
+    absolutePath: matches[0].absolutePath,
+    line: matches[0].line,
+    character: 1,
+  };
 }
 
 function splitStreamProtocolSearchDirectories(value, baseDirectory) {
@@ -9820,6 +10372,16 @@ function createInvalidStreamProtocolCommandDiagnostics(document, snapshot) {
         typeof invocation.commandEnd !== "number"
       ) {
         continue;
+      }
+
+      if (!invocation.busValue) {
+        const diagnostic = createDiagnostic(
+          document.positionAt(invocation.commandStart),
+          document.positionAt(invocation.commandEnd),
+          `StreamDevice bus is required after command "${invocation.commandName}".`,
+        );
+        diagnostic.code = "epics.database.missingStreamProtocolBus";
+        diagnostics.push(diagnostic);
       }
 
       const resolutions = resolveStreamProtocolFileReferences(

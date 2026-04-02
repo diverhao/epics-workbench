@@ -1,14 +1,11 @@
 package org.epics.workbench.inspections
 
-import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import org.epics.workbench.navigation.EpicsPathResolver
+import org.epics.workbench.protocol.EpicsStreamProtocolSupport
 import java.util.ArrayDeque
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.io.path.pathString
 
 internal object EpicsDatabaseValueValidator {
   internal enum class ValidationSeverity {
@@ -23,24 +20,6 @@ internal object EpicsDatabaseValueValidator {
     val code: String? = null,
     val severity: ValidationSeverity = ValidationSeverity.ERROR,
   )
-
-  private data class StreamProtocolInvocation(
-    val protocolPath: String,
-    val commandName: String?,
-    val commandStart: Int,
-    val commandEnd: Int,
-  )
-
-  private data class StreamProtocolCommandCacheEntry(
-    val cacheTag: String,
-    val commandNames: Set<String>,
-  )
-
-  private val streamProtocolCommandCache = ConcurrentHashMap<String, StreamProtocolCommandCacheEntry>()
-  private val streamProtocolInvocationRegex =
-    Regex("""^\s*@([^\s"'`]+)(?:\s+([A-Za-z_][A-Za-z0-9_-]*))?""")
-  private val streamProtocolCommandDefinitionRegex =
-    Regex("""^([A-Za-z_][A-Za-z0-9_-]*)\s*\{""")
 
   fun collectIssues(text: String): List<ValidationIssue> = collectIssues(null, null, text)
 
@@ -141,14 +120,22 @@ internal object EpicsDatabaseValueValidator {
           continue
         }
 
-        val invocation = extractStreamProtocolInvocation(fieldDeclaration) ?: continue
+        val invocation = EpicsStreamProtocolSupport.extractInvocation(fieldDeclaration) ?: continue
         val commandName = invocation.commandName ?: continue
+        if (invocation.busValue.isNullOrBlank()) {
+          issues += ValidationIssue(
+            startOffset = invocation.commandStart,
+            endOffset = invocation.commandEnd,
+            message = "StreamDevice bus is required after command \"$commandName\".",
+            code = "epics.database.missingStreamProtocolBus",
+          )
+        }
         val protocolFiles = EpicsPathResolver.resolveStreamProtocolPaths(project, hostFile, invocation.protocolPath)
         if (protocolFiles.isEmpty()) {
           continue
         }
 
-        if (protocolFiles.any { protocolFile -> getStreamProtocolCommandNames(protocolFile).contains(commandName) }) {
+        if (protocolFiles.any { protocolFile -> EpicsStreamProtocolSupport.getCommandNames(protocolFile).contains(commandName) }) {
           continue
         }
 
@@ -172,27 +159,6 @@ internal object EpicsDatabaseValueValidator {
     return issues
   }
 
-  private fun extractStreamProtocolInvocation(
-    fieldDeclaration: EpicsRecordCompletionSupport.FieldDeclaration,
-  ): StreamProtocolInvocation? {
-    val match = streamProtocolInvocationRegex.find(fieldDeclaration.value) ?: return null
-    val protocolPath = match.groups[1]?.value.orEmpty()
-    if (protocolPath.isBlank() || EpicsRecordCompletionSupport.containsEpicsMacroReference(protocolPath)) {
-      return null
-    }
-
-    val commandGroup = match.groups[2]
-    val commandName = commandGroup?.value
-    val commandStart = commandGroup?.range?.first?.let { fieldDeclaration.valueStart + it } ?: fieldDeclaration.valueStart
-    val commandEnd = commandGroup?.range?.last?.plus(1)?.let { fieldDeclaration.valueStart + it } ?: fieldDeclaration.valueStart
-    return StreamProtocolInvocation(
-      protocolPath = protocolPath,
-      commandName = commandName,
-      commandStart = commandStart,
-      commandEnd = commandEnd,
-    )
-  }
-
   private fun isStreamDeviceRecord(
     fieldDeclarations: List<EpicsRecordCompletionSupport.FieldDeclaration>,
   ): Boolean {
@@ -202,137 +168,6 @@ internal object EpicsDatabaseValueValidator {
 
   private fun isLinkField(recordType: String, fieldName: String): Boolean {
     return EpicsRecordCompletionSupport.getFieldType(recordType, fieldName)?.contains("LINK") == true
-  }
-
-  private fun getStreamProtocolCommandNames(protocolPath: java.nio.file.Path): Set<String> {
-    val normalizedPath = protocolPath.normalize().pathString
-    val virtualFile = LocalFileSystem.getInstance().findFileByNioFile(protocolPath)
-
-    val cacheTag: String
-    val text: String
-    if (virtualFile != null) {
-      val document = FileDocumentManager.getInstance().getCachedDocument(virtualFile)
-      if (document != null) {
-        cacheTag = "open:${document.modificationStamp}"
-        text = document.text
-      } else {
-        cacheTag = "vfs:${virtualFile.modificationStamp}"
-        text = runCatching { virtualFile.inputStream.bufferedReader().use { it.readText() } }.getOrElse { return emptySet() }
-      }
-    } else {
-      val size = runCatching { java.nio.file.Files.size(protocolPath) }.getOrNull() ?: return emptySet()
-      val modified = runCatching { java.nio.file.Files.getLastModifiedTime(protocolPath).toMillis() }.getOrNull()
-        ?: return emptySet()
-      cacheTag = "fs:$size:$modified"
-      text = runCatching { java.nio.file.Files.readString(protocolPath) }.getOrElse { return emptySet() }
-    }
-
-    streamProtocolCommandCache[normalizedPath]?.takeIf { it.cacheTag == cacheTag }?.let { entry ->
-      return entry.commandNames
-    }
-
-    val commandNames = extractStreamProtocolCommandNames(text)
-    streamProtocolCommandCache[normalizedPath] = StreamProtocolCommandCacheEntry(
-      cacheTag = cacheTag,
-      commandNames = commandNames,
-    )
-    return commandNames
-  }
-
-  private fun extractStreamProtocolCommandNames(text: String): Set<String> {
-    val commandNames = linkedSetOf<String>()
-    var depth = 0
-    var index = 0
-    var lineStart = true
-    var inComment = false
-    var inString = false
-    var stringQuote = '\u0000'
-    var escaped = false
-
-    while (index < text.length) {
-      val character = text[index]
-
-      if (inComment) {
-        if (character == '\n') {
-          inComment = false
-          lineStart = true
-        }
-        index += 1
-        continue
-      }
-
-      if (inString) {
-        when {
-          escaped -> escaped = false
-          character == '\\' -> escaped = true
-          character == stringQuote -> {
-            inString = false
-            stringQuote = '\u0000'
-          }
-        }
-        if (character == '\n') {
-          lineStart = true
-        } else if (!character.isWhitespace()) {
-          lineStart = false
-        }
-        index += 1
-        continue
-      }
-
-      if (character == '#') {
-        inComment = true
-        index += 1
-        continue
-      }
-
-      if (character == '"' || character == '\'') {
-        inString = true
-        stringQuote = character
-        lineStart = false
-        index += 1
-        continue
-      }
-
-      if (character == '\r') {
-        index += 1
-        continue
-      }
-
-      if (character == '\n') {
-        lineStart = true
-        index += 1
-        continue
-      }
-
-      if (depth == 0 && lineStart) {
-        if (character.isWhitespace()) {
-          index += 1
-          continue
-        }
-
-        val match = streamProtocolCommandDefinitionRegex.find(text.substring(index))
-        if (match != null) {
-          commandNames += match.groups[1]?.value.orEmpty()
-          depth += 1
-          lineStart = false
-          index += match.value.length
-          continue
-        }
-
-        lineStart = false
-      }
-
-      when (character) {
-        '{' -> depth += 1
-        '}' -> depth = (depth - 1).coerceAtLeast(0)
-      }
-      if (!character.isWhitespace()) {
-        lineStart = false
-      }
-      index += 1
-    }
-
-    return commandNames
   }
 
   private fun collectDuplicateRecordIssues(

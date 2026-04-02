@@ -8,7 +8,7 @@ record(calc, "val1") {
 record(ai, "val2") {
     field(DTYP, "stream")
     field(FLNK, "val3")
-    field(INP, "@test01.proto pressure")
+    field(INP, "@test01.proto pressure abc")
 }
 
 

@@ -1,6 +1,7 @@
 package org.epics.workbench.documentation
 
 import com.intellij.lang.documentation.AbstractDocumentationProvider
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.project.Project
@@ -18,11 +19,14 @@ import org.epics.workbench.highlighting.EpicsHighlightingKeys
 import org.epics.workbench.highlighting.EpicsLexingProfile
 import org.epics.workbench.highlighting.EpicsSimpleLexer
 import org.epics.workbench.highlighting.EpicsTokenTypes
+import org.epics.workbench.highlighting.PROTOCOL_KEYWORDS
 import org.epics.workbench.navigation.EpicsPathKind
 import org.epics.workbench.navigation.EpicsPathResolver
 import org.epics.workbench.navigation.EpicsRecordResolver
 import org.epics.workbench.navigation.EpicsResolvedReference
 import org.epics.workbench.navigation.EpicsResolvedRecordDefinition
+import org.epics.workbench.protocol.EpicsStreamProtocolSupport
+import org.epics.workbench.protocol.StreamProtocolCommandReference
 import org.epics.workbench.toc.EpicsDatabaseToc
 import java.awt.Color
 import java.io.File
@@ -90,6 +94,17 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
                 )
               }
             }
+
+          EpicsStreamProtocolSupport.findCommandReferenceAtOffset(text, offset)?.let { context ->
+            val matches = resolveStreamProtocolCommandHoverMatches(project, hostFile, context)
+            if (matches.isNotEmpty()) {
+              val referenceKey = buildStreamProtocolCommandReferenceKey(hostFile, context, matches)
+              return EpicsDocumentationPreview(
+                referenceKey,
+                buildStreamProtocolCommandDocumentation(context, matches),
+              )
+            }
+          }
 
           EpicsRecordCompletionSupport.findMenuFieldValueContext(text, offset)?.let { context ->
             val referenceKey = "${hostFile.path}:menu:${context.recordName}:${context.fieldName}:${context.valueStart}:${context.valueEnd}"
@@ -404,6 +419,62 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       return "epics-menu://replace?file=$encodedFile&start=$valueStart&end=$valueEnd&value=$encodedChoice"
     }
 
+    private fun buildStreamProtocolCommandReferenceKey(
+      hostFile: VirtualFile,
+      context: StreamProtocolCommandReference,
+      matches: List<StreamProtocolCommandHoverMatch>,
+    ): String {
+      return matches.joinToString(
+        separator = "|",
+        prefix = "${hostFile.path}:proto-command:${context.recordName}:${context.fieldName}:${context.protocolPath}:${context.commandName}:",
+      ) { match ->
+        "${match.absolutePath.pathString}:${match.startOffset}"
+      }
+    }
+
+    private fun buildStreamProtocolCommandDocumentation(
+      context: StreamProtocolCommandReference,
+      matches: List<StreamProtocolCommandHoverMatch>,
+    ): String {
+      if (matches.size == 1) {
+        val match = matches.first()
+        return buildString {
+          append("<html><body>")
+          append("<h3>").append(escape("EPICS StreamDevice protocol command")).append("</h3>")
+          append(paragraph("Record", context.recordName))
+          append(paragraph("Type", context.recordType))
+          append(paragraph("Field", context.fieldName))
+          append(paragraph("Protocol", context.protocolPath))
+          append(paragraph("Command", context.commandName))
+          append(pathParagraph("Path", match.absolutePath.pathString, match.startOffset))
+          append(paragraph("Line", match.line.toString()))
+          appendProtocolHighlightedPreview("Command preview", match.definitionText)
+          append("</body></html>")
+        }
+      }
+
+      return buildString {
+        append("<html><body>")
+        append("<h3>").append(escape("EPICS StreamDevice protocol command")).append("</h3>")
+        append(paragraph("Record", context.recordName))
+        append(paragraph("Type", context.recordType))
+        append(paragraph("Field", context.fieldName))
+        append(paragraph("Protocol", context.protocolPath))
+        append(paragraph("Command", context.commandName))
+        append(paragraph("Matches", matches.size.toString()))
+
+        matches.forEachIndexed { index, match ->
+          append("<hr/>")
+          append("<h4>").append(escape("${index + 1}. ${match.absolutePath.name}")).append("</h4>")
+          append(pathParagraph("Path", match.absolutePath.pathString, match.startOffset))
+          append(paragraph("Line", match.line.toString()))
+          appendProtocolHighlightedPreview("Command preview", match.definitionText)
+        }
+
+        append("</body></html>")
+      }
+    }
+
     private fun buildDocumentation(reference: EpicsResolvedReference, hostFileName: String): String {
       val text = readText(reference.targetFile)
       val title = when (reference.kind) {
@@ -669,6 +740,16 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       append("</pre>")
     }
 
+    private fun StringBuilder.appendProtocolHighlightedPreview(label: String, content: String) {
+      if (content.isBlank()) {
+        return
+      }
+      append("<p><b>").append(escape(label)).append(":</b></p>")
+      append("<pre>")
+      append(renderProtocolPreviewHtml(content))
+      append("</pre>")
+    }
+
     private fun previewLines(text: String, lineLimit: Int): String {
       return text.lineSequence().take(lineLimit).joinToString("\n")
     }
@@ -714,7 +795,29 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
     }
 
     private fun renderDatabasePreviewHtml(content: String): String {
-      val lexer = EpicsSimpleLexer(EpicsLexingProfile(DOCUMENTATION_DATABASE_KEYWORDS))
+      return renderHighlightedPreviewHtml(
+        content,
+        EpicsLexingProfile(DOCUMENTATION_DATABASE_KEYWORDS),
+      )
+    }
+
+    private fun renderProtocolPreviewHtml(content: String): String {
+      return renderHighlightedPreviewHtml(
+        content,
+        EpicsLexingProfile(
+          keywords = PROTOCOL_KEYWORDS,
+          allowSingleQuotedStrings = true,
+          extraIdentifierChars = setOf('-'),
+          caseInsensitiveKeywords = true,
+        ),
+      )
+    }
+
+    private fun renderHighlightedPreviewHtml(
+      content: String,
+      profile: EpicsLexingProfile,
+    ): String {
+      val lexer = EpicsSimpleLexer(profile)
       lexer.start(content, 0, content.length, 0)
       val html = StringBuilder()
       while (true) {
@@ -1181,6 +1284,25 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       )
     }
 
+    private fun resolveStreamProtocolCommandHoverMatches(
+      project: Project,
+      hostFile: VirtualFile,
+      context: StreamProtocolCommandReference,
+    ): List<StreamProtocolCommandHoverMatch> {
+      return EpicsPathResolver.resolveStreamProtocolPaths(project, hostFile, context.protocolPath)
+        .mapNotNull { protocolPath ->
+          EpicsStreamProtocolSupport.findCommandDefinition(protocolPath, context.commandName)
+            ?.let { definition ->
+              StreamProtocolCommandHoverMatch(
+                absolutePath = protocolPath.normalize(),
+                line = definition.line,
+                startOffset = definition.startOffset,
+                definitionText = definition.definitionText,
+              )
+            }
+        }
+    }
+
     private fun resolveDtypDeviceHoverMatches(
       project: Project,
       hostFile: VirtualFile,
@@ -1380,6 +1502,7 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
     }
 
     private fun readText(file: VirtualFile): String? {
+      FileDocumentManager.getInstance().getCachedDocument(file)?.let { return it.text }
       return try {
         String(file.contentsToByteArray(), file.charset)
       } catch (_: Exception) {
@@ -1602,6 +1725,13 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       val choiceName: String,
       val declarationText: String,
       val searchLabel: String,
+    )
+
+    private data class StreamProtocolCommandHoverMatch(
+      val absolutePath: Path,
+      val line: Int,
+      val startOffset: Int,
+      val definitionText: String,
     )
 
     private val DATABASE_EXTENSIONS = setOf("db", "vdb", "template")

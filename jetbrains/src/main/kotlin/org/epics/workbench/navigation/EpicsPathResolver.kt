@@ -1,5 +1,6 @@
 package org.epics.workbench.navigation
 
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -121,8 +122,7 @@ object EpicsPathResolver {
       return emptyList()
     }
 
-    val text = runCatching { hostFile.inputStream.bufferedReader().use { it.readText() } }.getOrNull()
-      ?: return emptyList()
+    val text = readText(hostFile) ?: return emptyList()
     val context = getSubstitutionsReferenceAtOffset(text, offset) ?: return emptyList()
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     return collectSubstitutionsReferences(project, hostFile, ownerRoot, context)
@@ -139,7 +139,7 @@ object EpicsPathResolver {
 
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     val resolvedPaths = linkedSetOf<Path>()
-    for (searchDirectory in collectStreamProtocolSearchDirectories(project, ownerRoot)) {
+    for (searchDirectory in collectStreamProtocolSearchDirectories(project, hostFile, ownerRoot)) {
       val candidate = resolveAbsoluteOrRelative(searchDirectory, protocolPath)
       if (candidate.exists() && candidate.isRegularFile()) {
         resolvedPaths.add(candidate.normalize())
@@ -167,7 +167,7 @@ object EpicsPathResolver {
   }
 
   internal fun resolveReference(project: Project, hostFile: VirtualFile, offset: Int): EpicsResolvedReference? {
-    val text = hostFile.inputStream.bufferedReader().use { it.readText() }
+    val text = readText(hostFile) ?: return null
     val context = when {
       isDatabaseFile(hostFile) -> getDatabaseReferenceAtOffset(text, offset)
       isMakefile(hostFile) -> getMakefileReferenceAtOffset(text, offset)
@@ -178,7 +178,7 @@ object EpicsPathResolver {
 
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     return when {
-      isDatabaseFile(hostFile) -> resolveDatabaseReference(project, text, offset, ownerRoot, context)
+      isDatabaseFile(hostFile) -> resolveDatabaseReference(project, hostFile, text, offset, ownerRoot, context)
       isMakefile(hostFile) -> resolveMakefileReference(project, hostFile, ownerRoot, context)
       isStartupFile(hostFile) -> resolveStartupReference(project, hostFile, text, offset, ownerRoot, context)
       isSubstitutionsFile(hostFile) -> resolveSubstitutionsReference(project, hostFile, ownerRoot, context)
@@ -228,13 +228,14 @@ object EpicsPathResolver {
 
   private fun resolveDatabaseReference(
     project: Project,
+    hostFile: VirtualFile,
     text: String,
     offset: Int,
     ownerRoot: Path,
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
     return when (context.kind) {
-      EpicsPathKind.PROTOCOL -> resolveStreamProtocolReference(project, text, offset, ownerRoot, context)
+      EpicsPathKind.PROTOCOL -> resolveStreamProtocolReference(project, hostFile, text, offset, ownerRoot, context)
       else -> null
     }
   }
@@ -280,13 +281,14 @@ object EpicsPathResolver {
 
   private fun resolveStreamProtocolReference(
     project: Project,
+    hostFile: VirtualFile,
     text: String,
     offset: Int,
     ownerRoot: Path,
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
     val protocolPath = getStreamProtocolReferenceAtOffset(text, offset) ?: return null
-    val searchDirectories = collectStreamProtocolSearchDirectories(project, ownerRoot)
+    val searchDirectories = collectStreamProtocolSearchDirectories(project, hostFile, ownerRoot)
     for (searchDirectory in searchDirectories) {
       val candidate = resolveAbsoluteOrRelative(searchDirectory, protocolPath)
       resolveFileCandidate(candidate, context)?.let { return it }
@@ -1012,18 +1014,29 @@ object EpicsPathResolver {
     return Path.of(project.basePath ?: hostFile.parent?.path ?: ".").normalize()
   }
 
-  private fun collectStreamProtocolSearchDirectories(project: Project, ownerRoot: Path): List<Path> {
+  private fun collectStreamProtocolSearchDirectories(project: Project, hostFile: VirtualFile, ownerRoot: Path): List<Path> {
     val iocBootDirectory = ownerRoot.resolve("iocBoot")
     val searchDirectories = linkedSetOf<Path>()
-    val startupFiles = project.epicsBuildModelService().collectStartupEntryPoints(ownerRoot).ifEmpty {
-      if (!iocBootDirectory.exists() || !iocBootDirectory.isDirectory()) {
-        return emptyList()
+    fun addSearchDirectory(path: Path?) {
+      val normalizedPath = path?.normalize() ?: return
+      if (normalizedPath.exists() && normalizedPath.isDirectory()) {
+        searchDirectories.add(normalizedPath)
       }
-      collectStartupFiles(iocBootDirectory)
+    }
+
+    addSearchDirectory(hostFile.parent?.toNioPath())
+    addSearchDirectory(ownerRoot.resolve("protocols"))
+    addSearchDirectory(ownerRoot.resolve("protocol"))
+    addSearchDirectory(ownerRoot.resolve("proto"))
+
+    val startupFiles = linkedSetOf<Path>()
+    startupFiles.addAll(project.epicsBuildModelService().collectStartupEntryPoints(ownerRoot))
+    if (iocBootDirectory.exists() && iocBootDirectory.isDirectory()) {
+      startupFiles.addAll(collectStartupFiles(iocBootDirectory))
     }
     for (startupPath in startupFiles) {
       val startupFile = LocalFileSystem.getInstance().findFileByIoFile(startupPath.toFile()) ?: continue
-      val text = runCatching { startupFile.inputStream.bufferedReader().use { it.readText() } }.getOrNull() ?: continue
+      val text = readText(startupFile) ?: continue
       if (!text.contains(STREAM_PROTOCOL_PATH_VARIABLE)) {
         continue
       }
@@ -1038,14 +1051,14 @@ object EpicsPathResolver {
             splitStreamProtocolSearchDirectories(
               expandEpicsValue(rawValue, state.variables),
               state.currentDirectory,
-            ).forEach(searchDirectories::add)
+            ).forEach(::addSearchDirectory)
           }
         }
         applyStartupLine(line, state)
       }
     }
 
-    return searchDirectories.filter { it.exists() && it.isDirectory() }
+    return searchDirectories.toList()
   }
 
   private fun collectStartupFiles(rootDirectory: Path): List<Path> {
@@ -1146,6 +1159,13 @@ object EpicsPathResolver {
     }
 
     return null
+  }
+
+  private fun readText(file: VirtualFile): String? {
+    FileDocumentManager.getInstance().getCachedDocument(file)?.let { return it.text }
+    return runCatching {
+      file.inputStream.bufferedReader().use { it.readText() }
+    }.getOrNull()
   }
 
   private data class DatabaseRecordDeclaration(
