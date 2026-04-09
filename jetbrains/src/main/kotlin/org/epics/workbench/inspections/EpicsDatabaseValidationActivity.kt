@@ -35,12 +35,12 @@ class EpicsDatabaseValidationActivity : ProjectActivity {
           if (events.isEmpty()) {
             return
           }
-          listener.refreshOpenStartupEditors()
+          listener.refreshOpenDependentEditors()
         }
       },
     )
     val refreshTimer = Timer(1000) {
-      listener.refreshOpenStartupEditors()
+      listener.refreshOpenDependentEditors()
     }
     refreshTimer.initialDelay = 0
     refreshTimer.start()
@@ -70,14 +70,14 @@ internal class EpicsDatabaseValidationListener(
     }
   }
 
-  fun refreshOpenStartupEditors() {
+  fun refreshOpenDependentEditors() {
     for (editor in EditorFactory.getInstance().allEditors) {
       if (editor.project != project) {
         continue
       }
 
       val file = FileDocumentManager.getInstance().getFile(editor.document) ?: continue
-      if (!isStartupFile(file.name)) {
+      if (!isStartupFile(file.name) && !isMakefile(file.name)) {
         continue
       }
 
@@ -112,6 +112,7 @@ internal class EpicsDatabaseValidationListener(
           EpicsMakefileInclusionValidator.collectIssues(file, document.text)
       isSubstitutionsFile(file.name) -> EpicsMakefileInclusionValidator.collectIssues(file, document.text)
       isStartupFile(file.name) -> EpicsStartupMacroValidator.collectIssues(project, file, document.text)
+      isMakefile(file.name) -> EpicsMakefileDatabaseValidator.collectIssues(project, file, document.text)
       isMonitorFile(file.name) -> EpicsMonitorValidator.collectIssues(document.text)
       isProbeFile(file.name) -> EpicsProbeValidator.collectIssues(document.text)
       else -> emptyList()
@@ -179,6 +180,7 @@ internal class EpicsDatabaseValidationListener(
     return isDatabaseFile(fileName) ||
       isSubstitutionsFile(fileName) ||
       isStartupFile(fileName) ||
+      isMakefile(fileName) ||
       isMonitorFile(fileName) ||
       isProbeFile(fileName)
   }
@@ -194,6 +196,8 @@ internal class EpicsDatabaseValidationListener(
   private fun isSubstitutionsFile(fileName: String): Boolean {
     return fileName.substringAfterLast('.', "").lowercase() in setOf("substitutions", "sub", "subs")
   }
+
+  private fun isMakefile(fileName: String): Boolean = fileName == "Makefile"
 
   companion object {
     private val HIGHLIGHTERS_KEY =

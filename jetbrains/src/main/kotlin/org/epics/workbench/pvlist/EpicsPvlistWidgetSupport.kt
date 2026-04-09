@@ -17,6 +17,7 @@ internal data class EpicsPvlistWidgetModel(
   val rawPvNames: MutableList<String>,
   val macroNames: MutableList<String>,
   val macroValues: LinkedHashMap<String, String>,
+  val fieldNames: MutableList<String> = mutableListOf(),
 )
 
 internal data class EpicsPvlistWidgetBuildResult(
@@ -31,9 +32,21 @@ internal data class EpicsPvlistWidgetDefinition(
 )
 
 internal data class EpicsPvlistWidgetRowPlan(
+  val sourceIndex: Int,
   val channelName: String,
+  val protocol: MonitorProtocol? = null,
+  val recordName: String? = null,
   val definitionKey: String?,
+  val recordTypeDefinitionKey: String? = null,
+  val recordType: String? = null,
+  val fieldCells: List<EpicsPvlistWidgetFieldCellPlan> = emptyList(),
   val unresolvedValue: String? = null,
+)
+
+internal data class EpicsPvlistWidgetFieldCellPlan(
+  val name: String,
+  val definitionKey: String? = null,
+  val value: String = "",
 )
 
 internal data class EpicsPvlistWidgetPlan(
@@ -137,6 +150,20 @@ internal object EpicsPvlistWidgetSupport {
 
   fun replaceChannels(model: EpicsPvlistWidgetModel, text: String): Boolean {
     val nextRawPvNames = parseChannelLines(text)
+    return updateChannels(model, nextRawPvNames)
+  }
+
+  fun removeChannelAt(model: EpicsPvlistWidgetModel, sourceIndex: Int): Boolean {
+    if (sourceIndex !in model.rawPvNames.indices) {
+      return false
+    }
+    val nextRawPvNames = model.rawPvNames.toMutableList().apply {
+      removeAt(sourceIndex)
+    }
+    return updateChannels(model, nextRawPvNames)
+  }
+
+  private fun updateChannels(model: EpicsPvlistWidgetModel, nextRawPvNames: List<String>): Boolean {
     val nextMacroNames = extractOrderedMacroNames(nextRawPvNames)
     val channelsChanged = model.rawPvNames != nextRawPvNames
     val macrosChanged = model.macroNames != nextMacroNames
@@ -172,6 +199,7 @@ internal object EpicsPvlistWidgetSupport {
   fun buildMonitorPlan(
     model: EpicsPvlistWidgetModel,
     defaultProtocol: MonitorProtocol,
+    recordTypes: Map<String, String> = emptyMap(),
   ): EpicsPvlistWidgetPlan {
     val macroDefinitions = linkedMapOf<String, String>()
     model.macroNames.forEach { macroName ->
@@ -184,23 +212,50 @@ internal object EpicsPvlistWidgetSupport {
     val rows = mutableListOf<EpicsPvlistWidgetRowPlan>()
     val definitions = mutableListOf<EpicsPvlistWidgetDefinition>()
     val seenDefinitionKeys = linkedSetOf<String>()
+    val fieldNames = getFieldNames(model)
 
-    model.rawPvNames.forEach { rawPvName ->
+    model.rawPvNames.forEachIndexed { index, rawPvName ->
       val expanded = expandMonitorValue(rawPvName, macroDefinitions, linkedSetOf())
       if (expanded.isNullOrBlank() || expanded.any(Char::isWhitespace)) {
         rows += EpicsPvlistWidgetRowPlan(
+          sourceIndex = index,
           channelName = rawPvName,
           definitionKey = null,
+          fieldCells = fieldNames.map { fieldName -> EpicsPvlistWidgetFieldCellPlan(name = fieldName) },
           unresolvedValue = "(set macros)",
         )
-        return@forEach
+        return@forEachIndexed
       }
 
       val (protocol, pvName) = splitMonitorProtocol(expanded, defaultProtocol)
+      val recordName = getRecordName(pvName).takeIf(String::isNotBlank)
       val definitionKey = buildDefinitionKey(protocol, pvName)
+      val recordType = recordName?.let(recordTypes::get).orEmpty().trim()
+      val recordTypeDefinitionKey = recordName
+        ?.takeIf(String::isNotBlank)
+        ?.let { buildDefinitionKey(protocol, "$it.RTYP") }
+      val availableFieldNames = getAvailableFieldNames(recordType)
+      val fieldCells = fieldNames.map { fieldName ->
+        when {
+          recordName.isNullOrBlank() || recordType.isBlank() ->
+            EpicsPvlistWidgetFieldCellPlan(name = fieldName)
+          availableFieldNames != null && !availableFieldNames.contains(fieldName) ->
+            EpicsPvlistWidgetFieldCellPlan(name = fieldName, value = "N/A")
+          else -> EpicsPvlistWidgetFieldCellPlan(
+            name = fieldName,
+            definitionKey = buildDefinitionKey(protocol, "$recordName.$fieldName"),
+          )
+        }
+      }
       rows += EpicsPvlistWidgetRowPlan(
+        sourceIndex = index,
         channelName = pvName,
+        protocol = protocol,
+        recordName = recordName,
         definitionKey = definitionKey,
+        recordTypeDefinitionKey = recordTypeDefinitionKey,
+        recordType = recordType.takeIf(String::isNotBlank),
+        fieldCells = fieldCells,
       )
       if (seenDefinitionKeys.add(definitionKey)) {
         definitions += EpicsPvlistWidgetDefinition(
@@ -209,9 +264,59 @@ internal object EpicsPvlistWidgetSupport {
           pvName = pvName,
         )
       }
+      if (recordName != null && recordTypeDefinitionKey != null && seenDefinitionKeys.add(recordTypeDefinitionKey)) {
+        definitions += EpicsPvlistWidgetDefinition(
+          key = recordTypeDefinitionKey,
+          protocol = protocol,
+          pvName = "$recordName.RTYP",
+        )
+      }
+      for (fieldCell in fieldCells) {
+        val fieldDefinitionKey = fieldCell.definitionKey ?: continue
+        if (!seenDefinitionKeys.add(fieldDefinitionKey)) {
+          continue
+        }
+        definitions += EpicsPvlistWidgetDefinition(
+          key = fieldDefinitionKey,
+          protocol = protocol,
+          pvName = "${recordName.orEmpty()}.${fieldCell.name}",
+        )
+      }
     }
 
     return EpicsPvlistWidgetPlan(rows = rows, definitions = definitions)
+  }
+
+  fun getFieldNames(model: EpicsPvlistWidgetModel): List<String> {
+    return model.fieldNames
+      .map(::normalizeFieldName)
+      .filter(String::isNotBlank)
+      .distinct()
+  }
+
+  fun normalizeFieldName(fieldName: String): String {
+    val normalized = fieldName
+      .trim()
+      .trimStart('.')
+      .uppercase()
+    return normalized.takeIf { FIELD_NAME_REGEX.matches(it) }.orEmpty()
+  }
+
+  fun getRecordName(pvName: String): String {
+    val normalized = pvName.trim()
+    if (normalized.isBlank()) {
+      return ""
+    }
+    val lastDotIndex = normalized.lastIndexOf('.')
+    if (lastDotIndex <= 0) {
+      return normalized
+    }
+    val suffix = normalized.substring(lastDotIndex + 1)
+    return if (RECORD_FIELD_SUFFIX_REGEX.matches(suffix)) {
+      normalized.substring(0, lastDotIndex)
+    } else {
+      normalized
+    }
   }
 
   fun buildFileText(model: EpicsPvlistWidgetModel, eol: String = "\n"): String {
@@ -346,7 +451,18 @@ internal object EpicsPvlistWidgetSupport {
     return "${protocol.name.lowercase()}:$pvName"
   }
 
+  private fun getAvailableFieldNames(recordType: String): Set<String>? {
+    if (recordType.isBlank()) {
+      return null
+    }
+    return EpicsRecordCompletionSupport.getDeclaredFieldNamesForRecordType(recordType)
+      ?: EpicsRecordCompletionSupport.getFieldNamesForRecordType(recordType)
+        .mapTo(linkedSetOf()) { it.uppercase() }
+  }
+
   private val MACRO_ASSIGNMENT_REGEX = Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$""")
   private val MACRO_NAME_REGEX = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
   private val MACRO_REFERENCE_REGEX = Regex("""\$\(([^)=\s]+)(?:=([^)]*))?\)|\$\{([^}\s]+)\}""")
+  private val FIELD_NAME_REGEX = Regex("""^[A-Z_][A-Z0-9_]*$""")
+  private val RECORD_FIELD_SUFFIX_REGEX = Regex("""^[A-Z0-9_]+$""")
 }

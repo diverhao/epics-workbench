@@ -126,8 +126,8 @@ class OpenInProbeAction : DumbAwareAction() {
       normalizedRecordName,
       EpicsDatabaseToc.extractMacroAssignmentValues(text),
       linkedSetOf(),
-    ) ?: return null
-    return resolved.takeUnless(::containsEpicsMacroReference)
+    ) ?: return normalizedRecordName
+    return resolved.takeUnless(::containsEpicsMacroReference) ?: normalizedRecordName
   }
 
   private fun expandAssignedMacros(

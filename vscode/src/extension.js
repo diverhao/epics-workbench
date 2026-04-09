@@ -41,7 +41,7 @@ const LANGUAGE_IDS = {
   database: "database",
   startup: "startup",
   substitutions: "substitutions",
-  dbd: "database definition",
+  dbd: "dbd",
   source: "epics-source",
   proto: "proto",
   sequencer: "sequencer",
@@ -51,6 +51,10 @@ const LANGUAGE_IDS = {
 
 const DATABASE_EXTENSIONS = new Set([".db", ".vdb", ".template"]);
 const SUBSTITUTION_EXTENSIONS = new Set([".sub", ".subs", ".substitutions"]);
+const DATABASE_OR_SUBSTITUTION_EXTENSIONS = new Set([
+  ...DATABASE_EXTENSIONS,
+  ...SUBSTITUTION_EXTENSIONS,
+]);
 const STARTUP_EXTENSIONS = new Set([".cmd", ".iocsh"]);
 const DBD_EXTENSIONS = new Set([".dbd"]);
 const PVLIST_EXTENSIONS = new Set([".pvlist"]);
@@ -1242,18 +1246,22 @@ class EpicsDefinitionProvider {
       await this.workspaceIndex.getSnapshot(),
       document,
     );
-    const navigationTarget = getNavigationTarget(snapshot, document, position);
-    if (!navigationTarget) {
+    const navigationTargets = getDefinitionTargets(snapshot, document, position);
+    if (navigationTargets.length === 0) {
       return undefined;
     }
 
-    return new vscode.Location(
-      vscode.Uri.file(navigationTarget.absolutePath),
-      new vscode.Position(
-        Math.max(0, Number(navigationTarget.line || 1) - 1),
-        Math.max(0, Number(navigationTarget.character || 1) - 1),
-      ),
+    const locations = navigationTargets.map(
+      (navigationTarget) =>
+        new vscode.Location(
+          vscode.Uri.file(navigationTarget.absolutePath),
+          new vscode.Position(
+            Math.max(0, Number(navigationTarget.line || 1) - 1),
+            Math.max(0, Number(navigationTarget.character || 1) - 1),
+          ),
+        ),
     );
+    return locations.length === 1 ? locations[0] : locations;
   }
 }
 
@@ -3558,6 +3566,36 @@ function getNavigationTarget(snapshot, document, position) {
   return undefined;
 }
 
+function getDefinitionTargets(snapshot, document, position) {
+  if (isStartupDocument(document)) {
+    const startupTargets = getStartupDefinitionTargets(
+      snapshot,
+      document,
+      position,
+    );
+    if (startupTargets.length > 0) {
+      return startupTargets;
+    }
+  }
+
+  const navigationTarget = getNavigationTarget(snapshot, document, position);
+  return navigationTarget ? [navigationTarget] : [];
+}
+
+function getStartupDefinitionTargets(snapshot, document, position) {
+  const tracedTargets = getStartupDbLoadRecordsTraceTargets(
+    snapshot,
+    document,
+    position,
+  );
+  if (tracedTargets.length > 0) {
+    return tracedTargets;
+  }
+
+  const navigationTarget = getStartupNavigationTarget(snapshot, document, position);
+  return navigationTarget ? [navigationTarget] : [];
+}
+
 function getDatabaseNavigationTarget(snapshot, document, position) {
   if (!isDatabaseDocument(document) || document.uri.scheme !== "file") {
     return undefined;
@@ -4560,17 +4598,29 @@ function getStartupLoadFileHover(snapshot, document, position) {
   }
 
   const state = createStartupExecutionState(snapshot, document, statement.start);
+  const tracedCandidates = resolveStartupDbLoadRecordsTraceCandidates(
+    snapshot,
+    document,
+    statement,
+    state,
+  );
+  if (tracedCandidates.length > 0) {
+    return createStartupLoadFileHover(document, statement, tracedCandidates);
+  }
+
   const resolution = resolveStartupPath(snapshot, document, statement, state);
   if (!resolution || resolution.isDirectory) {
     return undefined;
   }
 
   const resolvedFile = getReadableStartupFileResolution(document, resolution);
-  if (!resolvedFile?.text) {
+  if (!resolvedFile?.absolutePath) {
     return undefined;
   }
 
-  return createStartupLoadFileHover(document, statement, resolvedFile);
+  return createStartupLoadFileHover(document, statement, [
+    createStartupLoadFileCandidate(resolvedFile.absolutePath),
+  ]);
 }
 
 function getSubstitutionTemplateHover(snapshot, document, position) {
@@ -4626,12 +4676,50 @@ function getStartupDbpfArgumentAtPosition(document, position) {
   return undefined;
 }
 
-function createStartupLoadFileHover(document, statement, resolvedFile) {
-  const absolutePath = normalizeFsPath(resolvedFile.absolutePath);
+function createStartupLoadFileHover(document, statement, candidates) {
   const markdown = new vscode.MarkdownString();
   markdown.isTrusted = true;
-  markdown.appendMarkdown("**EPICS database file**");
-  appendDatabaseFileHoverSummary(markdown, absolutePath, resolvedFile.text);
+  const displayedCandidates = candidates.slice(0, 5);
+
+  if (candidates.length === 1) {
+    const candidate = candidates[0];
+    const absolutePath = normalizeFsPath(candidate.absolutePath);
+    const text = readTextFile(absolutePath);
+    markdown.appendMarkdown(
+      `**EPICS database/substitutions file**${candidate.isWritable ? "" : " (read only)"}`,
+    );
+    if (text === undefined) {
+      markdown.appendMarkdown(
+        `\n\nPath: ${createProtocolFileLink(absolutePath, absolutePath)}`,
+      );
+    } else {
+      appendStartupLoadFileHoverSummary(markdown, absolutePath, text);
+    }
+  } else {
+    markdown.appendMarkdown("**EPICS database/substitutions file candidates**");
+    markdown.appendMarkdown(`\n\nMatches: \`${candidates.length}\``);
+
+    for (const [index, candidate] of displayedCandidates.entries()) {
+      const normalizedPath = normalizeFsPath(candidate.absolutePath);
+      const text = readTextFile(normalizedPath);
+      markdown.appendMarkdown(
+        `\n\n---\n\n**Candidate ${index + 1}**${candidate.isWritable ? "" : " (read only)"}`,
+      );
+      if (text === undefined) {
+        markdown.appendMarkdown(
+          `\n\nPath: ${createProtocolFileLink(normalizedPath, normalizedPath)}`,
+        );
+      } else {
+        appendStartupLoadFileHoverSummary(markdown, normalizedPath, text);
+      }
+    }
+
+    if (candidates.length > displayedCandidates.length) {
+      markdown.appendMarkdown(
+        `\n\n${candidates.length - displayedCandidates.length} more matching files omitted.`,
+      );
+    }
+  }
 
   return new vscode.Hover(
     markdown,
@@ -4640,6 +4728,23 @@ function createStartupLoadFileHover(document, statement, resolvedFile) {
       document.positionAt(statement.pathEnd),
     ),
   );
+}
+
+function createStartupLoadFileCandidate(absolutePath) {
+  const normalizedPath = normalizeFsPath(absolutePath);
+  return {
+    absolutePath: normalizedPath,
+    isWritable: isWritableFile(normalizedPath),
+  };
+}
+
+function appendStartupLoadFileHoverSummary(markdown, absolutePath, text) {
+  if (SUBSTITUTION_EXTENSIONS.has(path.extname(absolutePath).toLowerCase())) {
+    appendSubstitutionFileHoverSummary(markdown, absolutePath, text);
+    return;
+  }
+
+  appendDatabaseFileHoverSummary(markdown, absolutePath, text);
 }
 
 function createSubstitutionTemplateHover(document, reference, absolutePaths) {
@@ -6893,8 +6998,11 @@ function appendDatabaseFileHoverSummary(markdown, absolutePath, text) {
   }
 
   if (recordPreviewNames.length > 0) {
-    markdown.appendMarkdown("\n\nRecord name preview:");
-    markdown.appendCodeblock(recordPreviewNames.join("\n"), "text");
+    markdown.appendMarkdown(
+      `\n\n${recordPreviewNames
+        .map((recordName) => `\`${escapeInlineCode(recordName)}\``)
+        .join("  \n")}`,
+    );
     if (recordDeclarations.length > recordPreviewNames.length) {
       markdown.appendMarkdown(
         `\n\n${recordDeclarations.length - recordPreviewNames.length} more record names omitted.`,
@@ -8391,6 +8499,7 @@ function resolveMakefileVariableValue(snapshot, document, variableName) {
 
   const assignments = parseMakeAssignments(document.getText());
   const project = findProjectForUri(snapshot.projectModel, document.uri);
+  const projectRootPath = project?.rootPath;
   const releaseVariables = project ? project.releaseVariables : new Map();
   const baseDirectory = normalizeFsPath(path.dirname(document.uri.fsPath));
   const cache = new Map();
@@ -8406,10 +8515,12 @@ function resolveMakefileVariableValue(snapshot, document, variableName) {
     }
 
     let rawValue;
+    let valueBaseDirectory = baseDirectory;
     if (assignments.has(name)) {
       rawValue = assignments.get(name).join(" ");
     } else if (releaseVariables.has(name)) {
       rawValue = releaseVariables.get(name);
+      valueBaseDirectory = projectRootPath || baseDirectory;
     } else if (process.env[name]) {
       rawValue = process.env[name];
     } else {
@@ -8426,7 +8537,10 @@ function resolveMakefileVariableValue(snapshot, document, variableName) {
     );
     resolving.delete(name);
 
-    const absolutePath = computeAbsoluteVariablePath(expandedValue, baseDirectory);
+    const absolutePath = computeAbsoluteVariablePath(
+      expandedValue,
+      valueBaseDirectory,
+    );
     const result = {
       resolvedValue: absolutePath || expandedValue,
       absolutePath,
@@ -8436,6 +8550,33 @@ function resolveMakefileVariableValue(snapshot, document, variableName) {
   };
 
   return resolveVariable(variableName);
+}
+
+function resolveMakefileTokenPath(snapshot, document, token) {
+  if (!document?.uri || document.uri.scheme !== "file") {
+    return undefined;
+  }
+
+  const baseDirectory = normalizeFsPath(path.dirname(document.uri.fsPath));
+  const unresolvedVariables = new Set();
+  const expandedValue = String(token || "").replace(
+    /\$\(([^)]+)\)|\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_.-]*)/g,
+    (_, parenthesizedName, bracedName, bareName) => {
+      const variableName = parenthesizedName || bracedName || bareName;
+      const resolved = resolveMakefileVariableValue(snapshot, document, variableName);
+      if (!resolved?.resolvedValue) {
+        unresolvedVariables.add(variableName);
+        return `$(${variableName})`;
+      }
+      return resolved.resolvedValue;
+    },
+  );
+
+  return {
+    expandedValue,
+    absolutePath: computeAbsoluteVariablePath(expandedValue, baseDirectory),
+    unresolvedVariables: [...unresolvedVariables],
+  };
 }
 
 function getStartupNavigationTarget(snapshot, document, position) {
@@ -8451,6 +8592,236 @@ function getStartupNavigationTarget(snapshot, document, position) {
   }
 
   return getNavigationTargetFromStartupResolution(resolution);
+}
+
+function getStartupDbLoadRecordsTraceTargets(snapshot, document, position) {
+  const statement = getStartupStatementAtPosition(document, position);
+  if (
+    !statement ||
+    statement.kind !== "load" ||
+    statement.command !== "dbLoadRecords"
+  ) {
+    return [];
+  }
+
+  return resolveStartupDbLoadRecordsTraceCandidates(
+    snapshot,
+    document,
+    statement,
+  ).map((candidate) => ({ absolutePath: candidate.absolutePath }));
+}
+
+function resolveStartupDbLoadRecordsTraceCandidates(
+  snapshot,
+  document,
+  statement,
+  startupState,
+) {
+  if (
+    !document?.uri ||
+    document.uri.scheme !== "file" ||
+    !statement ||
+    statement.command !== "dbLoadRecords"
+  ) {
+    return [];
+  }
+
+  const state =
+    startupState || createStartupExecutionState(snapshot, document, statement.start);
+  const expandedPath = expandStartupValue(statement.path, state?.envVariables);
+  const requestedPath = normalizePath(expandedPath || statement.path);
+  const requestedFileName = path.posix.basename(requestedPath);
+  if (!requestedFileName) {
+    return [];
+  }
+
+  const parsedRequestedPath = path.posix.parse(requestedFileName);
+  const candidateFileNames = new Set([requestedFileName]);
+  for (const extension of SUBSTITUTION_EXTENSIONS) {
+    candidateFileNames.add(`${parsedRequestedPath.name}${extension}`);
+  }
+
+  const searchRoots = getStartupDbLoadRecordsTraceSearchRoots(
+    snapshot,
+    document,
+    state,
+  );
+  const matches = [];
+  const seenPaths = new Set();
+
+  const addCandidate = (absolutePath, rootPriority) => {
+    const candidate = createStartupLoadFileCandidate(absolutePath);
+    const normalizedPath = candidate.absolutePath;
+    if (!normalizedPath || seenPaths.has(normalizedPath) || !isExistingFile(normalizedPath)) {
+      return;
+    }
+
+    const fileName = path.posix.basename(normalizePath(normalizedPath));
+    const extension = path.extname(fileName).toLowerCase();
+    if (
+      !candidateFileNames.has(fileName) ||
+      !DATABASE_OR_SUBSTITUTION_EXTENSIONS.has(extension)
+    ) {
+      return;
+    }
+
+    seenPaths.add(normalizedPath);
+    matches.push({
+      ...candidate,
+      writablePriority: candidate.isWritable ? 0 : 1,
+      rootPriority,
+      filePriority: fileName === requestedFileName ? 0 : 1,
+      dbDirectoryPriority: /[\\/]Db[\\/]/.test(normalizedPath)
+        ? 0
+        : /[\\/]db[\\/]/.test(normalizedPath)
+          ? 1
+          : 2,
+    });
+  };
+
+  searchRoots.forEach((rootEntry, rootIndex) => {
+    collectStartupDbLoadRecordsTraceMatchesInRoot(
+      rootEntry.rootPath,
+      candidateFileNames,
+      (candidatePath) => addCandidate(candidatePath, rootIndex),
+    );
+  });
+
+  matches.sort(
+    (left, right) =>
+      left.writablePriority - right.writablePriority ||
+      left.rootPriority - right.rootPriority ||
+      left.filePriority - right.filePriority ||
+      left.dbDirectoryPriority - right.dbDirectoryPriority ||
+      compareLabels(left.absolutePath, right.absolutePath),
+  );
+
+  return matches;
+}
+
+function getStartupDbLoadRecordsTraceSearchRoots(snapshot, document, startupState) {
+  const project = findProjectForUri(snapshot.projectModel, document.uri);
+  const ownerRootPath = normalizeFsPath(
+    project?.rootPath ||
+      startupState?.ownerRootPath ||
+      findStartupOwningRootPath(snapshot, document),
+  );
+  if (!ownerRootPath) {
+    return [];
+  }
+
+  const releaseVariables =
+    project?.releaseVariables ||
+    loadStartupReleaseVariableData(snapshot, document).values;
+  const roots = [];
+  const seen = new Set();
+
+  const addRoot = (rootPath) => {
+    const normalizedPath = normalizeFsPath(rootPath);
+    if (!normalizedPath || seen.has(normalizedPath) || !isExistingDirectory(normalizedPath)) {
+      return;
+    }
+    seen.add(normalizedPath);
+    roots.push({ rootPath: normalizedPath });
+  };
+
+  addRoot(ownerRootPath);
+
+  for (const releaseRoot of resolveReleaseModuleRoots(ownerRootPath, releaseVariables)) {
+    if (releaseRoot.variableName === "EPICS_BASE") {
+      continue;
+    }
+    addRoot(releaseRoot.rootPath);
+  }
+
+  return roots;
+}
+
+function collectStartupDbLoadRecordsTraceMatchesInRoot(
+  rootPath,
+  candidateFileNames,
+  onMatch,
+) {
+  const queue = [normalizeFsPath(rootPath)];
+
+  while (queue.length > 0) {
+    const currentDirectory = queue.shift();
+    if (!currentDirectory || !isExistingDirectory(currentDirectory)) {
+      continue;
+    }
+
+    if (/^(?:Db|db)$/.test(path.basename(currentDirectory))) {
+      collectStartupDbLoadRecordsTraceMatchesInDbDirectory(
+        currentDirectory,
+        candidateFileNames,
+        onMatch,
+      );
+      continue;
+    }
+
+    let directoryEntries;
+    try {
+      directoryEntries = fs.readdirSync(currentDirectory, { withFileTypes: true });
+    } catch (error) {
+      continue;
+    }
+
+    directoryEntries.sort((left, right) => compareLabels(left.name, right.name));
+    for (const entry of directoryEntries) {
+      if (!entry.isDirectory() || shouldSkipStartupDbTraceDirectory(entry.name)) {
+        continue;
+      }
+      queue.push(normalizeFsPath(path.join(currentDirectory, entry.name)));
+    }
+  }
+}
+
+function collectStartupDbLoadRecordsTraceMatchesInDbDirectory(
+  directoryPath,
+  candidateFileNames,
+  onMatch,
+) {
+  const queue = [normalizeFsPath(directoryPath)];
+
+  while (queue.length > 0) {
+    const currentDirectory = queue.shift();
+    let directoryEntries;
+    try {
+      directoryEntries = fs.readdirSync(currentDirectory, { withFileTypes: true });
+    } catch (error) {
+      continue;
+    }
+
+    directoryEntries.sort((left, right) => compareLabels(left.name, right.name));
+    for (const entry of directoryEntries) {
+      const entryPath = normalizeFsPath(path.join(currentDirectory, entry.name));
+      if (entry.isDirectory()) {
+        if (!shouldSkipStartupDbTraceDirectory(entry.name)) {
+          queue.push(entryPath);
+        }
+        continue;
+      }
+
+      if (candidateFileNames.has(entry.name)) {
+        onMatch(entryPath);
+      }
+    }
+  }
+}
+
+function shouldSkipStartupDbTraceDirectory(directoryName) {
+  return (
+    directoryName.startsWith(".") ||
+    directoryName === "bin" ||
+    directoryName === "dbd" ||
+    directoryName === "html" ||
+    directoryName === "include" ||
+    directoryName === "lib" ||
+    directoryName === "node_modules" ||
+    directoryName === "target" ||
+    directoryName === "tmp" ||
+    /^O\./.test(directoryName)
+  );
 }
 
 function getSubstitutionNavigationTarget(snapshot, document, position) {
@@ -10020,7 +10391,7 @@ async function refreshDiagnostics(document, diagnostics, workspaceIndex) {
     !isDatabaseDocument(document) &&
     !isStartupDocument(document) &&
     !isSubstitutionsDocument(document) &&
-    !isSourceMakefileDocument(document)
+    !isMakefileDocument(document)
   ) {
     diagnostics.delete(document.uri);
     return;
@@ -10041,8 +10412,8 @@ async function refreshDiagnostics(document, diagnostics, workspaceIndex) {
     return;
   }
 
-  if (isSourceMakefileDocument(document)) {
-    diagnostics.set(document.uri, createSourceMakefileDiagnostics(document, snapshot));
+  if (isMakefileDocument(document)) {
+    diagnostics.set(document.uri, createMakefileDiagnostics(document, snapshot));
     return;
   }
 
@@ -10060,6 +10431,17 @@ function createDatabaseDiagnostics(document, snapshot) {
     ...createInvalidStreamProtocolCommandDiagnostics(document, snapshot),
     ...createDescFieldLengthDiagnostics(document),
     ...createMakefileInclusionDiagnostics(document),
+  ];
+}
+
+function createMakefileDiagnostics(document, snapshot) {
+  if (!isMakefileDocument(document)) {
+    return [];
+  }
+
+  return [
+    ...createMakefileDatabaseReferenceDiagnostics(document, snapshot),
+    ...createSourceMakefileDiagnostics(document, snapshot),
   ];
 }
 
@@ -10854,6 +11236,10 @@ function createSubstitutionDuplicateRowDiagnostics(
 }
 
 function createSourceMakefileDiagnostics(document, snapshot) {
+  if (!isSourceMakefileDocument(document)) {
+    return [];
+  }
+
   const project = findProjectForUri(snapshot.projectModel, document.uri);
   if (!project) {
     return [];
@@ -10897,6 +11283,63 @@ function createSourceMakefileDiagnostics(document, snapshot) {
   }
 
   return diagnostics;
+}
+
+function createMakefileDatabaseReferenceDiagnostics(document, snapshot) {
+  if (!isMakefileDocument(document)) {
+    return [];
+  }
+
+  const diagnostics = [];
+  const references = extractMakefileReferences(document.getText());
+
+  for (const reference of references) {
+    if (reference.kind !== "dbFile") {
+      continue;
+    }
+
+    if (!isConcreteMakefileReferenceToken(reference.name, reference.kind)) {
+      continue;
+    }
+
+    const target = getMakefileDatabaseReferenceTarget(snapshot, document, reference);
+    if (target?.absolutePath) {
+      continue;
+    }
+
+    const message = buildMakefileDatabaseReferenceDiagnosticMessage(
+      snapshot,
+      document,
+      reference,
+    );
+    diagnostics.push(
+      createDiagnostic(
+        document.positionAt(reference.start),
+        document.positionAt(reference.end),
+        message,
+      ),
+    );
+  }
+
+  return diagnostics;
+}
+
+function buildMakefileDatabaseReferenceDiagnosticMessage(snapshot, document, reference) {
+  const expandedPath = resolveMakefileTokenPath(snapshot, document, reference.name);
+  if (expandedPath?.absolutePath) {
+    return `Unknown database/template file "${reference.name}". Expanded path "${expandedPath.absolutePath}" does not exist.`;
+  }
+
+  if ((expandedPath?.unresolvedVariables || []).length > 0) {
+    const unresolvedLabel = expandedPath.unresolvedVariables.join(", ");
+    return `Unknown database/template file "${reference.name}". Could not resolve make variables from the Makefile or configure/RELEASE: ${unresolvedLabel}.`;
+  }
+
+  if (containsMakeVariableReference(reference.name)) {
+    return `Unknown database/template file "${reference.name}". It was not found at the expanded path from local Makefile variables or configure/RELEASE.`;
+  }
+
+  return `Unknown database/template file "${reference.name}". It was not found beside the Makefile, in this project's database outputs, or the workspace.`;
 }
 
 function extractRecords(text) {
@@ -13301,7 +13744,7 @@ function resolveProbeRecordNameFromDatabaseText(documentText, recordName) {
   return resolveDatabaseRecordNameFromToc(
     normalizedRecordName,
     extractDatabaseTocMacroAssignments(documentText),
-  );
+  ) || normalizedRecordName;
 }
 
 function resolveRuntimeRecordNameForDefinition(activeDocument, definition) {
@@ -17483,6 +17926,20 @@ function getMakefileDatabaseReferenceTarget(snapshot, document, reference) {
     return undefined;
   }
 
+  if (containsMakeVariableReference(reference.name)) {
+    const expandedPath = resolveMakefileTokenPath(snapshot, document, reference.name);
+    if (isExistingFile(expandedPath?.absolutePath)) {
+      return { absolutePath: expandedPath.absolutePath };
+    }
+
+    const substitutionsCandidate = toSubstitutionsSiblingPath(expandedPath?.absolutePath);
+    if (isExistingFile(substitutionsCandidate)) {
+      return { absolutePath: substitutionsCandidate };
+    }
+
+    return undefined;
+  }
+
   const localTarget = getLocalMakefileNavigationTarget(document, reference);
   if (localTarget?.absolutePath) {
     return localTarget;
@@ -17651,16 +18108,20 @@ function getMakefileReferenceAtPosition(document, position) {
 }
 
 function isConcreteMakefileReferenceToken(token, kind) {
-  if (!token || containsMakeVariableReference(token) || token === "-nil-") {
+  if (!token || token === "-nil-") {
+    return false;
+  }
+
+  if (kind === "dbFile") {
+    return /\.(db|template|sub|subs|substitutions)$/i.test(token);
+  }
+
+  if (containsMakeVariableReference(token)) {
     return false;
   }
 
   if (kind === "dbd") {
     return token.toLowerCase().endsWith(".dbd");
-  }
-
-  if (kind === "dbFile") {
-    return /\.(db|template|sub|subs|substitutions)$/i.test(token);
   }
 
   if (kind === "sourceFile") {
@@ -17671,7 +18132,17 @@ function isConcreteMakefileReferenceToken(token, kind) {
 }
 
 function getMakefileReferenceKind(variableName, token) {
-  if (containsMakeVariableReference(token) || token === "-nil-") {
+  if (token === "-nil-") {
+    return undefined;
+  }
+
+  if (/^(?:[A-Za-z0-9_.-]+_)?DB$/.test(variableName)) {
+    return /\.(db|template|sub|subs|substitutions)$/i.test(token)
+      ? "dbFile"
+      : undefined;
+  }
+
+  if (containsMakeVariableReference(token)) {
     return undefined;
   }
 
@@ -17681,10 +18152,6 @@ function getMakefileReferenceKind(variableName, token) {
 
   if (/^(?:[A-Za-z0-9_.-]+_)?LIBS$/.test(variableName)) {
     return "lib";
-  }
-
-  if (/^(?:[A-Za-z0-9_.-]+_)?DB$/.test(variableName)) {
-    return "dbFile";
   }
 
   if (
@@ -18698,6 +19165,31 @@ function isExistingFile(filePath) {
 
   try {
     return fs.statSync(filePath).isFile();
+  } catch (error) {
+    return false;
+  }
+}
+
+function isWritableFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return false;
+  }
+
+  try {
+    fs.accessSync(filePath, fs.constants.W_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isExistingDirectory(directoryPath) {
+  if (!directoryPath || !fs.existsSync(directoryPath)) {
+    return false;
+  }
+
+  try {
+    return fs.statSync(directoryPath).isDirectory();
   } catch (error) {
     return false;
   }

@@ -68,6 +68,13 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
   companion object {
     internal fun createDocumentationElement(file: PsiFile, offset: Int): EpicsReferencedFileElement? {
       val virtualFile = file.virtualFile ?: return null
+      val startupTraceReferences = EpicsPathResolver.resolveStartupDbLoadRecordsTraceReferences(file.project, virtualFile, offset)
+      if (startupTraceReferences.size > 1) {
+        return EpicsReferencedFilesElement(file.manager, file, startupTraceReferences)
+      }
+      if (startupTraceReferences.size == 1) {
+        return EpicsReferencedFileElement(file.manager, file, startupTraceReferences.first())
+      }
       if (isSubstitutionsFile(virtualFile)) {
         val resolvedReferences = EpicsPathResolver.resolveSubstitutionsReferences(file.project, virtualFile, offset)
         if (resolvedReferences.size > 1) {
@@ -144,6 +151,12 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
           val referenceKey = buildReferenceKey(hostFile, resolvedReferences)
           return EpicsDocumentationPreview(referenceKey, buildDocumentation(resolvedReferences, hostFile.name))
         }
+      }
+
+      val startupTraceReferences = EpicsPathResolver.resolveStartupDbLoadRecordsTraceReferences(project, hostFile, offset)
+      if (startupTraceReferences.isNotEmpty()) {
+        val referenceKey = buildReferenceKey(hostFile, startupTraceReferences)
+        return EpicsDocumentationPreview(referenceKey, buildDocumentation(startupTraceReferences, hostFile.name))
       }
 
       EpicsPathResolver.resolveReference(project, hostFile, offset)?.let { resolved ->
@@ -490,10 +503,11 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         EpicsPathKind.DBD -> "EPICS database definition file"
         EpicsPathKind.LIBRARY -> "EPICS library file"
       }
+      val readOnlySuffix = startupReadOnlySuffix(hostFileName, reference)
 
       return buildString {
         append("<html><body>")
-        append("<h3>").append(escape(title)).append("</h3>")
+        append("<h3>").append(escape(title + readOnlySuffix)).append("</h3>")
         append(pathParagraph("Path", reference.targetFile.path))
 
         if (hostFileName == "Makefile") {
@@ -544,7 +558,7 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
           val text = readText(reference.targetFile)
           append("<hr/>")
           append("<h4>")
-            .append(escape("${index + 1}. ${reference.targetFile.name}"))
+            .append(escape("${index + 1}. ${reference.targetFile.name}${startupReadOnlySuffix(hostFileName, reference)}"))
             .append("</h4>")
           append(pathParagraph("Path", reference.targetFile.path))
 
@@ -564,6 +578,21 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
 
         append("</body></html>")
       }
+    }
+
+    private fun startupReadOnlySuffix(hostFileName: String, reference: EpicsResolvedReference): String {
+      if (!isStartupHostFileName(hostFileName)) {
+        return ""
+      }
+      if (reference.kind != EpicsPathKind.DATABASE && reference.kind != EpicsPathKind.SUBSTITUTIONS) {
+        return ""
+      }
+      return if (reference.targetFile.isWritable) "" else " (read only)"
+    }
+
+    private fun isStartupHostFileName(hostFileName: String): Boolean {
+      val normalizedName = hostFileName.lowercase()
+      return normalizedName.endsWith(".cmd") || normalizedName.endsWith(".iocsh") || normalizedName == "st.cmd"
     }
 
     private fun buildReferenceKey(
@@ -664,7 +693,7 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
       append(paragraph("Macros", if (macroNames.isEmpty()) "none" else macroNames.joinToString(", ")))
       if (recordDeclarations.isNotEmpty()) {
         val previewNames = recordDeclarations.take(100)
-        appendPreview("Record name preview", previewNames.joinToString("\n"))
+        appendCompactCodeLines(previewNames)
         if (recordDeclarations.size > previewNames.size) {
           append(paragraph("Omitted", "${recordDeclarations.size - previewNames.size} more record names"))
         }
@@ -725,7 +754,7 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         return
       }
       append("<p><b>").append(escape(label)).append(":</b></p>")
-      append("<pre>")
+      append("<pre style=\"margin: 4px 0 0; line-height: 1.15;\">")
       append(escape(content))
       append("</pre>")
     }
@@ -735,7 +764,7 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         return
       }
       append("<p><b>").append(escape(label)).append(":</b></p>")
-      append("<pre>")
+      append("<pre style=\"margin: 4px 0 0; line-height: 1.15;\">")
       append(renderDatabasePreviewHtml(content))
       append("</pre>")
     }
@@ -745,9 +774,23 @@ class EpicsDocumentationProvider : AbstractDocumentationProvider() {
         return
       }
       append("<p><b>").append(escape(label)).append(":</b></p>")
-      append("<pre>")
+      append("<pre style=\"margin: 4px 0 0; line-height: 1.15;\">")
       append(renderProtocolPreviewHtml(content))
       append("</pre>")
+    }
+
+    private fun StringBuilder.appendCompactCodeLines(lines: List<String>) {
+      if (lines.isEmpty()) {
+        return
+      }
+      append("<div style=\"margin: 4px 0 0; line-height: 1.15;\">")
+      lines.forEachIndexed { index, line ->
+        if (index > 0) {
+          append("<br/>")
+        }
+        append("<code>").append(escape(line)).append("</code>")
+      }
+      append("</div>")
     }
 
     private fun previewLines(text: String, lineLimit: Int): String {

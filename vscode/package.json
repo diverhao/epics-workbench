@@ -1,5 +1,5 @@
 {
-    "version": "0.0.7",
+    "version": "0.0.8",
     "repository": {
         "type": "git",
         "url": "https://github.com/diverhao/epics-workbench.git",
@@ -579,7 +579,7 @@
                 ]
             },
             {
-                "id": "database definition",
+                "id": "dbd",
                 "extensions": [
                     ".dbd"
                 ],
@@ -640,7 +640,7 @@
             {
                 "scopeName": "source.epics.dbd",
                 "path": "./syntaxes/dbd.tmLanguage.json",
-                "language": "database definition"
+                "language": "dbd"
             },
             {
                 "scopeName": "source.epics.pvlist",
@@ -725,7 +725,7 @@
                 "editor.wordBasedSuggestions": "off",
                 "editor.semanticHighlighting.enabled": true
             },
-            "[database definition]": {
+            "[dbd]": {
                 "editor.wordBasedSuggestions": "off"
             },
             "[pvlist]": {
@@ -1170,7 +1170,7 @@
         "onLanguage:sequencer",
         "onLanguage:pvlist",
         "onLanguage:probe",
-        "onLanguage:database definition",
+        "onLanguage:dbd",
         "onCustomEditor:epicsWorkbench.spreadsheetXlsxEditor",
         "onCustomEditor:epicsWorkbench.spreadsheetDatabaseEditor",
         "onCustomEditor:epicsWorkbench.probeEditor",

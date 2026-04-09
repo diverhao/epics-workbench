@@ -5066,6 +5066,8 @@ class EpicsRuntimeMonitorController {
       sourceModel,
       macroValues: new Map(sourceModel?.macroValues || []),
       rows: [],
+      recordTypeSignature: "",
+      planRefreshInProgress: false,
     };
     widgetState.rows = buildPvlistWidgetMonitorPlan(
       widgetState.sourceModel,
@@ -5100,6 +5102,11 @@ class EpicsRuntimeMonitorController {
         return;
       }
 
+      if (message.type === "removePvlistWidgetChannel") {
+        await this.removePvlistWidgetChannel(widgetState, message.sourceIndex);
+        return;
+      }
+
       if (message.type === "savePvlistWidget") {
         await this.savePvlistWidget(widgetState);
         return;
@@ -5107,6 +5114,21 @@ class EpicsRuntimeMonitorController {
 
       if (message.type === "updatePvlistWidgetMacro" && message.name) {
         await this.updatePvlistWidgetMacro(widgetState, message.name, message.value);
+        return;
+      }
+
+      if (message.type === "addPvlistWidgetField") {
+        await this.addPvlistWidgetField(widgetState, message.fieldName);
+        return;
+      }
+
+      if (message.type === "removePvlistWidgetField" && message.fieldName) {
+        await this.removePvlistWidgetField(widgetState, message.fieldName);
+        return;
+      }
+
+      if (message.type === "processPvlistWidgetRecord" && message.recordName) {
+        await this.processPvlistWidgetRecord(widgetState, message.recordName, message.protocol);
         return;
       }
 
@@ -5594,37 +5616,81 @@ class EpicsRuntimeMonitorController {
   }
 
   async replacePvlistWidgetChannels(widgetState, text) {
-    const sourceModel = widgetState?.sourceModel;
-    if (!sourceModel) {
-      return;
-    }
-
     const nextRawPvNames = parseAddedPvlistChannelLines(text);
-    const previousRawPvNames = Array.isArray(sourceModel.rawPvNames) ? sourceModel.rawPvNames : [];
-    const nextMacroNames = extractOrderedEpicsMacroNames(nextRawPvNames);
-    const previousMacroNames = Array.isArray(sourceModel.macroNames) ? sourceModel.macroNames : [];
-    const didChannelsChange =
-      previousRawPvNames.length !== nextRawPvNames.length ||
-      previousRawPvNames.some((entry, index) => String(entry || "") !== nextRawPvNames[index]);
-    const didMacrosChange =
-      previousMacroNames.length !== nextMacroNames.length ||
-      previousMacroNames.some((entry, index) => String(entry || "") !== nextMacroNames[index]);
-
-    if (!didChannelsChange && !didMacrosChange) {
+    if (!this.updatePvlistWidgetChannels(widgetState, nextRawPvNames)) {
       await this.postPvlistWidgetState(widgetState);
       return;
     }
 
+    await this.applyPvlistWidgetMonitoring(widgetState);
+  }
+
+  updatePvlistWidgetChannels(widgetState, nextRawPvNames) {
+    const sourceModel = widgetState?.sourceModel;
+    if (!sourceModel) {
+      return false;
+    }
+
+    const normalizedRawPvNames = Array.isArray(nextRawPvNames)
+      ? nextRawPvNames.map((entry) => String(entry || "").trim())
+      : [];
+    const previousRawPvNames = Array.isArray(sourceModel.rawPvNames)
+      ? sourceModel.rawPvNames.map((entry) => String(entry || ""))
+      : [];
+    const nextMacroNames = extractOrderedEpicsMacroNames(normalizedRawPvNames);
+    const previousMacroNames = Array.isArray(sourceModel.macroNames)
+      ? sourceModel.macroNames.map((entry) => String(entry || ""))
+      : [];
+    const didChannelsChange =
+      previousRawPvNames.length !== normalizedRawPvNames.length ||
+      previousRawPvNames.some((entry, index) => entry !== normalizedRawPvNames[index]);
+    const didMacrosChange =
+      previousMacroNames.length !== nextMacroNames.length ||
+      previousMacroNames.some((entry, index) => entry !== nextMacroNames[index]);
+
+    if (!didChannelsChange && !didMacrosChange) {
+      return false;
+    }
+
     const previousMacroValues = widgetState?.macroValues instanceof Map
       ? widgetState.macroValues
-      : new Map();
-    sourceModel.rawPvNames = [...nextRawPvNames];
+      : sourceModel?.macroValues instanceof Map
+        ? sourceModel.macroValues
+        : new Map();
+    sourceModel.rawPvNames = [...normalizedRawPvNames];
     sourceModel.macroNames = [...nextMacroNames];
     const nextMacroValues = new Map(
       nextMacroNames.map((macroName) => [macroName, previousMacroValues.get(macroName) || ""]),
     );
     sourceModel.macroValues = nextMacroValues;
     widgetState.macroValues = nextMacroValues;
+    return true;
+  }
+
+  async removePvlistWidgetChannel(widgetState, sourceIndex) {
+    const sourceModel = widgetState?.sourceModel;
+    if (!sourceModel) {
+      return;
+    }
+
+    const normalizedIndex = Number.parseInt(String(sourceIndex), 10);
+    const currentRawPvNames = Array.isArray(sourceModel.rawPvNames)
+      ? sourceModel.rawPvNames.map((entry) => String(entry || ""))
+      : [];
+    if (
+      !Number.isInteger(normalizedIndex) ||
+      normalizedIndex < 0 ||
+      normalizedIndex >= currentRawPvNames.length
+    ) {
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    currentRawPvNames.splice(normalizedIndex, 1);
+    if (!this.updatePvlistWidgetChannels(widgetState, currentRawPvNames)) {
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
 
     await this.applyPvlistWidgetMonitoring(widgetState);
   }
@@ -5644,15 +5710,76 @@ class EpicsRuntimeMonitorController {
     await this.applyPvlistWidgetMonitoring(widgetState);
   }
 
+  async addPvlistWidgetField(widgetState, fieldName) {
+    const sourceModel = widgetState?.sourceModel;
+    if (!sourceModel) {
+      return;
+    }
+
+    const normalizedFieldName = normalizePvlistWidgetFieldName(fieldName);
+    if (!normalizedFieldName) {
+      vscode.window.showWarningMessage(
+        "Field names must match [A-Za-z_][A-Za-z0-9_]*.",
+      );
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    if (normalizedFieldName === "RTYP") {
+      vscode.window.showInformationMessage(
+        "Type is already shown in the fixed RTYP column.",
+      );
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    const currentFieldNames = getPvlistWidgetFieldNames(sourceModel);
+    if (currentFieldNames.includes(normalizedFieldName)) {
+      vscode.window.showInformationMessage(
+        `Field ${normalizedFieldName} is already shown.`,
+      );
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    sourceModel.fieldNames = [...currentFieldNames, normalizedFieldName];
+    await this.applyPvlistWidgetMonitoring(widgetState);
+  }
+
+  async removePvlistWidgetField(widgetState, fieldName) {
+    const sourceModel = widgetState?.sourceModel;
+    if (!sourceModel) {
+      return;
+    }
+
+    const normalizedFieldName = normalizePvlistWidgetFieldName(fieldName);
+    const currentFieldNames = getPvlistWidgetFieldNames(sourceModel);
+    if (!normalizedFieldName || !currentFieldNames.includes(normalizedFieldName)) {
+      await this.postPvlistWidgetState(widgetState);
+      return;
+    }
+
+    sourceModel.fieldNames = currentFieldNames.filter(
+      (candidate) => candidate !== normalizedFieldName,
+    );
+    await this.applyPvlistWidgetMonitoring(widgetState);
+  }
+
   async applyPvlistWidgetMonitoring(widgetState) {
     if (!widgetState?.sourceUri) {
       return;
     }
 
+    const resolvedRecordTypes = this.getPvlistWidgetResolvedRecordTypes(widgetState);
+    widgetState.recordTypeSignature = buildPvlistWidgetRecordTypeSignature(resolvedRecordTypes);
     const plan = buildPvlistWidgetMonitorPlan(
       widgetState.sourceModel,
       widgetState.macroValues,
       this.getDefaultProtocol(),
+      {
+        recordTypes: resolvedRecordTypes,
+        getFieldNamesForRecordType: this.getFieldNamesForRecordType,
+      },
     );
     widgetState.rows = plan.rows;
 
@@ -5670,6 +5797,63 @@ class EpicsRuntimeMonitorController {
     }
 
     await this.postPvlistWidgetState(widgetState);
+  }
+
+  getPvlistWidgetResolvedRecordTypes(widgetState) {
+    const resolvedRecordTypes = new Map();
+    const sourceUri = widgetState?.sourceUri;
+    if (!sourceUri) {
+      return resolvedRecordTypes;
+    }
+
+    for (const entry of this.monitorEntries) {
+      if (
+        entry?.sourceUri !== sourceUri ||
+        entry?.sourceKind !== "pvlistWidget" ||
+        !String(entry?.pvName || "").toUpperCase().endsWith(".RTYP")
+      ) {
+        continue;
+      }
+
+      const recordName = getPvlistWidgetRecordName(entry.pvName);
+      const recordType = String((getMonitorHoverValue(entry) ?? entry.valueText) || "").trim();
+      if (!recordName || !recordType) {
+        continue;
+      }
+      resolvedRecordTypes.set(recordName, recordType);
+    }
+
+    return resolvedRecordTypes;
+  }
+
+  async ensurePvlistWidgetMonitoringMatchesRuntimeState(widgetState) {
+    if (!widgetState?.sourceUri) {
+      return;
+    }
+
+    const nextSignature = buildPvlistWidgetRecordTypeSignature(
+      this.getPvlistWidgetResolvedRecordTypes(widgetState),
+    );
+    if (widgetState.recordTypeSignature === nextSignature) {
+      return;
+    }
+
+    if (widgetState.planRefreshInProgress) {
+      return;
+    }
+
+    widgetState.planRefreshInProgress = true;
+    try {
+      await this.applyPvlistWidgetMonitoring(widgetState);
+    } finally {
+      widgetState.planRefreshInProgress = false;
+      const latestSignature = buildPvlistWidgetRecordTypeSignature(
+        this.getPvlistWidgetResolvedRecordTypes(widgetState),
+      );
+      if (widgetState.recordTypeSignature !== latestSignature) {
+        void this.ensurePvlistWidgetMonitoringMatchesRuntimeState(widgetState);
+      }
+    }
   }
 
   async syncPvlistWidgetMonitorEntries(widgetState, plan) {
@@ -6975,6 +7159,7 @@ class EpicsRuntimeMonitorController {
 
   refreshPvlistWidgets() {
     for (const widgetState of this.pvlistWidgets.values()) {
+      void this.ensurePvlistWidgetMonitoringMatchesRuntimeState(widgetState);
       void this.postPvlistWidgetState(widgetState);
     }
   }
@@ -7140,21 +7325,62 @@ class EpicsRuntimeMonitorController {
     const entries = this.monitorEntries.filter(
       (entry) => entry.sourceUri === sourceUri && entry.sourceKind === "pvlistWidget",
     );
-    const entryByPvName = new Map(entries.map((entry) => [entry.pvName, entry]));
+    const entryByLookupKey = new Map(
+      entries.map((entry) => [buildPvlistWidgetEntryLookupKey(entry.protocol, entry.pvName, entry.pvRequest), entry]),
+    );
     const macros = (widgetState?.sourceModel?.macroNames || []).map((macroName) => ({
       name: macroName,
       value: widgetState?.macroValues?.get(macroName) || "",
     }));
+    const fieldColumns = getPvlistWidgetFieldNames(widgetState?.sourceModel).map((fieldName) => ({
+      name: fieldName,
+    }));
     const rows = (widgetState?.rows || []).map((row) => {
-      const entry = row?.pvName ? entryByPvName.get(row.pvName) : undefined;
-      const probeTargetRecordName = String(row?.channelName || "").trim();
+      const mainEntry = row?.pvName
+        ? entryByLookupKey.get(buildPvlistWidgetEntryLookupKey(row.protocol, row.pvName))
+        : undefined;
+      const recordTypeEntry = row?.recordTypePvName
+        ? entryByLookupKey.get(buildPvlistWidgetEntryLookupKey(row.protocol, row.recordTypePvName))
+        : undefined;
+      const unresolvedValueText = row?.pvName ? "" : row?.valueText || "";
+      const probeTargetRecordName = String(row?.recordName || row?.channelName || "").trim();
+      const fieldCells = fieldColumns.map((column) => {
+        const fieldEntry = row?.fieldCells?.find((candidate) => candidate.name === column.name);
+        const entry = fieldEntry?.pvName
+          ? entryByLookupKey.get(buildPvlistWidgetEntryLookupKey(row.protocol, fieldEntry.pvName))
+          : undefined;
+        return {
+          name: column.name,
+          key: undefined,
+          canPut: false,
+          value:
+            fieldEntry?.valueText ||
+            getPvlistWidgetEntryDisplayValue(entry, {
+              showConnectingText: false,
+            }),
+        };
+      });
       return {
         id: row.id,
+        sourceIndex: Number.isInteger(row?.sourceIndex) ? row.sourceIndex : 0,
         channelName: row.channelName,
-        key: entry?.key,
-        canPut: this.canPutRuntimeValue(entry),
-        value: row.valueText || getProbeEntryDisplayValue(entry),
+        protocol: row.protocol,
+        recordName: row.recordName,
+        key: mainEntry?.key,
+        canPut: Boolean(mainEntry && this.canPutRuntimeValue(mainEntry)),
+        value:
+          row.valueText ||
+          getPvlistWidgetEntryDisplayValue(mainEntry, {
+            showConnectingText: true,
+          }),
+        recordType:
+          row.recordType ||
+          getPvlistWidgetEntryDisplayValue(recordTypeEntry, {
+            showConnectingText: false,
+          }),
+        canProcess: Boolean(row.recordName),
         probeTargetRecordName,
+        fieldCells,
       };
     });
 
@@ -7175,6 +7401,7 @@ class EpicsRuntimeMonitorController {
         ? widgetState.sourceModel.rawPvNames
         : [],
       macros,
+      fieldColumns,
       rows,
       message,
     };
@@ -7313,30 +7540,49 @@ class EpicsRuntimeMonitorController {
       return;
     }
 
+    await this.processRuntimeRecord(recordName, this.getDefaultProtocol(), `process ${recordName}`);
+  }
+
+  async processPvlistWidgetRecord(widgetState, recordName, protocol) {
+    const normalizedRecordName = String(recordName || "").trim();
+    if (!normalizedRecordName) {
+      return;
+    }
+
+    await this.processRuntimeRecord(
+      normalizedRecordName,
+      protocol || this.getDefaultProtocol(),
+      `process ${normalizedRecordName}`,
+    );
+  }
+
+  async processRuntimeRecord(recordName, protocol, operationLabel) {
     let channel;
     try {
       const runtimeContext = await this.ensureRuntimeContext();
       const runtimeLibrary = this.requireRuntimeLibrary();
-      const protocol = this.getDefaultProtocol();
+      const normalizedProtocol = normalizeRuntimeProtocol(protocol || this.getDefaultProtocol());
       channel = await runtimeContext.createChannel(
         `${recordName}.PROC`,
-        protocol,
+        normalizedProtocol,
         this.getChannelCreationTimeoutSeconds(),
       );
       if (!channel) {
-        throw new Error(`Failed to create ${protocol.toUpperCase()} channel for ${recordName}.PROC.`);
+        throw new Error(
+          `Failed to create ${normalizedProtocol.toUpperCase()} channel for ${recordName}.PROC.`,
+        );
       }
-      const result = protocol === "pva"
+      const result = normalizedProtocol === "pva"
         ? await channel.putPva("value", [1])
         : await channel.put(1, undefined, true);
-      if (!isSuccessfulRuntimePutResult(result, runtimeLibrary, protocol)) {
+      if (!isSuccessfulRuntimePutResult(result, runtimeLibrary, normalizedProtocol)) {
         throw new Error(
-          getRuntimePutFailureMessage(result, runtimeLibrary, protocol),
+          getRuntimePutFailureMessage(result, runtimeLibrary, normalizedProtocol),
         );
       }
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to process ${recordName}: ${getErrorMessage(error)}`,
+        `Failed to ${operationLabel || `process ${recordName}`}: ${getErrorMessage(error)}`,
       );
     } finally {
       try {
@@ -12595,6 +12841,7 @@ function buildPvlistWidgetSourceModel(
     rawPvNames,
     macroNames,
     macroValues,
+    fieldNames: [],
     diagnostics: [],
   };
 }
@@ -12711,8 +12958,65 @@ function parsePvlistWidgetSourceText(text, sourceLabel) {
     rawPvNames,
     macroNames,
     macroValues,
+    fieldNames: [],
     diagnostics,
   };
+}
+
+function normalizePvlistWidgetFieldName(fieldName) {
+  const normalized = String(fieldName || "")
+    .trim()
+    .replace(/^\.+/, "")
+    .toUpperCase();
+  return /^[A-Z_][A-Z0-9_]*$/.test(normalized) ? normalized : "";
+}
+
+function getPvlistWidgetFieldNames(sourceModel) {
+  const names = [];
+  const seen = new Set();
+  for (const fieldName of Array.isArray(sourceModel?.fieldNames) ? sourceModel.fieldNames : []) {
+    const normalizedFieldName = normalizePvlistWidgetFieldName(fieldName);
+    if (!normalizedFieldName || seen.has(normalizedFieldName)) {
+      continue;
+    }
+    seen.add(normalizedFieldName);
+    names.push(normalizedFieldName);
+  }
+  return names;
+}
+
+function buildPvlistWidgetRecordTypeSignature(recordTypes) {
+  if (!(recordTypes instanceof Map) || recordTypes.size === 0) {
+    return "";
+  }
+
+  return [...recordTypes.entries()]
+    .map(([recordName, recordType]) => `${String(recordName || "").trim()}=${String(recordType || "").trim()}`)
+    .sort((left, right) => left.localeCompare(right))
+    .join("\n");
+}
+
+function buildPvlistWidgetEntryLookupKey(protocol, pvName, pvRequest = "") {
+  return `${normalizeRuntimeProtocol(protocol)}:${String(pvName || "").trim()}:${pvRequest || ""}`;
+}
+
+function getPvlistWidgetRecordName(pvName) {
+  const normalizedPvName = String(pvName || "").trim();
+  if (!normalizedPvName) {
+    return "";
+  }
+
+  const lastDotIndex = normalizedPvName.lastIndexOf(".");
+  if (lastDotIndex <= 0) {
+    return normalizedPvName;
+  }
+
+  const suffix = normalizedPvName.slice(lastDotIndex + 1);
+  if (!/^[A-Z0-9_]+$/.test(suffix)) {
+    return normalizedPvName;
+  }
+
+  return normalizedPvName.slice(0, lastDotIndex);
 }
 
 function parseAddedPvlistChannelLines(text) {
@@ -12749,11 +13053,19 @@ function extractOrderedEpicsMacroNames(texts) {
   return names;
 }
 
-function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol) {
+function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol, options = {}) {
   const rows = [];
   const definitions = [];
   const seen = new Set();
-  const protocol = normalizeRuntimeProtocol(defaultProtocol);
+  const defaultChannelProtocol = normalizeRuntimeProtocol(defaultProtocol);
+  const fieldNames = getPvlistWidgetFieldNames(sourceModel);
+  const resolvedRecordTypes = options?.recordTypes instanceof Map
+    ? options.recordTypes
+    : new Map();
+  const getFieldNamesForRecordType =
+    typeof options?.getFieldNamesForRecordType === "function"
+      ? options.getFieldNamesForRecordType
+      : undefined;
 
   if (!sourceModel) {
     return { rows, definitions };
@@ -12781,9 +13093,26 @@ function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol)
   );
   const databaseMacroDefinitions = createDatabaseMonitorMacroDefinitions(databaseAssignments);
   const databaseMacroCache = new Map();
+  const addDefinition = (protocol, pvName) => {
+    const normalizedPvName = String(pvName || "").trim();
+    if (!normalizedPvName) {
+      return;
+    }
+    const normalizedProtocol = normalizeRuntimeProtocol(protocol || defaultChannelProtocol);
+    const key = `${normalizedProtocol}:${normalizedPvName}:`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    definitions.push({
+      pvName: normalizedPvName,
+      protocol: normalizedProtocol,
+      pvRequest: "",
+    });
+  };
 
   (sourceModel.rawPvNames || []).forEach((rawPvName, index) => {
-    let pvName = "";
+    let resolvedChannelName = "";
     let valueText = "";
     let unresolved = false;
     if (sourceKind === "pvlist") {
@@ -12797,14 +13126,18 @@ function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol)
         unresolved = true;
         valueText = `(${expansion.errors[0]})`;
       } else {
-        pvName = String(expansion.value || "").trim();
-        if (!pvName || /\s/.test(pvName) || hasUnresolvedEpicsMacroText(pvName)) {
+        resolvedChannelName = String(expansion.value || "").trim();
+        if (
+          !resolvedChannelName ||
+          /\s/.test(resolvedChannelName) ||
+          hasUnresolvedEpicsMacroText(resolvedChannelName)
+        ) {
           unresolved = true;
           valueText = "(set macros)";
         }
       }
     } else {
-      pvName = normalizeDatabaseMonitorPvName(
+      resolvedChannelName = normalizeDatabaseMonitorPvName(
         expandDatabaseMonitorValue(
           rawPvName,
           databaseMacroDefinitions,
@@ -12813,17 +13146,63 @@ function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol)
         ),
         rawPvName,
       );
-      if (!pvName || /\s/.test(pvName) || hasUnresolvedEpicsMacroText(pvName)) {
+      if (
+        !resolvedChannelName ||
+        /\s/.test(resolvedChannelName) ||
+        hasUnresolvedEpicsMacroText(resolvedChannelName)
+      ) {
         unresolved = true;
         valueText = "(set macros)";
       }
     }
 
+    const resolvedChannelReference = unresolved
+      ? undefined
+      : parseMonitorWidgetChannelReference(
+        resolvedChannelName,
+        defaultChannelProtocol,
+      );
+    const pvName = String(resolvedChannelReference?.pvName || "").trim();
+    const protocol = normalizeRuntimeProtocol(
+      resolvedChannelReference?.protocol || defaultChannelProtocol,
+    );
+    const recordName = pvName ? getPvlistWidgetRecordName(pvName) : "";
+    const resolvedRecordType = recordName
+      ? String(resolvedRecordTypes.get(recordName) || "").trim()
+      : "";
+    const availableFieldNames = resolvedRecordType
+      ? new Set(
+        (getFieldNamesForRecordType?.(resolvedRecordType) || [])
+          .map((fieldName) => normalizePvlistWidgetFieldName(fieldName))
+          .filter(Boolean),
+      )
+      : undefined;
+    const recordTypePvName = recordName ? `${recordName}.RTYP` : undefined;
+    const fieldCells = fieldNames.map((fieldName) => ({
+      name: fieldName,
+      pvName:
+        recordName &&
+        resolvedRecordType &&
+        (!availableFieldNames || availableFieldNames.has(fieldName))
+          ? `${recordName}.${fieldName}`
+          : undefined,
+      valueText:
+        recordName && resolvedRecordType && availableFieldNames && !availableFieldNames.has(fieldName)
+          ? "N/A"
+          : "",
+    }));
+
     rows.push({
       id: `pvlist-row:${index}`,
+      sourceIndex: index,
       rawPvName,
       channelName: unresolved ? rawPvName : pvName,
+      protocol: unresolved ? undefined : protocol,
       pvName: unresolved ? undefined : pvName,
+      recordName: unresolved ? undefined : recordName,
+      recordType: unresolved ? undefined : resolvedRecordType,
+      recordTypePvName: unresolved ? undefined : recordTypePvName,
+      fieldCells,
       valueText,
     });
 
@@ -12831,16 +13210,11 @@ function buildPvlistWidgetMonitorPlan(sourceModel, macroValues, defaultProtocol)
       return;
     }
 
-    const key = `${protocol}:${pvName}:`;
-    if (seen.has(key)) {
-      return;
+    addDefinition(protocol, pvName);
+    addDefinition(protocol, recordTypePvName);
+    for (const fieldCell of fieldCells) {
+      addDefinition(protocol, fieldCell.pvName);
     }
-    seen.add(key);
-    definitions.push({
-      pvName,
-      protocol,
-      pvRequest: "",
-    });
   });
 
   return { rows, definitions };
@@ -13248,7 +13622,7 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         color: var(--vscode-descriptionForeground);
         font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
       }
-      .macro-input, .inline-put-input {
+      .macro-input, .inline-put-input, .field-input {
         padding: 6px 10px;
         border: 1px solid var(--vscode-input-border, transparent);
         background: var(--vscode-input-background);
@@ -13264,8 +13638,15 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         gap: 6px;
         margin-bottom: 6px;
       }
+      .channel-controls-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 12px;
+        width: 100%;
+      }
       .channel-filter {
-        width: min(420px, 100%);
+        width: min(320px, 100%);
         padding: 4px 8px;
         border: 1px solid var(--vscode-input-border, transparent);
         background: var(--vscode-input-background);
@@ -13274,12 +13655,16 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         font: inherit;
         box-sizing: border-box;
       }
+      .field-input {
+        width: min(240px, 100%);
+      }
       .inline-put-input {
         width: 100%;
         margin: 0;
         min-height: calc(1em + 1px);
         padding: 0 4px;
         line-height: 1.25;
+        text-align: center;
       }
       table {
         width: 100%;
@@ -13287,19 +13672,165 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         table-layout: fixed;
       }
       th, td {
-        text-align: left;
-        padding: 4px 8px;
+        text-align: center;
+        padding: 1px 8px;
         border-bottom: 1px solid var(--vscode-panel-border);
-        vertical-align: top;
-        line-height: 1.25;
+        vertical-align: middle;
+        line-height: 1.05;
       }
       th {
         color: var(--vscode-descriptionForeground);
         font-weight: 600;
       }
+      th code {
+        font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
       td:first-child, th:first-child {
         width: 32ch;
         font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      }
+      th.process-column, td.process-column {
+        width: 92px;
+      }
+      .channel-column-header .header-label {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr) 44px;
+        align-items: center;
+        gap: 8px;
+      }
+      .header-icon-spacer {
+        width: 44px;
+        height: 20px;
+      }
+      .header-add-button,
+      .channel-row-button {
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--vscode-descriptionForeground);
+        cursor: pointer;
+        position: relative;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease, color 120ms ease;
+      }
+      .channel-column-header:hover .header-add-button,
+      .channel-column-header.header-hover .header-add-button,
+      .channel-column-header:focus-within .header-add-button,
+      .channel-cell-shell:hover .channel-row-button,
+      .channel-cell-shell.row-hover .channel-row-button,
+      .channel-cell-shell:focus-within .channel-row-button {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .header-add-button:hover,
+      .channel-row-button:hover {
+        background: transparent;
+        color: var(--vscode-foreground);
+      }
+      .header-add-button:focus-visible,
+      .channel-row-button:focus-visible {
+        opacity: 1;
+        pointer-events: auto;
+        outline: 1px solid var(--vscode-focusBorder);
+        outline-offset: 1px;
+      }
+      .header-add-button::before,
+      .header-add-button::after,
+      .channel-row-button::before,
+      .channel-row-button::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        border-radius: 999px;
+        background: currentColor;
+      }
+      .header-add-button::before,
+      .channel-row-button.add-row-button::before {
+        width: 10px;
+        height: 1.5px;
+      }
+      .header-add-button::after,
+      .channel-row-button.add-row-button::after {
+        width: 1.5px;
+        height: 10px;
+      }
+      .channel-row-button.remove-row-button::before,
+      .channel-row-button.remove-row-button::after {
+        width: 10px;
+        height: 1.5px;
+      }
+      .channel-row-button.remove-row-button::before {
+        transform: translate(-50%, -50%) rotate(45deg);
+      }
+      .channel-row-button.remove-row-button::after {
+        transform: translate(-50%, -50%) rotate(-45deg);
+      }
+      .field-column-header .header-label {
+        display: grid;
+        grid-template-columns: 16px minmax(0, 1fr) 16px;
+        align-items: center;
+        gap: 8px;
+      }
+      .header-label-spacer {
+        width: 16px;
+        height: 16px;
+      }
+      .header-label-text {
+        justify-self: center;
+        text-align: center;
+      }
+      .header-remove-button {
+        width: 16px;
+        height: 16px;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--vscode-descriptionForeground);
+        cursor: pointer;
+        position: relative;
+        justify-self: end;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease, color 120ms ease;
+      }
+      .header-remove-button::before,
+      .header-remove-button::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 10px;
+        height: 1.5px;
+        border-radius: 999px;
+        background: currentColor;
+      }
+      .header-remove-button::before {
+        transform: translate(-50%, -50%) rotate(45deg);
+      }
+      .header-remove-button::after {
+        transform: translate(-50%, -50%) rotate(-45deg);
+      }
+      .field-column-header:hover .header-remove-button,
+      .field-column-header.field-hover .header-remove-button,
+      .field-column-header:focus-within .header-remove-button {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .header-remove-button:hover {
+        color: var(--vscode-foreground);
+      }
+      .header-remove-button:focus-visible {
+        opacity: 1;
+        pointer-events: auto;
+        outline: 1px solid var(--vscode-focusBorder);
+        outline-offset: 2px;
+        border-radius: 4px;
       }
       .channel-link {
         padding: 0;
@@ -13309,10 +13840,32 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         cursor: pointer;
         font: inherit;
         line-height: 1.25;
-        text-align: left;
+        text-align: center;
+        width: 100%;
       }
       .channel-link:hover {
         text-decoration: underline;
+      }
+      .channel-cell-shell {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr) 44px;
+        align-items: center;
+        gap: 8px;
+      }
+      .channel-cell-spacer {
+        width: 44px;
+        height: 20px;
+      }
+      .channel-cell-main {
+        min-width: 0;
+      }
+      .channel-cell-main > * {
+        width: 100%;
+      }
+      .channel-row-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 4px;
       }
       .value-cell {
         cursor: pointer;
@@ -13322,8 +13875,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       .value-cell.readonly { cursor: default; }
       .value-cell.readonly:hover { text-decoration: none; }
       .value-display {
-        min-height: 1.25em;
-        line-height: 1.25;
+        min-height: 1.05em;
+        line-height: 1.05;
         white-space: pre-wrap;
       }
       .value-display.hidden {
@@ -13331,12 +13884,20 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       }
       .value-edit-shell {
         position: absolute;
-        inset: 4px 8px;
+        inset: 1px 8px;
         display: flex;
         align-items: center;
+        justify-content: center;
         pointer-events: none;
       }
       .value-edit-shell .inline-put-input { pointer-events: auto; }
+      .process-button {
+        padding: 2px 8px;
+      }
+      .empty-row {
+        padding: 12px 8px;
+        color: var(--vscode-descriptionForeground);
+      }
       .empty { color: var(--vscode-descriptionForeground); }
     </style>
   </head>
@@ -13364,10 +13925,14 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
       let pendingClick = undefined;
       let editingState = undefined;
       let draftState = undefined;
+      let fieldInputState = undefined;
       let currentRowFilter = "";
       let isRendering = false;
       let suppressFocusSync = false;
       let overlayMode = false;
+      let hoveredChannelHeader = false;
+      let hoveredFieldHeaderName = "";
+      let hoveredChannelRowSourceIndex = undefined;
 
       function captureActiveEditingState() {
         const activeElement = document.activeElement;
@@ -13460,6 +14025,49 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         draftInput.setSelectionRange(selectionStart, selectionEnd);
         draftInput.scrollTop = scrollTop;
         draftInput.scrollLeft = scrollLeft;
+      }
+
+      function captureActiveFieldInputState() {
+        const activeElement = document.activeElement;
+        if (!activeElement || !(activeElement instanceof HTMLInputElement)) {
+          return;
+        }
+        if (!activeElement.classList.contains("field-input")) {
+          return;
+        }
+        fieldInputState = {
+          value: activeElement.value,
+          selectionStart: activeElement.selectionStart,
+          selectionEnd: activeElement.selectionEnd,
+        };
+      }
+
+      function updateActiveFieldInputSelection(input) {
+        fieldInputState = {
+          value: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        };
+      }
+
+      function focusActiveFieldInput() {
+        const fieldInput = content.querySelector(".field-input");
+        if (!fieldInput || !fieldInputState) {
+          return;
+        }
+        const fallbackCaret = String(fieldInputState.value || "").length;
+        const selectionStart =
+          typeof fieldInputState.selectionStart === "number"
+            ? fieldInputState.selectionStart
+            : fallbackCaret;
+        const selectionEnd =
+          typeof fieldInputState.selectionEnd === "number"
+            ? fieldInputState.selectionEnd
+            : fallbackCaret;
+        suppressFocusSync = true;
+        fieldInput.focus();
+        suppressFocusSync = false;
+        fieldInput.setSelectionRange(selectionStart, selectionEnd);
       }
 
       addChannelsButton.addEventListener("click", () => {
@@ -13577,9 +14185,58 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
         });
       }
 
+      function findRowCellByKey(rows, key) {
+        for (const row of Array.isArray(rows) ? rows : []) {
+          if (row?.key === key) {
+            return row;
+          }
+          for (const fieldCell of Array.isArray(row?.fieldCells) ? row.fieldCells : []) {
+            if (fieldCell?.key === key) {
+              return fieldCell;
+            }
+          }
+        }
+        return undefined;
+      }
+
+      function buildChannelInsertDraft(rawPvNames, insertIndex) {
+        const entries = Array.isArray(rawPvNames)
+          ? rawPvNames.map((entry) => String(entry ?? ""))
+          : [];
+        const safeInsertIndex = Math.max(
+          0,
+          Math.min(Number(insertIndex) || 0, entries.length),
+        );
+        const nextEntries = entries.slice();
+        nextEntries.splice(safeInsertIndex, 0, "");
+        let selectionOffset = 0;
+        for (let index = 0; index < safeInsertIndex; index += 1) {
+          selectionOffset += entries[index].length + 1;
+        }
+        return {
+          value: nextEntries.join("\\n"),
+          selectionStart: selectionOffset,
+          selectionEnd: selectionOffset,
+          scrollTop: 0,
+          scrollLeft: 0,
+        };
+      }
+
+      function showChannelDraftOverlay(insertIndex) {
+        draftState = {
+          type: "channels",
+          ...buildChannelInsertDraft(currentState?.rawPvNames, insertIndex),
+        };
+        overlayMode = true;
+        editingState = undefined;
+        pendingClick = undefined;
+        render(currentState);
+      }
+
       function render(payload, options = {}) {
         captureActiveEditingState();
         captureActiveDraftState();
+        captureActiveFieldInputState();
         currentState = payload || {};
         const previousRowFilterInput = document.getElementById("rowFilterInput");
         const shouldRefocusRowFilter =
@@ -13599,7 +14256,9 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             ? draftState.value
             : (Array.isArray(payload?.rawPvNames) ? payload.rawPvNames.join("\\n") : "");
         const macros = Array.isArray(payload?.macros) ? payload.macros : [];
+        const fieldColumns = Array.isArray(payload?.fieldColumns) ? payload.fieldColumns : [];
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const fieldDraftValue = fieldInputState?.value || "";
         const filteredRows = getFilteredRows(rows);
         const hasRowFilter = normalizeRowFilterTerms(currentRowFilter).length > 0;
         const macrosHtml = macros.length
@@ -13613,37 +14272,93 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
                 '" type="text" spellcheck="false" value="' + escapeHtml(currentValue) + '" />';
             }).join("") + '</div>'
           : '<div class="empty">No macros are used by this source.</div>';
-        const rowsHtml = filteredRows.length
-          ? '<table><thead><tr><th>Channel</th><th>Value</th></tr></thead><tbody>' +
-            filteredRows.map((row) => {
-              const isEditingValue =
-                editingState?.type === "value" && editingState.key === row.key;
-              const channelNameHtml = row.probeTargetRecordName
-                ? '<button type="button" class="channel-link" data-probe-record-name="' +
-                  escapeHtml(row.probeTargetRecordName) + '">' +
-                  escapeHtml(row.channelName || "") + '</button>'
-                : escapeHtml(row.channelName || "");
-              const valueHtml =
-                '<div class="value-display ' + (isEditingValue ? 'hidden' : '') + '">' +
-                  escapeHtml(row.value || "") +
-                '</div>' +
-                (isEditingValue
-                  ? '<div class="value-edit-shell"><input class="inline-put-input" data-put-key="' +
-                    escapeHtml(row.key || "") +
-                    '" type="text" spellcheck="false" value="' + escapeHtml(editingState.value || "") + '" /></div>'
-                  : '');
-              const canPut = Boolean(row.canPut && row.key);
-              return '<tr>' +
-                '<td>' + channelNameHtml + '</td>' +
-                '<td class="value-cell ' + (canPut ? "" : "readonly") + '" data-put-key="' +
-                escapeHtml(row.key || "") + '">' + valueHtml + '</td>' +
-                '</tr>';
-            }).join("") + '</tbody></table>'
-          : '<div class="empty">' + escapeHtml(
-              hasRowFilter && rows.length
-                ? 'No records match filter.'
-                : 'No channel rows are available.',
-            ) + '</div>';
+        const renderValueCellHtml = (cellState) => {
+          const key = cellState?.key || "";
+          const canPut = Boolean(cellState?.canPut && key);
+          const isEditingValue =
+            editingState?.type === "value" && editingState.key === key;
+          const valueHtml =
+            '<div class="value-display ' + (isEditingValue ? 'hidden' : '') + '">' +
+              escapeHtml(cellState?.value || "") +
+            '</div>' +
+            (isEditingValue
+              ? '<div class="value-edit-shell"><input class="inline-put-input" data-put-key="' +
+                escapeHtml(key) +
+                '" type="text" spellcheck="false" value="' + escapeHtml(editingState.value || "") + '" /></div>'
+              : '');
+          return '<td class="value-cell ' + (canPut ? "" : "readonly") + '" data-put-key="' +
+            escapeHtml(key) + '">' + valueHtml + '</td>';
+        };
+        const fieldHeadersHtml = fieldColumns.map((column) =>
+          '<th class="field-column-header' +
+          (hoveredFieldHeaderName === String(column.name || "") ? ' field-hover' : '') +
+          '" data-hover-field-name="' + escapeHtml(column.name || "") + '"><div class="header-label">' +
+          '<span class="header-label-spacer" aria-hidden="true"></span>' +
+          '<code class="header-label-text">' + escapeHtml(column.name || "") + '</code>' +
+          '<button type="button" class="header-remove-button" data-field-name="' +
+          escapeHtml(column.name || "") + '" title="Remove field ' +
+          escapeHtml(column.name || "") + '" aria-label="Remove field ' +
+          escapeHtml(column.name || "") + '"></button></div></th>'
+        ).join("");
+        const channelHeaderHtml =
+          '<th class="channel-column-header' +
+          (hoveredChannelHeader ? ' header-hover' : '') +
+          '" data-hover-role="channel-header"><div class="header-label">' +
+          '<span class="header-icon-spacer" aria-hidden="true"></span>' +
+          '<span class="header-label-text">Channel</span>' +
+          '<button type="button" class="header-add-button" data-insert-row-index="0" title="Add channel to first row" aria-label="Add channel to first row"></button>' +
+          '</div></th>';
+        const emptyRowHtml =
+          '<tr><td class="empty-row" colspan="' + escapeHtml(String(4 + fieldColumns.length)) + '">' +
+          escapeHtml(
+            hasRowFilter && rows.length
+              ? 'No records match filter.'
+              : 'No channel rows are available.',
+          ) +
+          '</td></tr>';
+        const rowsHtml =
+          '<table><thead><tr>' + channelHeaderHtml +
+          '<th>Type</th><th>Value</th><th class="process-column">Process</th>' +
+          fieldHeadersHtml + '</tr></thead><tbody>' +
+          (filteredRows.length
+            ? filteredRows.map((row) => {
+                const channelNameHtml = row.probeTargetRecordName
+                  ? '<button type="button" class="channel-link" data-probe-record-name="' +
+                    escapeHtml(row.probeTargetRecordName) + '">' +
+                    escapeHtml(row.channelName || "") + '</button>'
+                  : '<span>' + escapeHtml(row.channelName || "") + '</span>';
+                const processButtonHtml = row.canProcess
+                  ? '<button type="button" class="action-button process-button" data-process-record-name="' +
+                    escapeHtml(row.recordName || "") + '" data-process-protocol="' +
+                    escapeHtml(row.protocol || "") + '">Process</button>'
+                  : '<button type="button" class="action-button process-button" disabled>Process</button>';
+                const fieldCellsHtml = (Array.isArray(row.fieldCells) ? row.fieldCells : [])
+                  .map((fieldCell) => renderValueCellHtml(fieldCell))
+                  .join("");
+                const sourceIndex = Number.isInteger(row?.sourceIndex) ? row.sourceIndex : 0;
+                return '<tr>' +
+                  '<td><div class="channel-cell-shell' +
+                    (hoveredChannelRowSourceIndex === sourceIndex ? ' row-hover' : '') +
+                    '" data-hover-source-index="' + escapeHtml(String(sourceIndex)) + '">' +
+                    '<span class="channel-cell-spacer" aria-hidden="true"></span>' +
+                    '<div class="channel-cell-main">' + channelNameHtml + '</div>' +
+                    '<div class="channel-row-actions">' +
+                      '<button type="button" class="channel-row-button add-row-button" data-insert-row-index="' +
+                        escapeHtml(String(sourceIndex + 1)) +
+                        '" title="Add channel below" aria-label="Add channel below"></button>' +
+                      '<button type="button" class="channel-row-button remove-row-button" data-remove-source-index="' +
+                        escapeHtml(String(sourceIndex)) +
+                        '" title="Remove channel" aria-label="Remove channel"></button>' +
+                    '</div>' +
+                  '</div></td>' +
+                  renderValueCellHtml({ value: row.recordType || "" }) +
+                  renderValueCellHtml(row) +
+                  '<td class="process-column">' + processButtonHtml + '</td>' +
+                  fieldCellsHtml +
+                  '</tr>';
+              }).join("")
+            : emptyRowHtml) +
+          '</tbody></table>';
 
         isRendering = true;
         content.className = overlayMode ? "content overlay-active" : "content";
@@ -13659,7 +14374,7 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             '</div>'
           : messageHtml +
             '<div class="section"><h2>Macros</h2>' + macrosHtml + '</div>' +
-            '<div class="section"><div class="channel-controls"><h2>Channels</h2><input id="rowFilterInput" class="channel-filter" type="text" spellcheck="false" placeholder="Filter records" /></div>' + rowsHtml + '</div>';
+            '<div class="section"><div class="channel-controls"><h2>Channels</h2><div class="channel-controls-row"><input id="rowFilterInput" class="channel-filter" type="text" spellcheck="false" placeholder="Filter records" /><input id="fieldNameInput" class="field-input" type="text" spellcheck="false" placeholder="Add field to list, e.g. INP" value="' + escapeHtml(fieldDraftValue) + '" /></div></div>' + rowsHtml + '</div>';
         isRendering = false;
 
         const rowFilterInput = document.getElementById("rowFilterInput");
@@ -13680,6 +14395,60 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
               rowFilterSelectionEnd,
             );
           }
+        }
+
+        const fieldNameInput = document.getElementById("fieldNameInput");
+        if (fieldNameInput) {
+          fieldNameInput.addEventListener("focus", () => {
+            if (suppressFocusSync) {
+              return;
+            }
+            fieldInputState = {
+              value: fieldNameInput.value,
+              selectionStart: fieldNameInput.selectionStart,
+              selectionEnd: fieldNameInput.selectionEnd,
+            };
+          });
+          fieldNameInput.addEventListener("input", (event) => {
+            fieldInputState = {
+              value: event.target.value,
+              selectionStart: event.target.selectionStart,
+              selectionEnd: event.target.selectionEnd,
+            };
+          });
+          fieldNameInput.addEventListener("keyup", () => {
+            updateActiveFieldInputSelection(fieldNameInput);
+          });
+          fieldNameInput.addEventListener("mouseup", () => {
+            updateActiveFieldInputSelection(fieldNameInput);
+          });
+          fieldNameInput.addEventListener("select", () => {
+            updateActiveFieldInputSelection(fieldNameInput);
+          });
+          fieldNameInput.addEventListener("blur", () => {
+            if (isRendering) {
+              return;
+            }
+            if (document.activeElement !== fieldNameInput) {
+              fieldInputState = undefined;
+            }
+          });
+          fieldNameInput.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") {
+              return;
+            }
+            event.preventDefault();
+            const normalizedValue = fieldNameInput.value.trim();
+            if (!normalizedValue) {
+              return;
+            }
+            fieldInputState = undefined;
+            render(currentState);
+            vscode.postMessage({
+              type: "addPvlistWidgetField",
+              fieldName: normalizedValue,
+            });
+          });
         }
 
         for (const draftInput of content.querySelectorAll(".bulk-input")) {
@@ -13730,6 +14499,9 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
 
         for (const actionButton of content.querySelectorAll(".action-button")) {
           actionButton.addEventListener("click", () => {
+            if (actionButton.dataset.action !== "apply-channels") {
+              return;
+            }
             const draftInput = content.querySelector('.bulk-input[data-draft-type="channels"]');
             const text = draftInput?.value || "";
             overlayMode = false;
@@ -13738,6 +14510,85 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             vscode.postMessage({
               type: "replacePvlistWidgetChannels",
               text,
+            });
+          });
+        }
+
+        for (const channelHeader of content.querySelectorAll("[data-hover-role='channel-header']")) {
+          channelHeader.addEventListener("mouseenter", () => {
+            hoveredChannelHeader = true;
+            channelHeader.classList.add("header-hover");
+          });
+          channelHeader.addEventListener("mouseleave", () => {
+            hoveredChannelHeader = false;
+            channelHeader.classList.remove("header-hover");
+          });
+        }
+
+        for (const fieldHeader of content.querySelectorAll("[data-hover-field-name]")) {
+          fieldHeader.addEventListener("mouseenter", () => {
+            hoveredFieldHeaderName = fieldHeader.dataset.hoverFieldName || "";
+            fieldHeader.classList.add("field-hover");
+          });
+          fieldHeader.addEventListener("mouseleave", () => {
+            if (hoveredFieldHeaderName === (fieldHeader.dataset.hoverFieldName || "")) {
+              hoveredFieldHeaderName = "";
+            }
+            fieldHeader.classList.remove("field-hover");
+          });
+        }
+
+        for (const channelCellShell of content.querySelectorAll("[data-hover-source-index]")) {
+          channelCellShell.addEventListener("mouseenter", () => {
+            const sourceIndex = Number.parseInt(
+              channelCellShell.dataset.hoverSourceIndex || "",
+              10,
+            );
+            if (!Number.isInteger(sourceIndex)) {
+              return;
+            }
+            hoveredChannelRowSourceIndex = sourceIndex;
+            channelCellShell.classList.add("row-hover");
+          });
+          channelCellShell.addEventListener("mouseleave", () => {
+            const sourceIndex = Number.parseInt(
+              channelCellShell.dataset.hoverSourceIndex || "",
+              10,
+            );
+            if (Number.isInteger(sourceIndex) && hoveredChannelRowSourceIndex === sourceIndex) {
+              hoveredChannelRowSourceIndex = undefined;
+            }
+            channelCellShell.classList.remove("row-hover");
+          });
+        }
+
+        for (const insertRowButton of content.querySelectorAll("[data-insert-row-index]")) {
+          insertRowButton.addEventListener("click", () => {
+            const insertIndex = Number.parseInt(
+              insertRowButton.dataset.insertRowIndex || "",
+              10,
+            );
+            if (!Number.isInteger(insertIndex)) {
+              return;
+            }
+            showChannelDraftOverlay(insertIndex);
+          });
+        }
+
+        for (const removeRowButton of content.querySelectorAll("[data-remove-source-index]")) {
+          removeRowButton.addEventListener("click", () => {
+            const sourceIndex = Number.parseInt(
+              removeRowButton.dataset.removeSourceIndex || "",
+              10,
+            );
+            if (!Number.isInteger(sourceIndex)) {
+              return;
+            }
+            editingState = undefined;
+            pendingClick = undefined;
+            vscode.postMessage({
+              type: "removePvlistWidgetChannel",
+              sourceIndex,
             });
           });
         }
@@ -13795,6 +14646,21 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
           });
         }
 
+        for (const headerRemoveButton of content.querySelectorAll(".header-remove-button")) {
+          headerRemoveButton.addEventListener("click", () => {
+            const fieldName = headerRemoveButton.dataset.fieldName;
+            if (!fieldName) {
+              return;
+            }
+            editingState = undefined;
+            pendingClick = undefined;
+            vscode.postMessage({
+              type: "removePvlistWidgetField",
+              fieldName,
+            });
+          });
+        }
+
         for (const channelLink of content.querySelectorAll(".channel-link")) {
           channelLink.addEventListener("click", () => {
             const recordName = channelLink.dataset.probeRecordName;
@@ -13806,6 +14672,20 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             vscode.postMessage({
               type: "openProbeRecord",
               recordName,
+            });
+          });
+        }
+
+        for (const processButton of content.querySelectorAll("[data-process-record-name]")) {
+          processButton.addEventListener("click", () => {
+            const recordName = processButton.dataset.processRecordName;
+            if (!recordName) {
+              return;
+            }
+            vscode.postMessage({
+              type: "processPvlistWidgetRecord",
+              recordName,
+              protocol: processButton.dataset.processProtocol || "",
             });
           });
         }
@@ -13830,11 +14710,11 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
               pendingClick.key === key &&
               now - pendingClick.timestamp <= doubleClickIntervalMs
             ) {
-              const row = rows.find((candidate) => candidate.key === key);
+              const cell = findRowCellByKey(rows, key);
               editingState = {
                 type: "value",
                 key,
-                value: row?.value || "",
+                value: cell?.value || "",
                 selectionStart: undefined,
                 selectionEnd: undefined,
               };
@@ -13867,19 +14747,15 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
             updateActiveValueSelection(input);
           });
           input.addEventListener("blur", () => {
+            if (isRendering) {
+              return;
+            }
             if (editingState?.type !== "value" || editingState.key !== input.dataset.putKey) {
               return;
             }
-            updateActiveValueSelection(input);
-            requestAnimationFrame(() => {
-              if (
-                editingState?.type === "value" &&
-                editingState.key === input.dataset.putKey &&
-                document.activeElement !== input
-              ) {
-                focusActiveValueInput();
-              }
-            });
+            editingState = undefined;
+            pendingClick = undefined;
+            render(currentState);
           });
           input.addEventListener("keydown", (event) => {
             updateActiveValueSelection(input);
@@ -13916,6 +14792,8 @@ function buildPvlistWidgetHtml(webview, initialState = {}) {
 
         if (editingState?.type === "value") {
           focusActiveValueInput();
+        } else if (fieldInputState) {
+          focusActiveFieldInput();
         } else if (draftState?.type) {
           focusActiveDraftInput();
         }
@@ -14804,6 +15682,35 @@ function getProbeEntryDisplayValue(entry) {
   const value = getMonitorHoverValue(entry);
   if (value === undefined) {
     return entry.valueText || "(connecting...)";
+  }
+
+  return formatRuntimeDisplayValue(value);
+}
+
+function getPvlistWidgetEntryDisplayValue(entry, options = {}) {
+  const connectingText = options?.showConnectingText ? "(Connecting)" : "";
+  if (!entry) {
+    return connectingText;
+  }
+
+  if (
+    entry.status === "connecting" ||
+    entry.status === "pending" ||
+    entry.status === "disconnected" ||
+    entry.status === "stopped" ||
+    entry.status === "error" ||
+    entry.status === "destroyed"
+  ) {
+    return connectingText;
+  }
+
+  if (entry.valueText) {
+    return entry.valueText;
+  }
+
+  const value = getMonitorHoverValue(entry);
+  if (value === undefined) {
+    return entry.valueText || connectingText;
   }
 
   return formatRuntimeDisplayValue(value);

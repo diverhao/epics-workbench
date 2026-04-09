@@ -6,6 +6,8 @@ import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import org.epics.workbench.build.epicsBuildModelService
+import org.epics.workbench.build.parseMakeAssignments
+import org.epics.workbench.build.readCurrentText
 import org.epics.workbench.completion.EpicsRecordCompletionSupport
 import java.io.File
 import java.nio.file.Files
@@ -38,6 +40,20 @@ internal data class EpicsPathCompletionCandidate(
   val absolutePath: Path? = null,
 )
 
+internal data class EpicsMakefileReference(
+  val kind: EpicsPathKind,
+  val name: String,
+  val variableName: String,
+  val startOffset: Int,
+  val endOffset: Int,
+)
+
+internal data class EpicsMakefileTokenPathResolution(
+  val expandedValue: String,
+  val absolutePath: Path?,
+  val unresolvedVariables: List<String>,
+)
+
 private data class EpicsReferenceContext(
   val kind: EpicsPathKind,
   val rawPath: String,
@@ -48,6 +64,19 @@ private data class StartupExecutionState(
   val ownerRoot: Path,
   val variables: MutableMap<String, String>,
   val searchRoots: List<Path>,
+)
+
+private data class MakefileVariableResolution(
+  val resolvedValue: String,
+  val absolutePath: Path?,
+)
+
+private data class StartupTraceCandidate(
+  val reference: EpicsResolvedReference,
+  val isWritable: Boolean,
+  val rootPriority: Int,
+  val filePriority: Int,
+  val dbDirectoryPriority: Int,
 )
 
 object EpicsPathResolver {
@@ -126,6 +155,35 @@ object EpicsPathResolver {
     val context = getSubstitutionsReferenceAtOffset(text, offset) ?: return emptyList()
     val ownerRoot = findOwningEpicsRoot(project, hostFile)
     return collectSubstitutionsReferences(project, hostFile, ownerRoot, context)
+  }
+
+  internal fun resolveStartupDbLoadRecordsTraceReferences(
+    project: Project,
+    hostFile: VirtualFile,
+    offset: Int,
+  ): List<EpicsResolvedReference> {
+    if (!isStartupFile(hostFile)) {
+      return emptyList()
+    }
+
+    val text = readText(hostFile) ?: return emptyList()
+    val ownerRoot = findOwningEpicsRoot(project, hostFile)
+    val state = createStartupExecutionState(project, hostFile, ownerRoot)
+    var runningOffset = 0
+    for (line in text.split('\n')) {
+      findStartupDbLoadRecordsReferenceOnLine(line, runningOffset)?.let { match ->
+        if (offset in match.rangeStart until match.rangeEnd) {
+          return collectStartupDbLoadRecordsTraceReferences(
+            ownerRoot = ownerRoot,
+            state = state,
+            rawPath = match.context.rawPath,
+          )
+        }
+      }
+      applyStartupLine(line, state)
+      runningOffset += line.length + 1
+    }
+    return emptyList()
   }
 
   internal fun resolveStreamProtocolPaths(
@@ -247,16 +305,35 @@ object EpicsPathResolver {
     context: EpicsReferenceContext,
   ): EpicsResolvedReference? {
     val hostDirectory = hostFile.parent?.toNioPath() ?: ownerRoot
-    val searchRoots = buildSearchRoots(project, ownerRoot, emptyMap(), emptyMap())
+    val releaseVariables = loadReleaseVariables(ownerRoot)
+    val searchRoots = buildSearchRoots(project, ownerRoot, releaseVariables, emptyMap())
 
-    if (context.kind == EpicsPathKind.DATABASE) {
-      resolveFileCandidate(hostDirectory.resolve(context.rawPath), context)?.let { return it }
-      toSubstitutionsSiblingPath(context.rawPath)?.let { substitutionsRelativePath ->
-        val substitutionsCandidate = hostDirectory.resolve(substitutionsRelativePath)
-        resolveFileCandidate(
-          substitutionsCandidate,
-          context.copy(kind = EpicsPathKind.SUBSTITUTIONS),
-        )?.let { return it }
+    if (context.kind == EpicsPathKind.DATABASE || context.kind == EpicsPathKind.SUBSTITUTIONS) {
+      if (containsMakeVariableReference(context.rawPath)) {
+        val resolution = resolveMakefileTokenPath(project, hostFile, context.rawPath)
+        resolution.absolutePath?.let { directCandidate ->
+          resolveFileCandidate(directCandidate, context)?.let { return it }
+          if (context.kind == EpicsPathKind.DATABASE) {
+            toSubstitutionsSiblingPath(directCandidate.pathString)?.let { substitutionsPath ->
+              resolveFileCandidate(
+                Path.of(substitutionsPath),
+                context.copy(kind = EpicsPathKind.SUBSTITUTIONS),
+              )?.let { return it }
+            }
+          }
+        }
+        return null
+      }
+
+      if (context.kind == EpicsPathKind.DATABASE) {
+        resolveFileCandidate(hostDirectory.resolve(context.rawPath), context)?.let { return it }
+        toSubstitutionsSiblingPath(context.rawPath)?.let { substitutionsRelativePath ->
+          val substitutionsCandidate = hostDirectory.resolve(substitutionsRelativePath)
+          resolveFileCandidate(
+            substitutionsCandidate,
+            context.copy(kind = EpicsPathKind.SUBSTITUTIONS),
+          )?.let { return it }
+        }
       }
     }
 
@@ -266,7 +343,117 @@ object EpicsPathResolver {
       currentDirectory = hostDirectory,
       searchRoots = searchRoots,
       context = context,
-      expansionVariables = emptyMap(),
+      expansionVariables = releaseVariables,
+    )
+  }
+
+  internal fun extractMakefileReferences(text: String): List<EpicsMakefileReference> {
+    val references = mutableListOf<EpicsMakefileReference>()
+    var runningOffset = 0
+    for (line in text.split('\n')) {
+      val assignment = MAKEFILE_ASSIGNMENT_REGEX.find(line)
+      if (assignment != null) {
+        val variableName = assignment.groups[1]?.value.orEmpty()
+        val valueStart = assignment.range.last + 1
+        val commentIndex = line.indexOf('#', valueStart).let { if (it >= 0) it else line.length }
+        TOKEN_REGEX.findAll(line.substring(valueStart, commentIndex)).forEach { tokenMatch ->
+          val token = tokenMatch.value
+          val kind = getMakefileReferenceKind(variableName, token) ?: return@forEach
+          val tokenStart = runningOffset + valueStart + tokenMatch.range.first
+          val tokenEnd = runningOffset + valueStart + tokenMatch.range.last + 1
+          references += EpicsMakefileReference(
+            kind = kind,
+            name = token,
+            variableName = variableName,
+            startOffset = tokenStart,
+            endOffset = tokenEnd,
+          )
+        }
+      }
+      runningOffset += line.length + 1
+    }
+    return references
+  }
+
+  internal fun resolveMakefileTokenPath(
+    project: Project,
+    hostFile: VirtualFile,
+    token: String,
+  ): EpicsMakefileTokenPathResolution {
+    val ownerRoot = findOwningEpicsRoot(project, hostFile)
+    val baseDirectory = hostFile.parent?.toNioPath() ?: ownerRoot
+    val assignments = parseMakeAssignments(readCurrentText(hostFile).orEmpty())
+    val releaseVariables = loadReleaseVariables(ownerRoot)
+    val cache = mutableMapOf<String, MakefileVariableResolution?>()
+    val resolving = mutableSetOf<String>()
+
+    fun resolveVariable(name: String): MakefileVariableResolution? {
+      if (cache.containsKey(name)) {
+        return cache[name]
+      }
+      if (!resolving.add(name)) {
+        return null
+      }
+
+      val rawValue: String
+      val valueBaseDirectory: Path
+      when {
+        assignments.containsKey(name) -> {
+          rawValue = assignments.getValue(name).joinToString(" ")
+          valueBaseDirectory = baseDirectory
+        }
+        releaseVariables.containsKey(name) -> {
+          rawValue = releaseVariables.getValue(name)
+          valueBaseDirectory = ownerRoot
+        }
+        System.getenv(name) != null -> {
+          rawValue = System.getenv(name)
+          valueBaseDirectory = baseDirectory
+        }
+        else -> {
+          resolving -= name
+          cache[name] = null
+          return null
+        }
+      }
+
+      val expandedValue = expandEpicsValue(rawValue, emptyMap()) { nested ->
+        resolveVariable(nested)?.resolvedValue
+      }
+      val absolutePath = computeAbsoluteVariablePath(expandedValue, valueBaseDirectory)
+      val resolution = MakefileVariableResolution(
+        resolvedValue = absolutePath?.pathString ?: expandedValue,
+        absolutePath = absolutePath,
+      )
+      resolving -= name
+      cache[name] = resolution
+      return resolution
+    }
+
+    val unresolvedVariables = linkedSetOf<String>()
+    val expandedValue = EPICS_VARIABLE_REGEX.replace(token) { match ->
+      val name = match.groups[1]?.value
+        ?: match.groups[3]?.value
+        ?: match.groups[5]?.value
+        ?: ""
+      val defaultValue = match.groups[2]?.value ?: match.groups[4]?.value
+      val resolvedValue = resolveVariable(name)?.resolvedValue
+      when {
+        resolvedValue != null -> resolvedValue
+        defaultValue != null -> defaultValue
+        else -> {
+          if (name.isNotBlank()) {
+            unresolvedVariables += name
+          }
+          match.value
+        }
+      }
+    }.trim().trim('"')
+
+    return EpicsMakefileTokenPathResolution(
+      expandedValue = expandedValue,
+      absolutePath = computeAbsoluteVariablePath(expandedValue, baseDirectory),
+      unresolvedVariables = unresolvedVariables.toList(),
     )
   }
 
@@ -673,6 +860,23 @@ object EpicsPathResolver {
     return null
   }
 
+  private fun findStartupDbLoadRecordsReferenceOnLine(
+    line: String,
+    lineStart: Int,
+  ): StartupLineMatch? {
+    val sanitizedLine = maskHashCommentLine(line)
+    val match = STARTUP_DB_LOAD_RECORDS_PATTERN.find(sanitizedLine) ?: return null
+    val group = match.groups[1] ?: return null
+    return StartupLineMatch(
+      startOffset = lineStart,
+      lineStart = lineStart,
+      lineEnd = lineStart + line.length,
+      rangeStart = lineStart + group.range.first,
+      rangeEnd = lineStart + group.range.last + 1,
+      context = EpicsReferenceContext(EpicsPathKind.DATABASE, group.value),
+    )
+  }
+
   private fun getDatabaseReferenceAtOffset(
     text: String,
     offset: Int,
@@ -682,31 +886,10 @@ object EpicsPathResolver {
   }
 
   private fun getMakefileReferenceAtOffset(text: String, offset: Int): EpicsReferenceContext? {
-    var runningOffset = 0
-    for (line in text.split('\n')) {
-      val assignment = MAKEFILE_ASSIGNMENT_REGEX.find(line)
-      if (assignment != null) {
-        val variableName = assignment.groups[1]?.value.orEmpty()
-        val kind = getMakefileReferenceKind(variableName)
-        if (kind == null) {
-          runningOffset += line.length + 1
-          continue
-        }
-        val valueStart = assignment.range.last + 1
-        val commentIndex = line.indexOf('#', valueStart).let { if (it >= 0) it else line.length }
-        TOKEN_REGEX.findAll(line.substring(valueStart, commentIndex)).forEach { tokenMatch ->
-          val token = tokenMatch.value
-          if (containsMakeVariableReference(token) || token == "-nil-") {
-            return@forEach
-          }
-          val tokenStart = runningOffset + valueStart + tokenMatch.range.first
-          val tokenEnd = runningOffset + valueStart + tokenMatch.range.last + 1
-          if (offset in tokenStart until tokenEnd) {
-            return EpicsReferenceContext(kind, token)
-          }
-        }
+    for (reference in extractMakefileReferences(text)) {
+      if (offset in reference.startOffset until reference.endOffset) {
+        return EpicsReferenceContext(reference.kind, reference.name)
       }
-      runningOffset += line.length + 1
     }
     return null
   }
@@ -732,11 +915,33 @@ object EpicsPathResolver {
     return null
   }
 
-  private fun getMakefileReferenceKind(variableName: String): EpicsPathKind? = when {
-    DBD_VARIABLE_REGEX.matches(variableName) -> EpicsPathKind.DBD
-    LIB_VARIABLE_REGEX.matches(variableName) -> EpicsPathKind.LIBRARY
-    DB_VARIABLE_REGEX.matches(variableName) -> EpicsPathKind.DATABASE
-    else -> null
+  private fun getMakefileReferenceKind(variableName: String, token: String): EpicsPathKind? {
+    if (token == "-nil-") {
+      return null
+    }
+
+    val lowerCaseToken = token.lowercase()
+    if (DB_VARIABLE_REGEX.matches(variableName)) {
+      return when {
+        lowerCaseToken.endsWith(".substitutions") ||
+          lowerCaseToken.endsWith(".sub") ||
+          lowerCaseToken.endsWith(".subs") -> EpicsPathKind.SUBSTITUTIONS
+        lowerCaseToken.endsWith(".db") ||
+          lowerCaseToken.endsWith(".vdb") ||
+          lowerCaseToken.endsWith(".template") -> EpicsPathKind.DATABASE
+        else -> null
+      }
+    }
+
+    if (containsMakeVariableReference(token)) {
+      return null
+    }
+
+    return when {
+      DBD_VARIABLE_REGEX.matches(variableName) && lowerCaseToken.endsWith(".dbd") -> EpicsPathKind.DBD
+      LIB_VARIABLE_REGEX.matches(variableName) && !token.startsWith("-") -> EpicsPathKind.LIBRARY
+      else -> null
+    }
   }
 
   private fun candidatePathsForKind(
@@ -982,9 +1187,30 @@ object EpicsPathResolver {
     return expanded.trim().trim('"')
   }
 
+  private fun computeAbsoluteVariablePath(value: String, baseDirectory: Path): Path? {
+    if (!looksLikePathValue(value) || containsMakeVariableReference(value)) {
+      return null
+    }
+    return runCatching { resolveAbsoluteOrRelative(baseDirectory, value).normalize() }.getOrNull()
+  }
+
+  private fun looksLikePathValue(value: String): Boolean {
+    return value.startsWith(".") ||
+      value.startsWith("/") ||
+      value.startsWith("~/") ||
+      value.contains('/') ||
+      value.contains('\\')
+  }
+
   private fun resolveAbsoluteOrRelative(baseDirectory: Path, rawPath: String): Path {
-    val candidate = Path.of(rawPath)
-    return if (candidate.isAbsolute) candidate.normalize() else baseDirectory.resolve(rawPath).normalize()
+    val normalizedPath = if (rawPath.startsWith("~/")) {
+      val home = System.getProperty("user.home").orEmpty()
+      if (home.isBlank()) rawPath else home + rawPath.removePrefix("~")
+    } else {
+      rawPath
+    }
+    val candidate = Path.of(normalizedPath)
+    return if (candidate.isAbsolute) candidate.normalize() else baseDirectory.resolve(normalizedPath).normalize()
   }
 
   private fun resolveFileCandidate(candidate: Path, context: EpicsReferenceContext): EpicsResolvedReference? {
@@ -1353,6 +1579,7 @@ object EpicsPathResolver {
     Regex("""\bdbLoadRecords\(\s*\"([^\\"\n]+)\"""") to EpicsPathKind.DATABASE,
     Regex("""\bdbLoadTemplate\(\s*\"([^\\"\n]+)\"""") to EpicsPathKind.SUBSTITUTIONS,
   )
+  private val STARTUP_DB_LOAD_RECORDS_PATTERN = Regex("""\bdbLoadRecords\(\s*\"([^\\"\n]+)\"""")
   private val STARTUP_ENV_SET_REGEX = Regex(
     """\bepicsEnvSet(?:\s*\(\s*|\s+)\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s*,\s*\"((?:[^"\\]|\\.)*)\"\s*\)?""",
   )
@@ -1369,7 +1596,7 @@ object EpicsPathResolver {
   private val EPICS_VARIABLE_REGEX = Regex("""\$\(([^)=]+)(?:=([^)]*))?\)|\$\{([^}=]+)(?:=([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_.-]*)""")
 
   private fun containsMakeVariableReference(value: String): Boolean {
-    return value.contains("\$(") || value.contains("\${")
+    return EPICS_VARIABLE_REGEX.containsMatchIn(value)
   }
 
   private fun collectSubstitutionsReferences(
@@ -1410,5 +1637,173 @@ object EpicsPathResolver {
       }
 
     return references
+  }
+
+  private fun collectStartupDbLoadRecordsTraceReferences(
+    ownerRoot: Path,
+    state: StartupExecutionState,
+    rawPath: String,
+  ): List<EpicsResolvedReference> {
+    val expandedPath = expandEpicsValue(rawPath, state.variables).trim()
+    if (expandedPath.isBlank()) {
+      return emptyList()
+    }
+
+    val requestedFileName = runCatching { Path.of(expandedPath).fileName?.toString().orEmpty() }
+      .getOrElse { expandedPath.substringAfterLast('/').substringAfterLast('\\') }
+    if (requestedFileName.isBlank()) {
+      return emptyList()
+    }
+
+    val parsedRequestedPath = runCatching { Path.of(requestedFileName) }.getOrNull()
+    val requestedStem = parsedRequestedPath?.fileName?.toString()?.substringBeforeLast('.', requestedFileName)
+      ?: requestedFileName.substringBeforeLast('.', requestedFileName)
+    val candidateFileNames = linkedSetOf(requestedFileName).apply {
+      add("$requestedStem.substitutions")
+      add("$requestedStem.sub")
+      add("$requestedStem.subs")
+    }
+
+    val candidates = mutableListOf<StartupTraceCandidate>()
+    val seenPaths = linkedSetOf<Path>()
+
+    fun addCandidate(candidatePath: Path, rootPriority: Int) {
+      val normalizedPath = candidatePath.normalize()
+      if (!seenPaths.add(normalizedPath) || !normalizedPath.exists() || normalizedPath.isDirectory()) {
+        return
+      }
+
+      val fileName = normalizedPath.fileName?.toString().orEmpty()
+      if (fileName !in candidateFileNames) {
+        return
+      }
+
+      val kind = startupTracePathKind(fileName) ?: return
+      val targetFile = LocalFileSystem.getInstance().findFileByNioFile(normalizedPath) ?: return
+      candidates += StartupTraceCandidate(
+        reference = EpicsResolvedReference(targetFile, rawPath, kind),
+        isWritable = targetFile.isWritable,
+        rootPriority = rootPriority,
+        filePriority = if (fileName == requestedFileName) 0 else 1,
+        dbDirectoryPriority = when {
+          normalizedPath.pathString.contains("/Db/") || normalizedPath.pathString.contains("\\Db\\") -> 0
+          normalizedPath.pathString.contains("/db/") || normalizedPath.pathString.contains("\\db\\") -> 1
+          else -> 2
+        },
+      )
+    }
+
+    collectStartupDbLoadRecordsTraceRoots(ownerRoot).forEachIndexed { index, searchRoot ->
+      collectStartupDbLoadRecordsTraceMatchesInRoot(searchRoot, candidateFileNames) { candidatePath ->
+        addCandidate(candidatePath, index)
+      }
+    }
+
+    return candidates
+      .sortedWith(
+        compareBy<StartupTraceCandidate>(
+          { if (it.isWritable) 0 else 1 },
+          { it.rootPriority },
+          { it.filePriority },
+          { it.dbDirectoryPriority },
+          { it.reference.targetFile.path.lowercase() },
+        ),
+      )
+      .map(StartupTraceCandidate::reference)
+  }
+
+  private fun collectStartupDbLoadRecordsTraceRoots(ownerRoot: Path): List<Path> {
+    val roots = linkedSetOf<Path>()
+    roots.add(ownerRoot.normalize())
+    loadReleaseVariables(ownerRoot).forEach { (variableName, value) ->
+      if (variableName == "EPICS_BASE") {
+        return@forEach
+      }
+      val candidate = runCatching { Path.of(value) }.getOrNull() ?: return@forEach
+      if (candidate.exists() && candidate.isDirectory()) {
+        roots.add(candidate.normalize())
+      }
+    }
+    return roots.toList()
+  }
+
+  private fun collectStartupDbLoadRecordsTraceMatchesInRoot(
+    rootPath: Path,
+    candidateFileNames: Set<String>,
+    onMatch: (Path) -> Unit,
+  ) {
+    val queue = ArrayDeque<Path>()
+    queue.add(rootPath.normalize())
+
+    while (queue.isNotEmpty()) {
+      val currentDirectory = queue.removeFirst()
+      if (!currentDirectory.exists() || !currentDirectory.isDirectory()) {
+        continue
+      }
+
+      val directoryName = currentDirectory.fileName?.toString().orEmpty()
+      if (directoryName == "Db" || directoryName == "db") {
+        collectStartupDbLoadRecordsTraceMatchesInDbDirectory(currentDirectory, candidateFileNames, onMatch)
+        continue
+      }
+
+      currentDirectory.toFile()
+        .listFiles()
+        .orEmpty()
+        .asSequence()
+        .filter(File::isDirectory)
+        .filterNot { child -> shouldSkipStartupDbTraceDirectory(child.name) }
+        .sortedBy { child -> child.name.lowercase() }
+        .forEach { child ->
+          queue.add(child.toPath())
+        }
+    }
+  }
+
+  private fun collectStartupDbLoadRecordsTraceMatchesInDbDirectory(
+    directoryPath: Path,
+    candidateFileNames: Set<String>,
+    onMatch: (Path) -> Unit,
+  ) {
+    val queue = ArrayDeque<Path>()
+    queue.add(directoryPath.normalize())
+
+    while (queue.isNotEmpty()) {
+      val currentDirectory = queue.removeFirst()
+      currentDirectory.toFile()
+        .listFiles()
+        .orEmpty()
+        .sortedBy { child -> child.name.lowercase() }
+        .forEach { child ->
+          if (child.isDirectory) {
+            if (!shouldSkipStartupDbTraceDirectory(child.name)) {
+              queue.add(child.toPath())
+            }
+          } else if (candidateFileNames.contains(child.name)) {
+            onMatch(child.toPath())
+          }
+        }
+    }
+  }
+
+  private fun shouldSkipStartupDbTraceDirectory(directoryName: String): Boolean {
+    return directoryName.startsWith(".") ||
+      directoryName == "bin" ||
+      directoryName == "dbd" ||
+      directoryName == "html" ||
+      directoryName == "include" ||
+      directoryName == "lib" ||
+      directoryName == "node_modules" ||
+      directoryName == "target" ||
+      directoryName == "tmp" ||
+      directoryName.startsWith("O.")
+  }
+
+  private fun startupTracePathKind(fileName: String): EpicsPathKind? {
+    return when (fileName.substringAfterLast('.', "").lowercase()) {
+      "db", "vdb", "template" -> EpicsPathKind.DATABASE
+      "substitutions", "sub", "subs" -> EpicsPathKind.SUBSTITUTIONS
+      else -> null
+    }
   }
 }

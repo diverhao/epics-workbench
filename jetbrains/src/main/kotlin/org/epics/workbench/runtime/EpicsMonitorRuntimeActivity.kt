@@ -521,30 +521,50 @@ class EpicsMonitorRuntimeService(
     widgetId: String,
     model: EpicsPvlistWidgetModel,
   ): EpicsPvlistWidgetViewState {
-    val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(model, defaultProtocol)
+    val existingSession = widgetPvlistSessions[widgetId]
+    val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(
+      model = model,
+      defaultProtocol = defaultProtocol,
+      recordTypes = existingSession?.getResolvedRecordTypes().orEmpty(),
+    )
+    val fieldColumns = EpicsPvlistWidgetSupport.getFieldNames(model)
     if (model.rawPvNames.isEmpty()) {
       releaseWidgetPvlistSession(widgetId)
       return EpicsPvlistWidgetViewState(
         rows = emptyList(),
+        fieldColumns = fieldColumns,
         message = "Add channels to start monitoring.",
       )
     }
 
     if (!monitoringActive) {
       releaseWidgetPvlistSession(widgetId)
-      return buildStoppedPvlistViewState(plan)
+      return buildStoppedPvlistViewState(plan, fieldColumns)
     }
 
     val session = ensureWidgetPvlistSession(widgetId, plan)
-    return session?.buildViewState(plan, monitoringActive = true)
+    return session?.buildViewState(plan, monitoringActive = true, fieldColumns = fieldColumns)
       ?: EpicsPvlistWidgetViewState(
         rows = plan.rows.map { row ->
           EpicsPvlistWidgetRowViewState(
+            sourceIndex = row.sourceIndex,
             channelName = row.channelName,
-            value = row.unresolvedValue ?: "(connecting...)",
+            probeTargetRecordName = row.recordName?.takeIf(String::isNotBlank) ?: row.channelName.trim().takeIf(String::isNotBlank),
+            recordName = row.recordName,
+            protocol = row.protocol,
+            recordType = "",
+            value = row.unresolvedValue ?: "(Connecting)",
             definitionKey = row.definitionKey,
+            canProcess = !row.recordName.isNullOrBlank(),
+            fieldCells = row.fieldCells.map { fieldCell ->
+              EpicsPvlistWidgetFieldCellViewState(
+                name = fieldCell.name,
+                value = fieldCell.value,
+              )
+            },
           )
         },
+        fieldColumns = fieldColumns,
         message = "Connecting PV list channels.",
       )
   }
@@ -558,7 +578,11 @@ class EpicsMonitorRuntimeService(
     if (!monitoringActive) {
       return
     }
-    val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(model, defaultProtocol)
+    val plan = EpicsPvlistWidgetSupport.buildMonitorPlan(
+      model = model,
+      defaultProtocol = defaultProtocol,
+      recordTypes = widgetPvlistSessions[widgetId]?.getResolvedRecordTypes().orEmpty(),
+    )
     val definition = plan.definitions.firstOrNull { it.key == definitionKey } ?: return
     ensureWidgetPvlistSession(widgetId, plan)
     val activeCaContext = caContext ?: return
@@ -580,6 +604,17 @@ class EpicsMonitorRuntimeService(
 
   internal fun releaseWidgetPvlistSession(widgetId: String) {
     widgetPvlistSessions.remove(widgetId)?.close()
+  }
+
+  internal fun requestProcessWidgetPvlistRecord(recordNameInput: String, protocol: MonitorProtocol?) {
+    if (!monitoringActive) {
+      return
+    }
+    val recordName = recordNameInput.trim()
+    if (recordName.isBlank()) {
+      return
+    }
+    requestProcessRecord(recordName, protocol ?: defaultProtocol)
   }
 
   private fun isRuntimeFile(fileName: String): Boolean = isDatabaseFile(fileName)
@@ -703,23 +738,37 @@ class EpicsMonitorRuntimeService(
     return "__widget__:$widgetId:$recordName:${defaultProtocol.name}"
   }
 
-  private fun buildStoppedPvlistViewState(plan: EpicsPvlistWidgetPlan): EpicsPvlistWidgetViewState {
+  private fun buildStoppedPvlistViewState(
+    plan: EpicsPvlistWidgetPlan,
+    fieldColumns: List<String>,
+  ): EpicsPvlistWidgetViewState {
     return EpicsPvlistWidgetViewState(
       rows = plan.rows.map { row ->
         EpicsPvlistWidgetRowViewState(
+          sourceIndex = row.sourceIndex,
           channelName = row.channelName,
+          probeTargetRecordName = row.recordName?.takeIf(String::isNotBlank) ?: row.channelName.trim().takeIf(String::isNotBlank),
+          recordName = row.recordName,
+          protocol = row.protocol,
+          recordType = row.recordType.orEmpty(),
           value = row.unresolvedValue ?: "(stopped)",
           definitionKey = row.definitionKey,
+          fieldCells = row.fieldCells.map { fieldCell ->
+            EpicsPvlistWidgetFieldCellViewState(
+              name = fieldCell.name,
+              value = fieldCell.value,
+            )
+          },
         )
       },
+      fieldColumns = fieldColumns,
       message = "Start Monitoring to view PV list runtime values.",
     )
   }
 
-  private fun requestProcessRecord(recordName: String) {
+  private fun requestProcessRecord(recordName: String, protocol: MonitorProtocol = defaultProtocol) {
     val activeCaContext = caContext ?: return
     val activePvaClient = pvaClient ?: return
-    val protocol = defaultProtocol
     ApplicationManager.getApplication().executeOnPooledThread {
       try {
         RuntimeEditorSession.putValueNow(

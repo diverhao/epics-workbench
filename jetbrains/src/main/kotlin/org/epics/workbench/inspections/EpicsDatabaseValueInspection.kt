@@ -29,6 +29,10 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
             val virtualFile = file.virtualFile ?: return
             EpicsStartupMacroValidator.collectIssues(file.project, virtualFile, file.text)
           }
+          isMakefile(file.name) -> {
+            val virtualFile = file.virtualFile ?: return
+            EpicsMakefileDatabaseValidator.collectIssues(file.project, virtualFile, file.text)
+          }
 
           else -> emptyList()
         }
@@ -68,6 +72,8 @@ class EpicsDatabaseValueInspection : LocalInspectionTool() {
     val extension = fileName.substringAfterLast('.', "").lowercase()
     return extension in setOf("substitutions", "sub", "subs")
   }
+
+  private fun isMakefile(fileName: String): Boolean = fileName == "Makefile"
 }
 
 private fun PsiFile.textRange(start: Int, end: Int) =

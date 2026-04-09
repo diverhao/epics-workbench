@@ -54,6 +54,14 @@ class EpicsGotoDeclarationHandler : GotoDeclarationHandler {
       )
     }
 
+    val startupTraceTargets: Array<PsiElement> =
+      EpicsPathResolver.resolveStartupDbLoadRecordsTraceReferences(project, hostFile, offset)
+        .mapNotNull { reference -> PsiManager.getInstance(project).findFile(reference.targetFile) }
+        .toTypedArray()
+    if (startupTraceTargets.isNotEmpty()) {
+      return startupTraceTargets
+    }
+
     val target = EpicsPathResolver.resolveReferencedFile(project, hostFile, offset) ?: return PsiElement.EMPTY_ARRAY
     val psiTarget = PsiManager.getInstance(project).findFile(target) ?: return PsiElement.EMPTY_ARRAY
     return arrayOf(psiTarget)
